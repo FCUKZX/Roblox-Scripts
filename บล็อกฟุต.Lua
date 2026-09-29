@@ -423,7 +423,7 @@ task.spawn(function()
                 end
             end
 
-            -- [ส่วนที่ 2: ระบบออโต้เก็บผล (Store Fruit)]
+            -- มีปัญหารอแก้ปรับปรุง [ส่วนที่ 2: ระบบออโต้เก็บผล (Store Fruit)]
             if backpack then
                 for _, v in ipairs(backpack:GetChildren()) do
                     if v:IsA("Tool") and string.find(v.Name, "Fruit") then
