@@ -1,4 +1,28 @@
+-- ============================================================
+--  AUTO FARM HUB
+--  ตัวควบคุมหลัก + ฟังก์ชันสำเร็จรูป
+--
+--  วิธีควบคุมระหว่างรัน (พิมพ์ใน executor):
+--    _G.AutoConfig.Farm = false        -- ปิดฟาร์ม
+--    _G.AutoHub.Disable("Gacha")       -- ปิดระบบสุ่มผล
+--    _G.AutoHub.Enable("Gacha")        -- เปิดกลับ
+--    _G.AutoHub.Toggle("Boss")         -- สลับเปิด/ปิด
+--    _G.AutoHub.Pause() / Resume()     -- พักทุกระบบ / เริ่มต่อ
+--    _G.AutoHub.Status()               -- ดูสถานะทุกระบบ
+--    _G.AutoHub.Stop()                 -- หยุดทั้งหมด
+--    _G.AutoHub.Util.StoreAllFruits()  -- เรียกฟังก์ชันสำเร็จรูปเองได้
+-- ============================================================
 if not game:IsLoaded() then game.Loaded:Wait() end
+
+-- กันรันซ้ำ: ถ้ารันสคริปต์นี้อีกรอบ ให้หยุดตัวเก่าก่อน
+if _G.AutoHub and type(_G.AutoHub.Stop) == "function" then
+    pcall(_G.AutoHub.Stop)
+end
+
+if game:GetService("Players").LocalPlayer.PlayerGui:FindFirstChild("TeamSelection") then
+    local args = {"SetTeam2","Pirates"}
+    game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("CommF_"):InvokeServer(unpack(args))
+end
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -6,40 +30,272 @@ local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
-
--- รอตัวละครกับข้อมูลผู้เล่นให้พร้อมก่อน
 repeat task.wait() until LocalPlayer.Character and LocalPlayer:FindFirstChild("Data")
 
--- หา remote แบบไม่ error ถ้าหาไม่เจอ
+-- ============================================================
+-- 1. CONFIG (_G.AutoConfig) แก้ค่าสดระหว่างรันได้ทันที
+--    ตั้ง _G.AutoConfig = {...} ก่อนรันสคริปต์ก็ได้ ค่าที่ไม่ใส่จะใช้ค่าเริ่มต้น
+-- ============================================================
+local Defaults = {
+    -- เปิด/ปิดแต่ละระบบ (ชื่อตรงกับชื่อ Task)
+    Farm = true,
+    Boss = true,
+    Stats = true,
+    Haki = true,
+    BuyHaki = true,
+    Equip = true,
+    Gacha = true,
+    StoreFruit = true,
+
+    -- การเคลื่อนที่
+    TeleportRange = 30,     -- ใกล้กว่านี้ = วาร์ป
+    MidRange = 100,         -- TeleportRange..MidRange = บินด้วย MidSpeed
+    MidSpeed = 300,
+    FarSpeed = 250,         -- ไกลกว่า MidRange
+    HoverHeight = 10,       -- ลอยเหนือมอนธรรมดา
+    BossHoverHeight = 15,   -- ลอยเหนือบอส
+
+    -- การโจมตี
+    AttackRange = 20,
+    BossAttackRange = 30,
+
+    -- อัพ Stats
+    StatName = "Melee",
+    StatMax = 2300,
+
+    -- ถืออาวุธ (ค่า ToolTip ของอาวุธ)
+    EquipTip = "Melee",
+
+    -- ซื้อของ
+    HakiPrice = 25000,
+    GachaMinLevel = 50,
+
+    -- ชื่อผลที่ไม่เข้ากฎ "X Fruit" -> "X-X" ใส่ที่นี่ เช่น ["Some Fruit"] = "Real-Name"
+    FruitNameOverrides = {},
+
+    -- ความถี่ที่ตัวควบคุมหลักเช็คสถานะ (วินาที)
+    ControllerInterval = 0.25,
+}
+
+_G.AutoConfig = _G.AutoConfig or {}
+for k, v in pairs(Defaults) do
+    if _G.AutoConfig[k] == nil then
+        _G.AutoConfig[k] = v
+    end
+end
+local Cfg = _G.AutoConfig
+
+-- ============================================================
+-- 2. HUB
+-- ============================================================
+local Hub = {
+    Running = true,
+    Paused = false,
+    Tasks = {},
+    State = {},
+    Move = { target = nil },
+}
+_G.AutoHub = Hub
+local State = Hub.State
+
+-- remote โจมตี
 local modules = ReplicatedStorage:WaitForChild("Modules", 10)
 local netModules = modules and modules:WaitForChild("Net", 10)
 local attackRemote = netModules and netModules:WaitForChild("RE/RegisterAttack", 10)
 local hitRemote = netModules and netModules:WaitForChild("RE/RegisterHit", 10)
 if not attackRemote or not hitRemote then
-    warn("[AutoFarm] หา remote โจมตีไม่เจอ")
+    warn("[AutoHub] หา remote โจมตีไม่เจอ")
 end
 
--- ตัวแปรเก็บข้อมูลเควสและมอนสเตอร์
-local MON = ""
-local QUEST_Description = ""
-local QUESTPOS = CFrame.new()
-local MONPOS = CFrame.new()
-local QUEST_NAME = ""
-local QUEST_NUMBER = 1
-local SPAWNPOINT = ""
+-- ============================================================
+-- 3. ฟังก์ชันสำเร็จรูป (Hub.Util) เอาไปเรียกใช้เองได้
+-- ============================================================
+local U = {}
+Hub.Util = U
 
--- ตัวแปรของบอส (ว่างไว้ถ้าจุดฟาร์มนั้นไม่มีบอส)
-local BOSS = ""
-local QUEST_BOSS_Description = ""
-local QUEST_BOSSPOS = CFrame.new()
-local BOSSPOS = CFrame.new()
-local QUEST_BOSS = 1
-local CAN_BOSS = false -- เลเวลถึง BossLevel แล้วหรือยัง
+function U.Root()
+    local c = LocalPlayer.Character
+    return c and c:FindFirstChild("HumanoidRootPart")
+end
 
--- ==========================================
--- 1. ตารางจุดฟาร์ม (เรียงจาก MinLevel ต่ำ -> สูง)
--- ==========================================
-local FarmSpots = {
+function U.Humanoid()
+    local c = LocalPlayer.Character
+    return c and c:FindFirstChildOfClass("Humanoid")
+end
+
+function U.IsAlive()
+    local h = U.Humanoid()
+    return h ~= nil and h.Health > 0 and U.Root() ~= nil
+end
+
+-- อ่านค่า Value ของลูกแบบปลอดภัย
+function U.Value(parent, name)
+    local o = parent and parent:FindFirstChild(name)
+    return o and o.Value
+end
+
+function U.Level()
+    return U.Value(LocalPlayer:FindFirstChild("Data"), "Level") or 0
+end
+
+function U.Beli()
+    return U.Value(LocalPlayer:FindFirstChild("Data"), "Beli") or 0
+end
+
+-- เรียก CommF_ แบบปลอดภัย คืนค่า ok, result
+function U.CommF(...)
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    local commF = remotes and remotes:FindFirstChild("CommF_")
+    if not commF then return false, "หา CommF_ ไม่เจอ" end
+    return pcall(commF.InvokeServer, commF, ...)
+end
+
+-- หา instance ที่อยู่ใน nil (ใช้กับ StoreFruit)
+function U.GetNil(name, class)
+    if not getnilinstances then return nil end
+    for _, v in next, getnilinstances() do
+        if v.ClassName == class and v.Name == name then
+            return v
+        end
+    end
+    return nil
+end
+
+-- ---------- เควส ----------
+function U.QuestFrame()
+    local gui = LocalPlayer:FindFirstChild("PlayerGui")
+    return gui and gui:FindFirstChild("TrackedQuestFrame")
+end
+
+function U.QuestText()
+    local frame = U.QuestFrame()
+    local inner = frame and frame:FindFirstChild("Frame")
+    local desc = inner and inner:FindFirstChild("description")
+    return desc and desc.Text
+end
+
+-- ---------- มอนสเตอร์ ----------
+function U.FindAliveEnemy(name)
+    local enemies = Workspace:FindFirstChild("Enemies")
+    local m = enemies and enemies:FindFirstChild(name)
+    local hum = m and m:FindFirstChildOfClass("Humanoid")
+    local root = m and m:FindFirstChild("HumanoidRootPart")
+    if hum and hum.Health > 0 and root then
+        return m
+    end
+    return nil
+end
+
+function U.NearestEnemy(name, fromPos)
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if not enemies then return nil end
+
+    local best, bestDist = nil, math.huge
+    for _, v in ipairs(enemies:GetChildren()) do
+        if v.Name == name then
+            local hum = v:FindFirstChildOfClass("Humanoid")
+            local root = v:FindFirstChild("HumanoidRootPart")
+            if hum and hum.Health > 0 and root then
+                local d = (fromPos - root.Position).Magnitude
+                if d < bestDist then
+                    best, bestDist = v, d
+                end
+            end
+        end
+    end
+    return best
+end
+
+-- ตีทุกตัวที่ชื่อตรงและอยู่ในระยะ
+function U.Attack(name, maxDistance)
+    if not attackRemote or not hitRemote then return end
+    local root = U.Root()
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if not root or not enemies then return end
+
+    for _, enemy in ipairs(enemies:GetChildren()) do
+        if enemy.Name == name then
+            local hum = enemy:FindFirstChildOfClass("Humanoid")
+            local hitPart = enemy:FindFirstChild("RightHand")
+                or enemy:FindFirstChild("UpperTorso")
+                or enemy:FindFirstChild("HumanoidRootPart")
+
+            if hum and hum.Health > 0 and hitPart then
+                if (root.Position - hitPart.Position).Magnitude <= maxDistance then
+                    pcall(function()
+                        attackRemote:FireServer(0.5)
+                        hitRemote:FireServer(hitPart, {})
+                    end)
+                end
+            end
+        end
+    end
+end
+
+-- ---------- ถือของ ----------
+function U.Equip(toolTip)
+    local hum = U.Humanoid()
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if not hum or not bp then return false end
+
+    for _, t in ipairs(bp:GetChildren()) do
+        if t:IsA("Tool") and t.ToolTip == toolTip then
+            hum:EquipTool(t)
+            return true
+        end
+    end
+    return false
+end
+
+-- ---------- Stats ----------
+function U.AddPoint(statName, amount)
+    return U.CommF("AddPoint", statName, amount or 1)
+end
+
+-- ---------- ผลไม้ ----------
+function U.GetFruitTools()
+    local list = {}
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if bp then
+        for _, t in ipairs(bp:GetChildren()) do
+            if t:IsA("Tool") and string.find(t.Name, "Fruit") then
+                list[#list + 1] = t
+            end
+        end
+    end
+    return list
+end
+
+-- "Sand Fruit" -> "Sand-Sand"
+function U.FruitInternalName(toolName)
+    local override = Cfg.FruitNameOverrides and Cfg.FruitNameOverrides[toolName]
+    if override then return override end
+
+    local base = string.gsub(toolName, "%s*Fruit$", "")
+    base = string.gsub(base, " ", "-")
+    return base .. "-" .. base
+end
+
+-- เก็บผล 1 ลูก คืน ok, result, ชื่อที่ส่งไป
+function U.StoreFruit(tool)
+    local internal = U.FruitInternalName(tool.Name)
+    local target = U.GetNil(tool.Name, "Tool") or tool
+    local ok, result = U.CommF("StoreFruit", internal, target)
+    return ok, result, internal
+end
+
+function U.StoreAllFruits()
+    for _, tool in ipairs(U.GetFruitTools()) do
+        local ok, result, internal = U.StoreFruit(tool)
+        print("[StoreFruit]", tool.Name, "->", internal, ok, result)
+        task.wait(0.3)
+    end
+end
+
+-- ============================================================
+-- 4. ตารางจุดฟาร์ม (เรียงจาก MinLevel ต่ำ -> สูง)
+-- ============================================================
+Hub.FarmSpots = {
     {
         MinLevel = 1,
         MON = "Bandit",
@@ -70,107 +326,46 @@ local FarmSpots = {
     },
 }
 
-local function checklevel()
-    local levelData = LocalPlayer:FindFirstChild("Data") and LocalPlayer.Data:FindFirstChild("Level")
-    if not levelData then return end
-
-    local level = levelData.Value
-
-    -- เริ่มที่จุดแรก แล้วทับด้วยจุดที่เลเวลถึง สุดท้ายได้จุดที่ MinLevel สูงสุดที่ถึง
-    local chosen = FarmSpots[1]
-    for _, spot in ipairs(FarmSpots) do
+-- เลือกจุดที่ MinLevel สูงสุดที่เลเวลถึง (เกินทุกจุด = จุดสุดท้าย)
+function Hub.GetSpot(level)
+    local chosen = Hub.FarmSpots[1]
+    for _, spot in ipairs(Hub.FarmSpots) do
         if level >= spot.MinLevel then
             chosen = spot
         end
     end
-
-    MON = chosen.MON
-    QUEST_Description = chosen.QUEST_Description
-    QUESTPOS = chosen.QUESTPOS
-    MONPOS = chosen.MONPOS
-    QUEST_NAME = chosen.QUEST_NAME
-    QUEST_NUMBER = chosen.QUEST_NUMBER
-    SPAWNPOINT = chosen.SPAWNPOINT
-
-    -- ข้อมูลบอส (ถ้าจุดนี้ไม่มีบอส BOSS จะเป็น "" แล้วระบบบอสจะไม่ทำงาน)
-    BOSS = chosen.BOSS or ""
-    QUEST_BOSS_Description = chosen.QUEST_BOSS_Description or ""
-    QUEST_BOSSPOS = chosen.QUEST_BOSSPOS or chosen.QUESTPOS
-    BOSSPOS = chosen.BOSSPOS or chosen.MONPOS
-    QUEST_BOSS = chosen.QUEST_BOSS or 1
-
-    -- เลเวลต้องถึง BossLevel ถึงจะรับเควสบอสและตีบอสได้ (ไม่ใส่ = ไม่จำกัด)
-    CAN_BOSS = level >= (chosen.BossLevel or 0)
+    return chosen
 end
 
--- ==========================================
--- 2. ฟังก์ชัน Fast Attack (ตีทุกตัวที่ชื่อตรงในระยะ)
--- ==========================================
-local function fastAttack(targetName, maxDistance)
-    if not attackRemote or not hitRemote then return end
-
-    local character = LocalPlayer.Character
-    if not character or not character:FindFirstChild("HumanoidRootPart") then return end
-
-    local playerPos = character.HumanoidRootPart.Position
-
-    for _, enemy in ipairs(Workspace.Enemies:GetChildren()) do
-        if enemy.Name == targetName then
-            local humanoid = enemy:FindFirstChildOfClass("Humanoid")
-            local hitPart = enemy:FindFirstChild("RightHand") or enemy:FindFirstChild("UpperTorso") or enemy:FindFirstChild("HumanoidRootPart")
-
-            if humanoid and humanoid.Health > 0 and hitPart then
-                local distance = (playerPos - hitPart.Position).Magnitude
-                if distance <= maxDistance then
-                    pcall(function()
-                        attackRemote:FireServer(0.5)
-                        hitRemote:FireServer(hitPart, {})
-                    end)
-                end
-            end
-        end
-    end
+-- ============================================================
+-- 5. ระบบเคลื่อนที่ (Heartbeat) วาร์ป / บิน 300 / บิน 250
+-- ============================================================
+function Hub.MoveTo(pos)
+    Hub.Move.target = { pos = pos }
 end
 
--- ==========================================
--- 3. เช็คว่าบอสเกิดอยู่ไหม
--- ==========================================
-local function findBoss()
-    if BOSS == "" or not CAN_BOSS then return nil end
-    local boss = Workspace.Enemies:FindFirstChild(BOSS)
-    local hum = boss and boss:FindFirstChildOfClass("Humanoid")
-    local root = boss and boss:FindFirstChild("HumanoidRootPart")
-    if hum and hum.Health > 0 and root then
-        return boss
-    end
-    return nil
+function Hub.Follow(part, offset)
+    Hub.Move.target = { part = part, offset = offset }
 end
 
--- ==========================================
--- 4. ระบบเคลื่อนที่แบบสมูท (ขยับทุกเฟรมตามเป้าหมายจริง)
--- ==========================================
-local TELEPORT_RANGE = 30     -- ใกล้กว่านี้ = วาร์ปไปเลย
-local MID_RANGE = 100          -- ระหว่าง TELEPORT_RANGE ถึงค่านี้ = บินด้วย MID_SPEED
-local MID_SPEED = 300          -- ความเร็วตอนระยะกลาง
-local FAR_SPEED = 250          -- ความเร็วตอนไกลกว่า MID_RANGE
-local HOVER_HEIGHT = 10        -- ลอยเหนือมอนธรรมดากี่หน่วย
-local BOSS_HOVER_HEIGHT = 15   -- ลอยเหนือบอสกี่หน่วย
-
-local moveTarget = nil         -- {part=, offset=} ตามชิ้นส่วน หรือ {pos=} จุดตายตัว
-local currentEnemy = nil       -- มอนที่กำลังล็อกอยู่
+function Hub.StopMove()
+    Hub.Move.target = nil
+end
 
 local function getTargetPosition()
-    if not moveTarget then return nil end
-    if moveTarget.part then
-        if not moveTarget.part.Parent then return nil end
-        return moveTarget.part.Position + moveTarget.offset
+    local t = Hub.Move.target
+    if not t then return nil end
+    if t.part then
+        if not t.part.Parent then return nil end
+        return t.part.Position + t.offset
     end
-    return moveTarget.pos
+    return t.pos
 end
 
-RunService.Heartbeat:Connect(function(dt)
-    local char = LocalPlayer.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
+local heartbeatConn = RunService.Heartbeat:Connect(function(dt)
+    if not Hub.Running then return end
+
+    local root = U.Root()
     local targetPos = getTargetPosition()
     if not root or not targetPos then return end
 
@@ -179,15 +374,12 @@ RunService.Heartbeat:Connect(function(dt)
     local dist = offset.Magnitude
 
     local newPos
-    if dist <= TELEPORT_RANGE then
-        -- ใกล้ (<= 50): วาร์ปไปที่เป้าเลย
+    if dist <= Cfg.TeleportRange then
         newPos = targetPos
-    elseif dist <= MID_RANGE then
-        -- ระยะกลาง (50-120): บินความเร็ว 300
-        newPos = current + offset.Unit * math.min(dist, MID_SPEED * dt)
+    elseif dist <= Cfg.MidRange then
+        newPos = current + offset.Unit * math.min(dist, Cfg.MidSpeed * dt)
     else
-        -- ไกล (> 120): บินความเร็ว 250
-        newPos = current + offset.Unit * math.min(dist, FAR_SPEED * dt)
+        newPos = current + offset.Unit * math.min(dist, Cfg.FarSpeed * dt)
     end
 
     root.CFrame = CFrame.new(newPos) * root.CFrame.Rotation
@@ -195,249 +387,344 @@ RunService.Heartbeat:Connect(function(dt)
     root.AssemblyAngularVelocity = Vector3.zero
 end)
 
--- ==========================================
--- ระบบถือของ
--- ==========================================
-local function equipItemAutomatically(player, toolName)
-	local character = player.Character
-	local backpack = player and player:FindFirstChild("Backpack")
-	
-	if character and backpack then
-		local humanoid = character:FindFirstChildOfClass("Humanoid")
-		local tool = backpack:FindFirstChild(toolName)
-		
-		if humanoid and tool then
-			humanoid:EquipTool(tool) -- คำสั่งหลักในการบังคับถือ
-		end
-	end
+-- ============================================================
+-- 6. ตัวควบคุมหลัก + ระบบ Task
+--    Task แต่ละตัวมี when(state) บอกว่า "ตอนนี้ควรทำงานไหม"
+--    ตัวควบคุมหลักจะเช็คทุก ControllerInterval แล้วเปิด/ปิด Task ให้เอง
+-- ============================================================
+function Hub.AddTask(def)
+    local t = {
+        name = def.name,
+        flag = def.flag or def.name,
+        interval = def.interval or 0.1,
+        when = def.when,
+        run = def.run,
+        onDisable = def.onDisable,
+        active = false,
+        errStreak = 0,
+        totalErrors = 0,
+        suspendedUntil = 0,
+    }
+    Hub.Tasks[t.name] = t
+
+    task.spawn(function()
+        while Hub.Running do
+            if t.active then
+                local ok, err = pcall(t.run, State, Cfg)
+                if ok then
+                    t.errStreak = 0
+                else
+                    t.errStreak = t.errStreak + 1
+                    t.totalErrors = t.totalErrors + 1
+                    if t.errStreak == 1 then
+                        warn("[AutoHub] " .. t.name .. " error:", err)
+                    end
+                    -- error ติดกัน 5 ครั้ง -> พักงาน 10 วินาที กันสแปม
+                    if t.errStreak >= 5 then
+                        t.suspendedUntil = os.clock() + 10
+                        t.errStreak = 0
+                        warn("[AutoHub] " .. t.name .. " พักงาน 10 วิ เพราะ error ติดกัน")
+                    end
+                end
+                task.wait(t.interval)
+            else
+                task.wait(0.2)
+            end
+        end
+    end)
 end
 
--- ==========================================
--- 5. ลูปออโต้ฟาร์ม (ลูปนี้แค่ "ตัดสินใจ" ส่วนขยับให้ Heartbeat ทำ)
--- ==========================================
+local function refreshState()
+    local char = LocalPlayer.Character
+    local data = LocalPlayer:FindFirstChild("Data")
+    local stats = data and data:FindFirstChild("Stats")
+    local stat = stats and stats:FindFirstChild(Cfg.StatName)
+
+    State.alive = U.IsAlive()
+    State.ready = data ~= nil
+    State.level = U.Value(data, "Level") or 0
+    State.beli = U.Value(data, "Beli") or 0
+    State.points = U.Value(data, "Points") or 0
+    State.statLevel = (stat and U.Value(stat, "Level")) or math.huge
+    State.holdingTool = char ~= nil and char:FindFirstChildOfClass("Tool") ~= nil
+    State.hasBuso = char ~= nil and char:FindFirstChild("HasBuso") ~= nil
+    State.ownsHaki = LocalPlayer:FindFirstChild("BusoColor") ~= nil
+    State.fruitCount = #U.GetFruitTools()
+end
+
 task.spawn(function()
-    while task.wait() do
-        local ok, err = pcall(function()
-            local character = LocalPlayer.Character
-            if not character or not character:FindFirstChild("HumanoidRootPart") then return end
-            local rootPart = character.HumanoidRootPart
+    while Hub.Running do
+        pcall(refreshState)
 
-            checklevel()
+        for _, t in pairs(Hub.Tasks) do
+            local want = (not Hub.Paused)
+                and Cfg[t.flag] == true
+                and os.clock() >= t.suspendedUntil
 
-            -- ป้องกันกรณีข้อมูลจุดฟาร์มยังว่าง (ไม่ให้บินไปจุด 0,0,0)
-            if MONPOS == CFrame.new() or QUESTPOS == CFrame.new() then return end
-
-            -- เลือกโหมด: ถ้าบอสเกิดอยู่ -> โหมดบอส ไม่งั้นฟาร์มปกติ
-            local boss = findBoss()
-            local bossMode = boss ~= nil
-
-            local activeDesc      = bossMode and QUEST_BOSS_Description or QUEST_Description
-            local activeQuestPos  = bossMode and QUEST_BOSSPOS or QUESTPOS
-            local activeQuestNum  = bossMode and QUEST_BOSS or QUEST_NUMBER
-            local targetName      = bossMode and BOSS or MON
-            local hoverHeight     = bossMode and BOSS_HOVER_HEIGHT or HOVER_HEIGHT
-            local attackRange     = bossMode and 30 or 20
-
-            -- ถ้าเปลี่ยนโหมด ให้เลิกล็อกเป้าเดิม
-            if currentEnemy and currentEnemy.Name ~= targetName then
-                currentEnemy = nil
+            if want then
+                local ok, res = pcall(t.when, State, Cfg)
+                want = ok and res == true
             end
 
-            local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
-            local trackedQuestFrame = playerGui and playerGui:FindFirstChild("TrackedQuestFrame")
-
-            -- ยกเลิกเควสหากไม่ตรงกับโหมดปัจจุบัน (เช่น บอสเกิดแล้วต้องเปลี่ยนไปเควสบอส)
-            if trackedQuestFrame then
-                local descFrame = trackedQuestFrame:FindFirstChild("Frame") and trackedQuestFrame.Frame:FindFirstChild("description")
-                if descFrame and not string.find(descFrame.Text, activeDesc) then
-                    ReplicatedStorage.Remotes.CommF_:InvokeServer("AbandonQuest")
-                end
+            if t.active and not want and t.onDisable then
+                pcall(t.onDisable)
             end
+            t.active = want
+        end
 
-            -- กรณีที่ 1: ยังไม่มีเควส -> บินไปรับเควส
-            if not playerGui:FindFirstChild("TrackedQuestFrame") then
-                currentEnemy = nil
-                moveTarget = { pos = activeQuestPos.Position }
-
-                if (rootPart.Position - activeQuestPos.Position).Magnitude < 8 then
-                    ReplicatedStorage.Remotes.CommF_:InvokeServer("StartQuest", QUEST_NAME, activeQuestNum)
-                    task.wait(0.5)
-                end
-
-            -- กรณีที่ 2: มีเควสแล้ว -> ตามมอน/บอส
-            else
-                -- ถ้าเป้าที่ล็อกอยู่ตายหรือหายไป ค่อยหาตัวใหม่ (ไม่สลับเป้ากลางคัน)
-                if currentEnemy then
-                    local hum = currentEnemy:FindFirstChildOfClass("Humanoid")
-                    if not currentEnemy.Parent or not hum or hum.Health <= 0 then
-                        currentEnemy = nil
-                    end
-                end
-
-                if not currentEnemy then
-                    if bossMode then
-                        currentEnemy = boss
-                    else
-                        local shortest = math.huge
-                        for _, v in ipairs(Workspace.Enemies:GetChildren()) do
-                            if v.Name == targetName then
-                                local humanoid = v:FindFirstChildOfClass("Humanoid")
-                                local enemyRoot = v:FindFirstChild("HumanoidRootPart")
-                                if humanoid and humanoid.Health > 0 and enemyRoot then
-                                    local dist = (rootPart.Position - enemyRoot.Position).Magnitude
-                                    if dist < shortest then
-                                        shortest = dist
-                                        currentEnemy = v
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
-
-                if currentEnemy then
-                    local enemyRoot = currentEnemy:FindFirstChild("HumanoidRootPart")
-                    if enemyRoot then
-                        moveTarget = { part = enemyRoot, offset = Vector3.new(0, hoverHeight, 0) }
-                        fastAttack(targetName, attackRange) -- เช็คระยะในตัวอยู่แล้ว
-                    end
-                else
-                    -- ไม่มีเป้า -> ไปรอที่ MONPOS
-                    moveTarget = { pos = MONPOS.Position + Vector3.new(0, HOVER_HEIGHT, 0) }
-                end
-            end
-        end)
-        if not ok then warn("[AutoFarm]", err) end
+        task.wait(Cfg.ControllerInterval)
     end
 end)
 
--- ==========================================
--- 6. ออโต้อัพ Stats
--- ==========================================
-task.spawn(function()
-    while task.wait(0.2) do
-        pcall(function()
-            local data = LocalPlayer.Data
-            local stats = data.Stats
-            local stat_points = data.Points
+-- ============================================================
+-- 7. TASKS
+-- ============================================================
 
-            if stat_points.Value >= 1 then
-                local melee = stats.Melee.Level
+-- ---------- ออโต้ฟาร์ม + บอส ----------
+local currentTarget = nil -- มอน/บอสที่กำลังล็อกอยู่
 
-                if melee.Value < 2300 then
-                    local args = {"AddPoint", "Melee", 1}
-                    ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CommF_"):InvokeServer(unpack(args))
-                end
-            end
-        end)
+local function farmStep(s)
+    local root = U.Root()
+    if not root then return end
+
+    local spot = Hub.GetSpot(s.level)
+    if not spot then return end
+
+    -- บอสเกิดและเลเวลถึง BossLevel -> โหมดบอส
+    local boss = nil
+    if Cfg.Boss and spot.BOSS and s.level >= (spot.BossLevel or 0) then
+        boss = U.FindAliveEnemy(spot.BOSS)
     end
-end)
+    local bossMode = boss ~= nil
 
--- ==========================================
--- 7. ออโต้เปิดฮาคิ
--- ==========================================
-task.spawn(function()
-    while task.wait(1) do
-        pcall(function()
-            if not LocalPlayer.Character:FindFirstChild("HasBuso") then
-                local args = {"Buso"}
-                game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("CommF_"):InvokeServer(unpack(args))
-            end
-        end)
+    local desc = bossMode and (spot.QUEST_BOSS_Description or "") or spot.QUEST_Description
+    local questPos = bossMode and (spot.QUEST_BOSSPOS or spot.QUESTPOS) or spot.QUESTPOS
+    local questNum = bossMode and (spot.QUEST_BOSS or 1) or spot.QUEST_NUMBER
+    local targetName = bossMode and spot.BOSS or spot.MON
+    local hover = bossMode and Cfg.BossHoverHeight or Cfg.HoverHeight
+    local range = bossMode and Cfg.BossAttackRange or Cfg.AttackRange
+
+    -- เปลี่ยนโหมด -> เลิกล็อกเป้าเดิม
+    if currentTarget and currentTarget.Name ~= targetName then
+        currentTarget = nil
     end
-end)
 
--- ==========================================
--- 8. ออโต้ซื้อของ
--- ==========================================
-task.spawn(function()
-    while task.wait(1) do
-        pcall(function()
-            local data = LocalPlayer.Data
-            local beli = data.Beli
-
-            --ซื้อฮาคิ
-            if not LocalPlayer:FindFirstChild("BusoColor") and beli.Value >= 25000 then
-                local args = {"BuyHaki","Buso"}
-                game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("CommF_"):InvokeServer(unpack(args))
-            end
-        end)
+    -- เควสที่ถืออยู่ไม่ตรงโหมด -> ยกเลิก
+    local questText = U.QuestText()
+    if questText and not string.find(questText, desc, 1, true) then
+        U.CommF("AbandonQuest")
     end
-end)
 
--- ==========================================
--- 9. ออโต้ถือของ
--- ==========================================
-task.spawn(function()
-    while task.wait(0.1) do
-        pcall(function()
-            local player = game:GetService("Players").LocalPlayer
-            local character = player.Character
-            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-            local backpack = player:FindFirstChild("Backpack")
-            
-            -- เช็กว่ามีกระเป๋าและตัวละครพร้อมใช้งานไหม (และตอนนี้ไม่ได้ถือของอะไรอยู่)
-            if backpack and humanoid and not character:FindFirstChildOfClass("Tool") then
-                for _, v in ipairs(backpack:GetChildren()) do
-                    if v:IsA("Tool") and v.ToolTip == "Melee" then
-                        humanoid:EquipTool(v)
-                        break
-                    end
-                end
-            end
-        end)
+    -- ยังไม่มีเควส -> บินไปรับ
+    if not U.QuestFrame() then
+        currentTarget = nil
+        Hub.MoveTo(questPos.Position)
+
+        if (root.Position - questPos.Position).Magnitude < 8 then
+            U.CommF("StartQuest", spot.QUEST_NAME, questNum)
+            task.wait(0.5)
+        end
+        return
     end
-end)
 
--- ==========================================
--- 10. ออโต้สุ่มผล/เก็บผลเข้ากระเป๋า
--- ==========================================
-local function getNil(name, class)
-    for _, v in next, getnilinstances() do
-        if v.ClassName == class and v.Name == name then
-            return v
+    -- เป้าที่ล็อกอยู่ตายหรือหายไป -> หาใหม่
+    if currentTarget then
+        local hum = currentTarget:FindFirstChildOfClass("Humanoid")
+        if not currentTarget.Parent or not hum or hum.Health <= 0 then
+            currentTarget = nil
         end
     end
+
+    if not currentTarget then
+        if bossMode then
+            currentTarget = boss
+        else
+            currentTarget = U.NearestEnemy(targetName, root.Position)
+        end
+    end
+
+    if currentTarget then
+        local enemyRoot = currentTarget:FindFirstChild("HumanoidRootPart")
+        if enemyRoot then
+            Hub.Follow(enemyRoot, Vector3.new(0, hover, 0))
+            U.Attack(targetName, range)
+        end
+    else
+        -- ไม่มีเป้า -> ไปรอที่ MONPOS
+        Hub.MoveTo(spot.MONPOS.Position + Vector3.new(0, Cfg.HoverHeight, 0))
+    end
 end
 
-task.spawn(function()
-    while task.wait(10) do
-        pcall(function()
-            local player = game:GetService("Players").LocalPlayer
-            local character = player.Character
-            local backpack = player:FindFirstChild("Backpack")
-            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+Hub.AddTask({
+    name = "Farm",
+    interval = 0, -- ทุกเฟรม
+    when = function(s)
+        return s.alive and s.ready and #Hub.FarmSpots > 0
+    end,
+    run = farmStep,
+    onDisable = function()
+        currentTarget = nil
+        Hub.StopMove()
+    end,
+})
 
-            -- [ส่วนที่ 1: ระบบออโต้สุ่มผล]
-            local argsCheck = {[1] = {["BoxName"] = "ZiolesGacha", ["Context"] = "Check", ["SpokeNPC"] = "Blox Fruit Gacha"}}
-            local success, response = pcall(function()
-                return game:GetService("ReplicatedStorage"):WaitForChild("Modules"):WaitForChild("Net"):WaitForChild("RF/GachaNetworkRF"):InvokeServer(unpack(argsCheck))
-            end)
-            
-            if success and type(response) == "table" and response.Price then
-                local beli = response.Price.Current
-                local Fruit_price = response.Price.Value
-                if beli >= Fruit_price and response.Level.Value >= 50 and response.Level.RequirementMet == true then
-                    local argsPurchase = {[1] = {["Context"] = "Purchase", ["BoxName"] = "ZiolesGacha"}}
-                    game:GetService("ReplicatedStorage"):WaitForChild("Modules"):WaitForChild("Net"):WaitForChild("RF/GachaNetworkRF"):InvokeServer(unpack(argsPurchase))
+-- ---------- ออโต้อัพ Stats (ทำงานเมื่อมีแต้มและยังไม่ถึงเพดาน) ----------
+Hub.AddTask({
+    name = "Stats",
+    interval = 0.2,
+    when = function(s)
+        return s.alive and s.points >= 1 and s.statLevel < Cfg.StatMax
+    end,
+    run = function()
+        U.AddPoint(Cfg.StatName, 1)
+    end,
+})
+
+-- ---------- ออโต้เปิดฮาคิ (ทำงานเมื่อยังไม่ติดฮาคิ) ----------
+Hub.AddTask({
+    name = "Haki",
+    interval = 1,
+    when = function(s)
+        return s.alive and not s.hasBuso
+    end,
+    run = function()
+        U.CommF("Buso")
+    end,
+})
+
+-- ---------- ออโต้ซื้อฮาคิ (ทำงานเมื่อยังไม่มีและเงินพอ) ----------
+Hub.AddTask({
+    name = "BuyHaki",
+    interval = 1,
+    when = function(s)
+        return s.alive and not s.ownsHaki and s.beli >= Cfg.HakiPrice
+    end,
+    run = function()
+        U.CommF("BuyHaki", "Buso")
+    end,
+})
+
+-- ---------- ออโต้ถืออาวุธ (ทำงานเมื่อมือว่าง) ----------
+Hub.AddTask({
+    name = "Equip",
+    interval = 0.2,
+    when = function(s)
+        return s.alive and not s.holdingTool
+    end,
+    run = function()
+        U.Equip(Cfg.EquipTip)
+    end,
+})
+
+-- ---------- ออโต้สุ่มผล (ทำงานเมื่อเลเวลถึงเกณฑ์) ----------
+local function getGachaRF()
+    local m = ReplicatedStorage:FindFirstChild("Modules")
+    local net = m and m:FindFirstChild("Net")
+    return net and net:FindFirstChild("RF/GachaNetworkRF")
+end
+
+Hub.AddTask({
+    name = "Gacha",
+    interval = 5,
+    when = function(s)
+        return s.alive and s.level >= Cfg.GachaMinLevel
+    end,
+    run = function()
+        local rf = getGachaRF()
+        if not rf then return end
+
+        local response = rf:InvokeServer({
+            BoxName = "ZiolesGacha",
+            Context = "Check",
+            SpokeNPC = "Blox Fruit Gacha",
+        })
+
+        if type(response) == "table" and response.Price and response.Level then
+            local canAfford = response.Price.Current >= response.Price.Value
+            local levelOk = response.Level.Value >= Cfg.GachaMinLevel and response.Level.RequirementMet == true
+
+            if canAfford and levelOk then
+                rf:InvokeServer({
+                    Context = "Purchase",
+                    BoxName = "ZiolesGacha",
+                })
+            end
+        end
+    end,
+})
+
+-- ---------- ออโต้เก็บผลเข้ากระเป๋า (ทำงานเมื่อมีผลใน Backpack) ----------
+local fruitCooldown = {} -- ชื่อผล -> เวลาที่จะลองใหม่ (กันสแปมตอนเก็บไม่สำเร็จ)
+
+Hub.AddTask({
+    name = "StoreFruit",
+    interval = 2,
+    when = function(s)
+        return s.alive and s.fruitCount > 0
+    end,
+    run = function()
+        for _, tool in ipairs(U.GetFruitTools()) do
+            local name = tool.Name
+            local retryAt = fruitCooldown[name]
+
+            if not retryAt or os.clock() >= retryAt then
+                local ok, result, internal = U.StoreFruit(tool)
+                task.wait(0.5)
+
+                -- ถ้าผลยังอยู่ในกระเป๋า = เก็บไม่สำเร็จ ให้พัก 30 วิแล้วค่อยลองใหม่
+                if tool.Parent then
+                    fruitCooldown[name] = os.clock() + 30
+                    warn("[StoreFruit] เก็บไม่สำเร็จ:", name, "->", internal, ok, result)
+                else
+                    fruitCooldown[name] = nil
+                    print("[StoreFruit] เก็บแล้ว:", name)
                 end
             end
+        end
+    end,
+})
 
-            -- มีปัญหารอแก้ปรับปรุง [ส่วนที่ 2: ระบบออโต้เก็บผล (Store Fruit)]
-            if backpack then
-                for _, v in ipairs(backpack:GetChildren()) do
-                    if v:IsA("Tool") and string.find(v.Name, "Fruit") then
-                        local formatName = string.gsub(v.Name, " ", "-")
-                        local toolObj = getNil(v.Name, "Tool") or v 
-                        local argsStore = {
-                            [1] = "StoreFruit",
-                            [2] = formatName, 
-                            [3] = toolObj
-                        }
-                        game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("CommF_"):InvokeServer(unpack(argsStore))
-                    end
-                end
-            end
-        end)
+-- ============================================================
+-- 8. ฟังก์ชันควบคุม (Hub API)
+-- ============================================================
+function Hub.Enable(name)
+    Cfg[name] = true
+end
+
+function Hub.Disable(name)
+    Cfg[name] = false
+end
+
+function Hub.Toggle(name)
+    Cfg[name] = not Cfg[name]
+    return Cfg[name]
+end
+
+function Hub.Set(key, value)
+    Cfg[key] = value
+end
+
+function Hub.Pause()
+    Hub.Paused = true
+end
+
+function Hub.Resume()
+    Hub.Paused = false
+end
+
+function Hub.Status()
+    print("=== AutoHub === paused:", Hub.Paused, "| level:", State.level, "| alive:", State.alive)
+    for name, t in pairs(Hub.Tasks) do
+        print(" ", name, "| เปิดใน config:", Cfg[t.flag], "| ทำงานอยู่:", t.active, "| error รวม:", t.totalErrors)
     end
-end)
+end
+
+function Hub.Stop()
+    Hub.Running = false
+    if heartbeatConn then heartbeatConn:Disconnect() end
+    Hub.Move.target = nil
+    if _G.AutoHub == Hub then _G.AutoHub = nil end
+    print("[AutoHub] หยุดทำงานแล้ว")
+end
+
+print("[AutoHub] เริ่มทำงาน | พิมพ์ _G.AutoHub.Status() เพื่อดูสถานะ")
