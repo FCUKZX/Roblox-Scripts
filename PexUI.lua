@@ -41,6 +41,7 @@ UI.LucideMirrors = {
 UI.CustomIcons = {}
 UI.UiScale = 1 -- ขนาดตัวหน้าต่าง (1 = ขนาดจริง คมที่สุด)
 UI.ForceMobile = nil -- true/false = บังคับโหมดมือถือ/คอม, nil = ตรวจเอง
+UI.DragHoldTime = 1 -- กดค้างที่หัวหน้าต่างกี่วินาทีถึงจะลากได้ (0 = ลากได้ทันที)
 
 UI.Theme = {
     Bg = Color3.fromRGB(16, 16, 24),
@@ -408,7 +409,11 @@ local function pressRatio(gui, input)
 end
 
 -- วงคลื่นกระจายจากจุดที่นิ้วกด (ใช้ UIAspectRatio จึงเป็นวงกลมเสมอ ไม่ต้องคำนวณพิกเซล)
+-- ปิดคลื่นไว้เป็นค่าเริ่มต้น (คลื่นที่ใช้ UIAspectRatio ในแถว AutomaticSize ทำให้แถวสูงขึ้นตอนกดค้าง
+-- จนเนื้อหาด้านล่างเลื่อนลง) ถ้าอยากเปิดเอง: UI.RippleEnabled = true
+UI.RippleEnabled = false
 local function ripple(host, rx, ry, color, alpha)
+    if not UI.RippleEnabled then return end
     local r = new("Frame", {
         AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(rx, ry), Size = UDim2.fromScale(0, 0),
         BackgroundColor3 = color or WHITE, BackgroundTransparency = alpha or 0.84, BorderSizePixel = 0, ZIndex = 0,
@@ -422,6 +427,9 @@ end
 UI.Ripple = ripple
 
 -- ลากแนวนอนบน hit (สำหรับ Slider / ColorPicker) ปิดการเลื่อนหน้าระหว่างลาก
+-- ล็อกการลากทั้งระบบ: ลากได้ทีละอย่างเท่านั้น (กันนิ้วลากผ่านตัวอื่นแล้วลากพร้อมกัน)
+UI._dragLock = nil
+
 local function bindDrag(win, hit, page, onAlpha, onState)
     local dragging, active = false, nil
     local function alphaOf(input)
@@ -429,6 +437,8 @@ local function bindDrag(win, hit, page, onAlpha, onState)
     end
     hit.InputBegan:Connect(function(input)
         if not isPress(input) then return end
+        if UI._dragLock then return end
+        UI._dragLock = input
         dragging, active = true, input
         if page then page.ScrollingEnabled = false end
         if onState then onState(true) end
@@ -437,6 +447,7 @@ local function bindDrag(win, hit, page, onAlpha, onState)
         c = input.Changed:Connect(function()
             if input.UserInputState == Enum.UserInputState.End then
                 c:Disconnect()
+                if UI._dragLock == input then UI._dragLock = nil end
                 dragging = false
                 if page then page.ScrollingEnabled = true end
                 if onState then onState(false) end
@@ -446,7 +457,8 @@ local function bindDrag(win, hit, page, onAlpha, onState)
     win:_conn(UserInputService.InputChanged:Connect(function(input)
         if not dragging then return end
         local t = input.UserInputType
-        if t == Enum.UserInputType.MouseMovement or (t == Enum.UserInputType.Touch and input == active) then
+        if (t == Enum.UserInputType.MouseMovement and active.UserInputType ~= Enum.UserInputType.Touch)
+            or (t == Enum.UserInputType.Touch and input == active) then
             onAlpha(alphaOf(input))
         end
     end))
@@ -460,7 +472,7 @@ local function makeButton(parent, o)
     -- b = พื้นที่รับสัมผัส (โปร่งใส อยู่กับที่เสมอ), face = ตัวปุ่มที่ยุบ/เด้งจริง
     local b = new("TextButton", {
         Text = "", AutoButtonColor = false, BackgroundTransparency = 1, BorderSizePixel = 0,
-        Size = o.Size or UDim2.new(1, 0, 0, 38), LayoutOrder = o.LayoutOrder or 0,
+        Size = o.Size or UDim2.new(1, 0, 0, 34), LayoutOrder = o.LayoutOrder or 0,
     }, parent)
     local face = new("Frame", {
         Size = UDim2.fromScale(1, 1), BackgroundColor3 = color, BorderSizePixel = 0, ClipsDescendants = true,
@@ -478,13 +490,13 @@ local function makeButton(parent, o)
     local function setIcon(icon)
         if iconObj then iconObj:Destroy() iconObj = nil end
         if icon then
-            iconObj = iconLabel(content, icon, 17, WHITE)
+            iconObj = iconLabel(content, icon, 15, WHITE)
             iconObj.LayoutOrder = 1
         end
     end
     setIcon(o.Icon)
     local txt = label(content, {
-        Text = o.Text or "", Font = F_BOLD, TextSize = o.TextSize or 13, TextColor3 = WHITE,
+        Text = o.Text or "", Font = F_BOLD, TextSize = o.TextSize or 12, TextColor3 = WHITE,
         AutomaticSize = AX, Size = UDim2.fromOffset(0, 20), LayoutOrder = 2,
         TextXAlignment = Enum.TextXAlignment.Center,
     })
@@ -596,21 +608,22 @@ local function safe(cb, ...)
 end
 
 function Section:Toggle(o)
-    local row, ctl = makeRow(self, o.Title, o.Desc, Vector2.new(46, 26), true)
+    local TW, TH, KN = 42, 24, 18
+    local row, ctl = makeRow(self, o.Title, o.Desc, Vector2.new(TW, TH), true)
     local track = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Elem, BorderSizePixel = 0 }, ctl)
-    corner(track, 13)
+    corner(track, TH / 2)
     stroke(track, T.Line, 1, 0)
     local knob = new("Frame", {
-        Size = UDim2.fromOffset(20, 20), Position = UDim2.fromOffset(3, 3), BackgroundColor3 = WHITE, BorderSizePixel = 0,
+        Size = UDim2.fromOffset(KN, KN), Position = UDim2.fromOffset(3, 3), BackgroundColor3 = WHITE, BorderSizePixel = 0,
     }, track)
-    corner(knob, 10)
+    corner(knob, KN / 2)
     local state = o.Default and true or false
     local pressed = false
     local function render(instant)
         local c = state and T.Accent or T.Elem
-        local w = pressed and 26 or 20 -- แบบ iOS: ปุ่มยืดออกตอนกดค้าง
-        local p = UDim2.fromOffset(state and (46 - 3 - w) or 3, 3)
-        local sz = UDim2.fromOffset(w, 20)
+        local w = pressed and (KN + 5) or KN -- แบบ iOS: ปุ่มยืดออกตอนกดค้าง
+        local p = UDim2.fromOffset(state and (TW - 3 - w) or 3, 3)
+        local sz = UDim2.fromOffset(w, KN)
         if instant then
             track.BackgroundColor3 = c
             knob.Position, knob.Size = p, sz
@@ -649,8 +662,8 @@ function Section:Toggle(o)
 end
 
 function Section:Button(o)
-    local w = o.Width or 120
-    local row, ctl = makeRow(self, o.Title, o.Desc, Vector2.new(w, 34), false)
+    local w = o.Width or 106
+    local row, ctl = makeRow(self, o.Title, o.Desc, Vector2.new(w, 30), false)
     return makeButton(ctl, {
         Text = o.Text or "Run", Icon = o.Icon, Color = o.Color or T.Accent, Callback = o.Callback,
         Size = UDim2.fromScale(1, 1), TextSize = 12,
@@ -746,7 +759,7 @@ function Section:Actions(list)
     local n = #list
     local out = {}
     for i, o in ipairs(list) do
-        o.Size = UDim2.new(1 / n, -(8 * (n - 1)) / n, 0, o.Height or 38)
+        o.Size = UDim2.new(1 / n, -(8 * (n - 1)) / n, 0, o.Height or 34)
         o.LayoutOrder = i
         out[i] = makeButton(f, o)
     end
@@ -1517,34 +1530,63 @@ function Window:AddTab(o)
 end
 
 -- ---------------- drag helper ----------------
-function Window:_drag(handle, cbs)
-    local dragging, dragInput, startPos, moved = false, nil, nil, false
+-- hold (วินาที): ต้องกดค้างที่หัวลากครบเวลาก่อนถึงจะลากได้ ถ้านิ้วขยับก่อนครบ = ยกเลิก (ไม่ลาก)
+-- hold = 0 หรือ nil: ลากได้ทันที (ใช้กับปุ่มวงกลม เพื่อให้แตะเปิดได้)
+function Window:_drag(handle, cbs, hold)
+    hold = hold or 0
+    local dragging, dragInput, startPos, moved, armed, token = false, nil, nil, false, false, 0
     handle.InputBegan:Connect(function(input)
-        local t = input.UserInputType
-        if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
-            dragging, moved, dragInput = true, false, input
-            startPos = input.Position
+        if not isPress(input) then return end
+        if UI._dragLock then return end -- มีอย่างอื่นกำลังลากอยู่
+        UI._dragLock = input
+        dragging, moved, dragInput = true, false, input
+        startPos = input.Position
+        token = token + 1
+        local my = token
+        armed = hold <= 0
+        if armed then
             if cbs.Start then cbs.Start() end
-            local c
-            c = input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    if c then c:Disconnect() end
-                    if dragging then
-                        dragging = false
-                        if cbs.End then cbs.End(moved) end
-                    end
+        else
+            task.delay(hold, function()
+                if dragging and token == my and not armed and not moved then
+                    armed = true
+                    if cbs.Start then cbs.Start() end
+                    if cbs.Armed then cbs.Armed() end
                 end
             end)
         end
+        local c
+        c = input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                if c then c:Disconnect() end
+                if UI._dragLock == input then UI._dragLock = nil end
+                if dragging then
+                    dragging = false
+                    token = token + 1
+                    if armed and cbs.End then cbs.End(moved) end
+                    armed = false
+                end
+            end
+        end)
     end)
     self:_conn(UserInputService.InputChanged:Connect(function(input)
         if not dragging then return end
         local t = input.UserInputType
-        if t == Enum.UserInputType.MouseMovement or (t == Enum.UserInputType.Touch and input == dragInput) then
-            local d = input.Position - startPos
-            if not moved and (math.abs(d.X) + math.abs(d.Y)) > 8 then moved = true end
-            if moved and cbs.Move then cbs.Move(d.X, d.Y) end
+        local ok = (t == Enum.UserInputType.MouseMovement and dragInput.UserInputType ~= Enum.UserInputType.Touch)
+            or (t == Enum.UserInputType.Touch and input == dragInput)
+        if not ok then return end
+        local d = input.Position - startPos
+        local dist = math.abs(d.X) + math.abs(d.Y)
+        if not armed then
+            -- ขยับก่อนครบเวลา = ไม่ใช่การกดค้าง -> ยกเลิกการลากรอบนี้
+            if dist > 12 then
+                moved = true
+                token = token + 1
+            end
+            return
         end
+        if not moved and dist > 8 then moved = true end
+        if moved and cbs.Move then cbs.Move(d.X, d.Y) end
     end))
 end
 
@@ -1738,7 +1780,7 @@ function Window:Dialog(o)
             AutomaticSize = AY, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, LayoutOrder = 2,
         })
     end
-    local row = new("Frame", { Size = UDim2.new(1, 0, 0, 40), BackgroundTransparency = 1, LayoutOrder = 3 }, card)
+    local row = new("Frame", { Size = UDim2.new(1, 0, 0, 36), BackgroundTransparency = 1, LayoutOrder = 3 }, card)
     new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, row)
     local closed = false
     local function close()
@@ -2088,8 +2130,19 @@ function UI:CreateWindow(opts)
             tgtX = clamp(sx + dx, -maxX, maxX)
             tgtY = clamp(sy + dy, minY, maxY)
         end,
+        Armed = function()
+            -- กดค้างครบเวลาแล้ว: ขอบหน้าต่างเรืองสีหลัก + สั่นเบาๆ ให้รู้ว่าลากได้แล้ว
+            if self.State ~= "open" then return end
+            tween(self._edgeStroke, { Color = T.Accent }, 0.15)
+            local s = self._scale
+            tween(s, { Scale = s.Scale * 1.015 }, 0.12, Enum.EasingStyle.Quad)
+            task.delay(0.12, function()
+                if not self._destroyed then tween(s, { Scale = self.M.S }, 0.25, Enum.EasingStyle.Back) end
+            end)
+        end,
         End = function(moved)
             dragOn = false
+            tween(self._edgeStroke, { Color = T.Line }, 0.25)
             if moved and self.State == "open" then
                 self.OX, self.OY = math.floor(tgtX + 0.5), math.floor(tgtY + 0.5)
                 self:_tweenWin({ Position = UDim2.new(0.5, self.OX, 0.5, self.OY) }, 0.22, Enum.EasingStyle.Quint)
@@ -2104,8 +2157,8 @@ function UI:CreateWindow(opts)
         self.OX, self.OY = math.floor(curX + 0.5), math.floor(curY + 0.5)
         win.Position = UDim2.new(0.5, self.OX, 0.5, self.OY)
     end))
-    self:_drag(top, winDrag)
-    self:_drag(head, winDrag)
+    self:_drag(top, winDrag, UI.DragHoldTime)
+    self:_drag(head, winDrag, UI.DragHoldTime)
 
     -- ---------- drag + แตะ: วงกลม ----------
     local cx, cy = 0, 0
