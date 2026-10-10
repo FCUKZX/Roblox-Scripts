@@ -41,7 +41,7 @@ UI.LucideMirrors = {
 UI.CustomIcons = {}
 UI.UiScale = 1 -- ขนาดตัวหน้าต่าง (1 = ขนาดจริง คมที่สุด)
 UI.ForceMobile = nil -- true/false = บังคับโหมดมือถือ/คอม, nil = ตรวจเอง
-UI.DragHoldTime = 1 -- กดค้างที่หัวหน้าต่างกี่วินาทีถึงจะลากได้ (0 = ลากได้ทันที)
+UI.DragHoldTime = 0 -- กดค้างที่หัวหน้าต่างกี่วินาทีถึงจะลากได้ (0 = ลากได้ทันที ค่าเริ่มต้น)
 
 UI.Theme = {
     Bg = Color3.fromRGB(16, 16, 24),
@@ -430,27 +430,61 @@ UI.Ripple = ripple
 -- ล็อกการลากทั้งระบบ: ลากได้ทีละอย่างเท่านั้น (กันนิ้วลากผ่านตัวอื่นแล้วลากพร้อมกัน)
 UI._dragLock = nil
 
-local function bindDrag(win, hit, page, onAlpha, onState)
-    local dragging, active = false, nil
+-- สไลเดอร์ต้องกดค้างที่ตัวลากครบ UI.SliderHoldTime วินาที (มีแถบนับเวลาวิ่งใต้สไลเดอร์) ถึงจะลากได้
+-- ถ้านิ้วขยับก่อนครบเวลา = ยกเลิก ปล่อยให้หน้าเลื่อนตามปกติ (0 = ลากได้ทันที)
+UI.SliderHoldTime = 0.5
+
+local function bindDrag(win, hit, page, onAlpha, onState, accent)
+    local dragging, armed, active, startPos, token = false, false, nil, nil, 0
     local function alphaOf(input)
         return clamp((input.Position.X - hit.AbsolutePosition.X) / math.max(1, hit.AbsoluteSize.X), 0, 1)
     end
+    -- แถบนับเวลา
+    local bar = new("Frame", {
+        AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(0, 0, 0, 2),
+        BackgroundColor3 = accent or T.Accent, BackgroundTransparency = 1, BorderSizePixel = 0,
+    }, hit)
+    corner(bar, 1)
+    local function hideBar() tween(bar, { BackgroundTransparency = 1 }, 0.2, Enum.EasingStyle.Sine) end
     hit.InputBegan:Connect(function(input)
         if not isPress(input) then return end
         if UI._dragLock then return end
         UI._dragLock = input
-        dragging, active = true, input
-        if page then page.ScrollingEnabled = false end
-        if onState then onState(true) end
-        onAlpha(alphaOf(input))
+        dragging, armed, active, startPos = true, false, input, input.Position
+        token = token + 1
+        local my = token
+        local hold = UI.SliderHoldTime or 0
+        local function arm()
+            armed = true
+            if page then page.ScrollingEnabled = false end
+            if onState then onState(true) end
+            onAlpha(alphaOf(active))
+        end
+        if hold <= 0 then
+            arm()
+        else
+            bar.Size = UDim2.new(0, 0, 0, 2)
+            bar.BackgroundTransparency = 0.1
+            tween(bar, { Size = UDim2.new(1, 0, 0, 2) }, hold, Enum.EasingStyle.Linear)
+            task.delay(hold, function()
+                if dragging and token == my and not armed then
+                    hideBar()
+                    arm()
+                end
+            end)
+        end
         local c
         c = input.Changed:Connect(function()
             if input.UserInputState == Enum.UserInputState.End then
                 c:Disconnect()
                 if UI._dragLock == input then UI._dragLock = nil end
-                dragging = false
-                if page then page.ScrollingEnabled = true end
-                if onState then onState(false) end
+                token = token + 1
+                hideBar()
+                if dragging and armed then
+                    if page then page.ScrollingEnabled = true end
+                    if onState then onState(false) end
+                end
+                dragging, armed = false, false
             end
         end)
     end)
@@ -459,7 +493,17 @@ local function bindDrag(win, hit, page, onAlpha, onState)
         local t = input.UserInputType
         if (t == Enum.UserInputType.MouseMovement and active.UserInputType ~= Enum.UserInputType.Touch)
             or (t == Enum.UserInputType.Touch and input == active) then
-            onAlpha(alphaOf(input))
+            if armed then
+                onAlpha(alphaOf(input))
+            else
+                local d = input.Position - startPos
+                if math.abs(d.X) + math.abs(d.Y) > 12 then
+                    -- ขยับก่อนครบเวลา = ไม่ใช่การกดค้าง ยกเลิกรอบนี้
+                    token = token + 1
+                    dragging = false
+                    hideBar()
+                end
+            end
         end
     end))
 end
@@ -939,7 +983,7 @@ function Section:Slider(o)
         apply(min + a * (max - min))
     end, function(down)
         tween(ks, { Scale = down and 1.28 or 1 }, 0.25, Enum.EasingStyle.Back)
-    end)
+    end, accent)
     box.Focused:Connect(function() box.Text = tostring(value) end)
     box.FocusLost:Connect(function()
         local n = tonumber(box.Text:match("-?%d+%.?%d*"))
