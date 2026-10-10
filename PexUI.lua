@@ -34,6 +34,7 @@ UI.LucideMirrors = {
     "https://raw.githubusercontent.com/latte-soft/lucide-roblox/main/lucide-roblox.luau",
 }
 UI.CustomIcons = {}
+UI.UiScale = 1 -- ค่า != 1 จะทำให้ตัวอักษรในหน้าต่างเบลอ (CanvasGroup) แนะนำให้คงไว้ที่ 1
 UI.ForceMobile = nil -- true/false = บังคับโหมดมือถือ/คอม, nil = ตรวจเอง
 
 UI.Theme = {
@@ -760,7 +761,7 @@ function Window:_metrics()
             w = vp.X * (portrait and 0.95 or 0.76)
             h = vp.Y * (portrait and 0.72 or 0.82)
         end
-        s = clamp(math.min(w / 860, h / 440), 0.8, 1)
+        s = UI.UiScale or 1
     else
         if self.Maximized then
             w, h = vp.X - 40, vp.Y - 40
@@ -770,8 +771,12 @@ function Window:_metrics()
         end
         w = math.min(w, vp.X - 16)
         h = math.min(h, vp.Y - 16)
-        s = clamp(math.min(w / 860, h / 500), 0.85, 1.1)
+        s = UI.UiScale or 1
     end
+    -- ปัดขนาดเป็นพิกเซลเต็ม + ให้ความกว้าง/สูงมี parity เดียวกับจอ -> หน้าต่างไม่ครึ่งพิกเซล (ตัวอักษรไม่เบลอ)
+    w, h = math.floor(w), math.floor(h)
+    if (w - math.floor(vp.X)) % 2 ~= 0 then w = w - 1 end
+    if (h - math.floor(vp.Y)) % 2 ~= 0 then h = h - 1 end
     return { W = w, H = h, S = s, DW = w / s, DH = h / s, Mobile = mobile, VP = vp }
 end
 
@@ -1324,8 +1329,8 @@ function UI:CreateWindow(opts)
             local maxX = m.VP.X / 2 + m.W / 2 - 90
             local minY = -(m.VP.Y / 2 - m.H / 2)
             local maxY = m.VP.Y / 2 - 50
-            self.OX = clamp(sx + dx, -maxX, maxX)
-            self.OY = clamp(sy + dy, minY, maxY)
+            self.OX = math.floor(clamp(sx + dx, -maxX, maxX) + 0.5)
+            self.OY = math.floor(clamp(sy + dy, minY, maxY) + 0.5)
             win.Position = UDim2.new(0.5, self.OX, 0.5, self.OY)
         end,
     })
@@ -1340,8 +1345,8 @@ function UI:CreateWindow(opts)
             local maxX = m.VP.X / 2 + m.W / 2 - 90
             local minY = -(m.VP.Y / 2 - m.H / 2)
             local maxY = m.VP.Y / 2 - 50
-            self.OX = clamp(sx + dx, -maxX, maxX)
-            self.OY = clamp(sy + dy, minY, maxY)
+            self.OX = math.floor(clamp(sx + dx, -maxX, maxX) + 0.5)
+            self.OY = math.floor(clamp(sy + dy, minY, maxY) + 0.5)
             win.Position = UDim2.new(0.5, self.OX, 0.5, self.OY)
         end,
     })
