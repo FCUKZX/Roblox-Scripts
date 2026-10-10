@@ -1,11 +1,14 @@
 --[[
-    XenonUI v1.0
+    XenonUI v2.0
     UI library สไตล์ Xenon Hub สำหรับ Roblox (รองรับทั้ง PC และมือถือ)
 
     - หน้าต่างปรับขนาดตามจอเอง (มือถือ: กว้าง ~76% / สูง ~82% ของจอ)
     - ปุ่มเหลือง = ย่อเป็นวงกลมข้างจอ (ลากย้ายได้ ดูดเข้าขอบซ้าย/ขวา แตะเพื่อขยายกลับ)
     - ไม่มีอีโมจิ: ไอคอนทั้งหมดเป็นไอคอน ID (Lucide อัตโนมัติ หรือใส่ rbxassetid เองได้)
     - แอนิเมชัน: เปิด/ย่อ/ขยาย, สลับแท็บ, สวิตช์, ปุ่ม, Toast
+    - v2.0: ปุ่มยุบตามจุดที่นิ้วกด + Ripple, ลากหน้าต่างแบบนุ่ม (lerp), เลื่อนแบบ iOS (ยางยืด)
+            คอนโทรลใหม่: Slider, Dropdown (เดี่ยว/หลายตัวเลือก), Keybind, ColorPicker, Progress,
+            Divider, Paragraph, Section พับได้ (Collapsible), Dialog ยืนยัน
 
     วิธีเรียกใช้ผ่าน Git:
         local UI = loadstring(game:HttpGet("https://raw.githubusercontent.com/USER/REPO/main/XenonUI.lua"))()
@@ -24,9 +27,11 @@
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
+local GuiService = game:GetService("GuiService")
+local RunService = game:GetService("RunService")
 
 local UI = {}
-UI.Version = "1.2.0"
+UI.Version = "2.0.0"
 -- แหล่งไอคอน Lucide (spritesheet asset id) ถ้าโหลดไม่ได้ ไอคอนจะเป็นจุดแทน ไม่ทำให้ UI พัง
 UI.LucideURL = "https://github.com/latte-soft/lucide-roblox/releases/latest/download/lucide-roblox.luau"
 UI.LucideMirrors = {
@@ -66,8 +71,25 @@ local AX, AY = Enum.AutomaticSize.X, Enum.AutomaticSize.Y
 -- =====================================================================
 -- Utilities
 -- =====================================================================
+local activeTw = setmetatable({}, { __mode = "k" })
 local function tween(o, props, t, style, dir)
+    -- ยกเลิกทวีนเดิมที่แย่งคุณสมบัติชุดเดียวกัน -> ไม่ตีกัน ไม่สั่น ไม่กระตุก
+    local keys = {}
+    for k in pairs(props) do keys[#keys + 1] = tostring(k) end
+    table.sort(keys)
+    local sig = table.concat(keys, "|")
+    local m = activeTw[o]
+    if not m then
+        m = {}
+        activeTw[o] = m
+    end
+    local old = m[sig]
+    if old then old:Cancel() end
     local tw = TweenService:Create(o, TweenInfo.new(t or 0.25, style or Enum.EasingStyle.Quint, dir or Enum.EasingDirection.Out), props)
+    m[sig] = tw
+    tw.Completed:Connect(function()
+        if m[sig] == tw then m[sig] = nil end
+    end)
     tw:Play()
     return tw
 end
@@ -367,23 +389,91 @@ local function mask(name)
 end
 
 -- =====================================================================
--- Button builder (ใช้ร่วมกันทั้งปุ่มในแถวและปุ่มเต็มความกว้าง)
+-- Interaction helpers (ตำแหน่งนิ้ว / Ripple / ลาก)
+-- =====================================================================
+local function isPress(input)
+    local t = input.UserInputType
+    return t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch
+end
+UI.IsPress = isPress
+
+-- ตำแหน่งที่กดเป็นสัดส่วน 0..1 ภายในปุ่ม (ชดเชย GuiInset ให้ตรงกับ AbsolutePosition)
+local function pressRatio(gui, input)
+    local inset = GuiService:GetGuiInset()
+    local px, py = input.Position.X + inset.X, input.Position.Y + inset.Y
+    local ap, as = gui.AbsolutePosition, gui.AbsoluteSize
+    local rx = as.X > 0 and clamp((px - ap.X) / as.X, 0, 1) or 0.5
+    local ry = as.Y > 0 and clamp((py - ap.Y) / as.Y, 0, 1) or 0.5
+    return rx, ry
+end
+
+-- วงคลื่นกระจายจากจุดที่นิ้วกด (ใช้ UIAspectRatio จึงเป็นวงกลมเสมอ ไม่ต้องคำนวณพิกเซล)
+local function ripple(host, rx, ry, color, alpha)
+    local r = new("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(rx, ry), Size = UDim2.fromScale(0, 0),
+        BackgroundColor3 = color or WHITE, BackgroundTransparency = alpha or 0.84, BorderSizePixel = 0, ZIndex = 0,
+    }, host)
+    new("UICorner", { CornerRadius = UDim.new(0.5, 0) }, r)
+    new("UIAspectRatioConstraint", { AspectRatio = 1, DominantAxis = Enum.DominantAxis.Width }, r)
+    tween(r, { Size = UDim2.fromScale(2.2, 2.2) }, 0.6, Enum.EasingStyle.Quint)
+    tween(r, { BackgroundTransparency = 1 }, 0.6, Enum.EasingStyle.Sine)
+    task.delay(0.65, function() r:Destroy() end)
+end
+UI.Ripple = ripple
+
+-- ลากแนวนอนบน hit (สำหรับ Slider / ColorPicker) ปิดการเลื่อนหน้าระหว่างลาก
+local function bindDrag(win, hit, page, onAlpha, onState)
+    local dragging, active = false, nil
+    local function alphaOf(input)
+        return clamp((input.Position.X - hit.AbsolutePosition.X) / math.max(1, hit.AbsoluteSize.X), 0, 1)
+    end
+    hit.InputBegan:Connect(function(input)
+        if not isPress(input) then return end
+        dragging, active = true, input
+        if page then page.ScrollingEnabled = false end
+        if onState then onState(true) end
+        onAlpha(alphaOf(input))
+        local c
+        c = input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                c:Disconnect()
+                dragging = false
+                if page then page.ScrollingEnabled = true end
+                if onState then onState(false) end
+            end
+        end)
+    end)
+    win:_conn(UserInputService.InputChanged:Connect(function(input)
+        if not dragging then return end
+        local t = input.UserInputType
+        if t == Enum.UserInputType.MouseMovement or (t == Enum.UserInputType.Touch and input == active) then
+            onAlpha(alphaOf(input))
+        end
+    end))
+end
+
+-- =====================================================================
+-- Button builder (ปุ่มยุบ/เด้งโดยใช้จุดที่นิ้วกดเป็นจุดหมุน + Ripple)
 -- =====================================================================
 local function makeButton(parent, o)
     local color = o.Color or T.Elem
+    -- b = พื้นที่รับสัมผัส (โปร่งใส อยู่กับที่เสมอ), face = ตัวปุ่มที่ยุบ/เด้งจริง
     local b = new("TextButton", {
-        Text = "", AutoButtonColor = false, BackgroundColor3 = color, BorderSizePixel = 0,
-        Size = o.Size or UDim2.new(1, 0, 0, 38), LayoutOrder = o.LayoutOrder or 0, ClipsDescendants = true,
+        Text = "", AutoButtonColor = false, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = o.Size or UDim2.new(1, 0, 0, 38), LayoutOrder = o.LayoutOrder or 0,
     }, parent)
-    corner(b, 9)
-    stroke(b, WHITE, 1, 0.85)
-    local sc = new("UIScale", { Scale = 1 }, b)
-    local content = new("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1) }, b)
+    local face = new("Frame", {
+        Size = UDim2.fromScale(1, 1), BackgroundColor3 = color, BorderSizePixel = 0, ClipsDescendants = true,
+    }, b)
+    corner(face, 9)
+    stroke(face, WHITE, 1, 0.85)
+    local sc = new("UIScale", { Scale = 1 }, face)
+    local content = new("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1) }, face)
     new("UIListLayout", {
         FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Center,
         VerticalAlignment = Enum.VerticalAlignment.Center, Padding = UDim.new(0, 7), SortOrder = Enum.SortOrder.LayoutOrder,
     }, content)
-    local obj = { Instance = b }
+    local obj = { Instance = b, Face = face }
     local iconObj
     local function setIcon(icon)
         if iconObj then iconObj:Destroy() iconObj = nil end
@@ -402,25 +492,26 @@ local function makeButton(parent, o)
     function obj:SetText(t) txt.Text = tostring(t) end
     function obj:SetColor(c)
         color = c
-        tween(b, { BackgroundColor3 = c }, 0.25)
+        tween(face, { BackgroundColor3 = c }, 0.25)
     end
     function obj:SetIcon(icon) setIcon(icon) end
-    b.MouseEnter:Connect(function() tween(b, { BackgroundColor3 = color:Lerp(WHITE, 0.14) }, 0.15) end)
+    b.MouseEnter:Connect(function() tween(face, { BackgroundColor3 = color:Lerp(WHITE, 0.12) }, 0.18) end)
     b.MouseLeave:Connect(function()
-        tween(b, { BackgroundColor3 = color }, 0.2)
-        tween(sc, { Scale = 1 }, 0.2)
+        tween(face, { BackgroundColor3 = color }, 0.28)
+        tween(sc, { Scale = 1 }, 0.4, Enum.EasingStyle.Back)
     end)
     b.InputBegan:Connect(function(input)
-        local t = input.UserInputType
-        if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
-            tween(sc, { Scale = 0.95 }, 0.1)
-        end
+        if not isPress(input) then return end
+        -- ย้ายจุดหมุน (AnchorPoint) ไปที่ตำแหน่งนิ้ว แล้วชดเชย Position ให้ปุ่มไม่ขยับ
+        -- UIScale ย่อ/ขยายรอบ AnchorPoint -> ปุ่มยุบเข้าหานิ้วพอดี ไม่เด้งไปทางซ้ายอีก
+        local rx, ry = pressRatio(face, input)
+        face.AnchorPoint = Vector2.new(rx, ry)
+        face.Position = UDim2.fromScale(rx, ry)
+        tween(sc, { Scale = 0.94 }, 0.12, Enum.EasingStyle.Quad)
+        ripple(face, rx, ry, WHITE, 0.8)
     end)
     b.InputEnded:Connect(function(input)
-        local t = input.UserInputType
-        if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
-            tween(sc, { Scale = 1 }, 0.3, Enum.EasingStyle.Back)
-        end
+        if isPress(input) then tween(sc, { Scale = 1 }, 0.5, Enum.EasingStyle.Back) end
     end)
     b.Activated:Connect(function()
         if o.Callback then
@@ -447,25 +538,38 @@ local function nextSlot(sec)
 end
 
 -- แถวมาตรฐาน: ซ้าย = ชื่อ + คำอธิบาย, ขวา = ตัวควบคุม
-local function makeRow(sec, title, desc, ctlSize, clickable)
-    local order = nextSlot(sec)
+-- parent (ไม่บังคับ): วางแถวในที่อื่น เช่น หัวของ Dropdown
+local function makeRow(sec, title, desc, ctlSize, clickable, parent)
+    local order = 1
+    if not parent then order = nextSlot(sec) end
     local row = new(clickable and "TextButton" or "Frame", {
         Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, BorderSizePixel = 0, LayoutOrder = order,
-    }, sec.Card)
+        ClipsDescendants = clickable and true or false,
+    }, parent or sec.Card)
     if clickable then
         row.Text = ""
         row.AutoButtonColor = false
+        row.InputBegan:Connect(function(input)
+            if isPress(input) then
+                local rx, ry = pressRatio(row, input)
+                ripple(row, rx, ry, WHITE, 0.9)
+            end
+        end)
     end
-    new("UISizeConstraint", { MinSize = Vector2.new(0, 54) }, row)
-    pad(row, 14, 10, 14, 10)
+    -- เนื้อหาจริงอยู่ใน inner (มี layout) ส่วน row ว่างไว้ให้วาง Ripple
+    local inner = new("Frame", {
+        Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 2,
+    }, row)
+    new("UISizeConstraint", { MinSize = Vector2.new(0, 54) }, inner)
+    pad(inner, 14, 10, 14, 10)
     new("UIListLayout", {
         FillDirection = Enum.FillDirection.Horizontal, VerticalAlignment = Enum.VerticalAlignment.Center,
         Padding = UDim.new(0, 12), SortOrder = Enum.SortOrder.LayoutOrder,
-    }, row)
+    }, inner)
     local block = new("Frame", {
         Size = ctlSize and UDim2.new(1, -(ctlSize.X + 12), 0, 0) or UDim2.new(1, 0, 0, 0),
         AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = 1,
-    }, row)
+    }, inner)
     vlist(block, 2)
     local tl = label(block, {
         Text = title or "", Font = F_BOLD, TextSize = 14, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY,
@@ -480,7 +584,7 @@ local function makeRow(sec, title, desc, ctlSize, clickable)
     end
     local ctl
     if ctlSize then
-        ctl = new("Frame", { Size = UDim2.fromOffset(ctlSize.X, ctlSize.Y), BackgroundTransparency = 1, LayoutOrder = 2 }, row)
+        ctl = new("Frame", { Size = UDim2.fromOffset(ctlSize.X, ctlSize.Y), BackgroundTransparency = 1, LayoutOrder = 2 }, inner)
     end
     return row, ctl, tl, dl
 end
@@ -501,20 +605,36 @@ function Section:Toggle(o)
     }, track)
     corner(knob, 10)
     local state = o.Default and true or false
+    local pressed = false
     local function render(instant)
         local c = state and T.Accent or T.Elem
-        local p = state and UDim2.fromOffset(23, 3) or UDim2.fromOffset(3, 3)
+        local w = pressed and 26 or 20 -- แบบ iOS: ปุ่มยืดออกตอนกดค้าง
+        local p = UDim2.fromOffset(state and (46 - 3 - w) or 3, 3)
+        local sz = UDim2.fromOffset(w, 20)
         if instant then
             track.BackgroundColor3 = c
-            knob.Position = p
+            knob.Position, knob.Size = p, sz
         else
             tween(track, { BackgroundColor3 = c }, 0.25)
-            tween(knob, { Position = p }, 0.35, Enum.EasingStyle.Back)
+            tween(knob, { Position = p, Size = sz }, 0.38, Enum.EasingStyle.Back)
         end
     end
     render(true)
+    row.InputBegan:Connect(function(input)
+        if isPress(input) then
+            pressed = true
+            render(false)
+        end
+    end)
+    row.InputEnded:Connect(function(input)
+        if isPress(input) then
+            pressed = false
+            render(false)
+        end
+    end)
     row.Activated:Connect(function()
         state = not state
+        pressed = false
         render(false)
         safe(o.Callback, state)
     end)
@@ -648,7 +768,7 @@ function Section:List(o)
     local sf = new("ScrollingFrame", {
         Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Inset, BorderSizePixel = 0, ScrollBarThickness = 3,
         ScrollBarImageColor3 = T.Muted, CanvasSize = UDim2.new(), AutomaticCanvasSize = AY,
-        ScrollingDirection = Enum.ScrollingDirection.Y,
+        ScrollingDirection = Enum.ScrollingDirection.Y, ElasticBehavior = Enum.ElasticBehavior.Always,
     }, holder)
     corner(sf, 9)
     stroke(sf, T.Line, 1, 0)
@@ -686,6 +806,403 @@ function Section:List(o)
 end
 
 -- =====================================================================
+-- คอนโทรลใหม่ (v2.0)
+-- =====================================================================
+local function autoFrame(sec, padv, gap)
+    local order = nextSlot(sec)
+    local f = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = order }, sec.Card)
+    if padv then pad(f, padv[1], padv[2], padv[3], padv[4]) end
+    if gap then vlist(f, gap) end
+    return f
+end
+
+function Section:Divider(text)
+    local order = nextSlot(self)
+    local f = new("Frame", { Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, LayoutOrder = order }, self.Card)
+    pad(f, 14, 0, 14, 0)
+    label(f, {
+        Text = string.upper(tostring(text or "")), Font = F_BOLD, TextSize = 11, TextColor3 = T.Muted,
+        Size = UDim2.fromScale(1, 1),
+    })
+    return f
+end
+
+function Section:Paragraph(o)
+    o = o or {}
+    local f = autoFrame(self, { 14, 12, 14, 12 }, 4)
+    local tl
+    if o.Title then
+        tl = label(f, { Text = o.Title, Font = F_BOLD, TextSize = 14, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, TextWrapped = true, LayoutOrder = 1 })
+    end
+    local bl = label(f, {
+        Text = tostring(o.Text or ""), Font = F_MED, TextSize = 12, TextColor3 = T.Muted, Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = AY, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, LayoutOrder = 2, RichText = o.RichText or false,
+    })
+    return { Row = f, Title = tl, Body = bl, SetText = function(t) bl.Text = tostring(t) end }
+end
+
+function Section:Progress(o)
+    o = o or {}
+    local f = autoFrame(self, { 14, 12, 14, 12 }, 8)
+    local head = new("Frame", { Size = UDim2.new(1, 0, 0, 18), BackgroundTransparency = 1, LayoutOrder = 1 }, f)
+    label(head, { Text = o.Title or "", Font = F_BOLD, TextSize = 14, Size = UDim2.new(1, -60, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd })
+    local val = label(head, {
+        Text = "0%", Font = F_MED, TextSize = 12, TextColor3 = T.Muted, Size = UDim2.fromScale(1, 1), TextXAlignment = Enum.TextXAlignment.Right,
+    })
+    local track = new("Frame", { Size = UDim2.new(1, 0, 0, 8), BackgroundColor3 = T.Elem, BorderSizePixel = 0, LayoutOrder = 2, ClipsDescendants = true }, f)
+    corner(track, 4)
+    local fill = new("Frame", { Size = UDim2.fromScale(0, 1), BackgroundColor3 = o.Color or T.Accent, BorderSizePixel = 0 }, track)
+    corner(fill, 4)
+    local function set(a, text)
+        a = clamp(a or 0, 0, 1)
+        tween(fill, { Size = UDim2.fromScale(a, 1) }, 0.45, Enum.EasingStyle.Quint)
+        val.Text = text or (tostring(math.floor(a * 100 + 0.5)) .. "%")
+    end
+    set(o.Default or 0)
+    return { Row = f, Set = set }
+end
+
+function Section:Slider(o)
+    o = o or {}
+    local min, max = o.Min or 0, o.Max or 100
+    local step = o.Step or 1
+    local suffix = o.Suffix or ""
+    local value = clamp(o.Default or min, min, max)
+    local accent = o.Color or T.Accent
+    local dec = o.Decimals
+    if dec == nil then
+        if step % 1 == 0 then dec = 0 else
+            local d = tostring(step):match("%.(%d+)")
+            dec = d and #d or 2
+        end
+    end
+    local function fmt(v) return string.format("%." .. dec .. "f", v) .. suffix end
+
+    local f = autoFrame(self, { 14, 12, 14, 12 }, 4)
+    local head = new("Frame", { Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, LayoutOrder = 1 }, f)
+    label(head, { Text = o.Title or "", Font = F_BOLD, TextSize = 14, Size = UDim2.new(1, -80, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd })
+    local box = new("TextBox", {
+        AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(72, 22),
+        BackgroundColor3 = T.Elem, BorderSizePixel = 0, Text = "", TextColor3 = T.Text, Font = F_BOLD, TextSize = 12, ClearTextOnFocus = false,
+    }, head)
+    corner(box, 7)
+    if o.Desc and o.Desc ~= "" then
+        label(f, { Text = o.Desc, TextSize = 12, TextColor3 = T.Muted, Font = F_MED, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, TextWrapped = true, LayoutOrder = 2 })
+    end
+    local hit = new("TextButton", { Text = "", AutoButtonColor = false, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 28), LayoutOrder = 3 }, f)
+    local track = new("Frame", {
+        AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.new(1, 0, 0, 6),
+        BackgroundColor3 = T.Elem, BorderSizePixel = 0,
+    }, hit)
+    corner(track, 3)
+    local fill = new("Frame", { Size = UDim2.fromScale(0, 1), BackgroundColor3 = accent, BorderSizePixel = 0 }, track)
+    corner(fill, 3)
+    local knob = new("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.fromOffset(18, 18),
+        BackgroundColor3 = WHITE, BorderSizePixel = 0,
+    }, track)
+    corner(knob, 9)
+    stroke(knob, accent, 2, 0)
+    local ks = new("UIScale", { Scale = 1 }, knob)
+
+    local function apply(v, silent, instant)
+        v = clamp(math.floor((v - min) / step + 0.5) * step + min, min, max)
+        v = tonumber(string.format("%." .. dec .. "f", v)) or v
+        local changed = v ~= value
+        value = v
+        local a = (max > min) and (v - min) / (max - min) or 0
+        if instant then
+            fill.Size = UDim2.fromScale(a, 1)
+            knob.Position = UDim2.fromScale(a, 0.5)
+        else
+            tween(fill, { Size = UDim2.fromScale(a, 1) }, 0.12, Enum.EasingStyle.Quad)
+            tween(knob, { Position = UDim2.fromScale(a, 0.5) }, 0.12, Enum.EasingStyle.Quad)
+        end
+        box.Text = fmt(v)
+        if changed and not silent then safe(o.Callback, v) end
+    end
+    apply(value, true, true)
+    bindDrag(self.Window, hit, self.Tab.Page, function(a)
+        apply(min + a * (max - min))
+    end, function(down)
+        tween(ks, { Scale = down and 1.28 or 1 }, 0.25, Enum.EasingStyle.Back)
+    end)
+    box.Focused:Connect(function() box.Text = tostring(value) end)
+    box.FocusLost:Connect(function()
+        local n = tonumber(box.Text:match("-?%d+%.?%d*"))
+        if n then apply(n) else box.Text = fmt(value) end
+    end)
+    return { Row = f, Get = function() return value end, Set = function(v) apply(v, true) end }
+end
+
+-- ส่วนที่กางออกได้ใต้แถว (ใช้ร่วมกันใน Dropdown / ColorPicker)
+local function makeCollapsePanel(wrap)
+    local panel = new("Frame", {
+        Size = UDim2.new(1, 0, 0, 0), BackgroundTransparency = 1, BorderSizePixel = 0, ClipsDescendants = true,
+        LayoutOrder = 2, Visible = false,
+    }, wrap)
+    local open = false
+    local ctl = {}
+    function ctl.Set(v, height)
+        open = v
+        if v then
+            panel.Visible = true
+            tween(panel, { Size = UDim2.new(1, 0, 0, height) }, 0.4, Enum.EasingStyle.Quint)
+        else
+            tween(panel, { Size = UDim2.new(1, 0, 0, 0) }, 0.3, Enum.EasingStyle.Quint)
+            task.delay(0.32, function()
+                if not open then panel.Visible = false end
+            end)
+        end
+    end
+    function ctl.IsOpen() return open end
+    return panel, ctl
+end
+
+function Section:Dropdown(o)
+    o = o or {}
+    local multi = o.Multi and true or false
+    local options = o.Options or {}
+    local selected, value = {}, nil
+    if multi then
+        for _, v in ipairs(o.Default or {}) do selected[v] = true end
+    else
+        value = o.Default
+    end
+    local order = nextSlot(self)
+    local wrap = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = order }, self.Card)
+    vlist(wrap, 0)
+    local row, ctl = makeRow(self, o.Title, o.Desc, Vector2.new(o.Width or 150, 32), true, wrap)
+    local pill = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Elem, BorderSizePixel = 0 }, ctl)
+    corner(pill, 9)
+    local pst = stroke(pill, T.Line, 1, 0)
+    local vl = label(pill, {
+        Text = "", Font = F_MED, TextSize = 12, Position = UDim2.fromOffset(10, 0), Size = UDim2.new(1, -34, 1, 0),
+        TextTruncate = Enum.TextTruncate.AtEnd,
+    })
+    local chev = iconLabel(pill, "chevron-down", 14, T.Muted, "v", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -9, 0.5, 0) })
+    local panel, pc = makeCollapsePanel(wrap)
+    local scroll = new("ScrollingFrame", {
+        Position = UDim2.fromOffset(12, 0), Size = UDim2.new(1, -24, 0, 100), BackgroundColor3 = T.Inset, BorderSizePixel = 0,
+        ScrollBarThickness = 3, ScrollBarImageColor3 = T.Muted, CanvasSize = UDim2.new(), AutomaticCanvasSize = AY,
+        ScrollingDirection = Enum.ScrollingDirection.Y, ElasticBehavior = Enum.ElasticBehavior.Always,
+    }, panel)
+    corner(scroll, 9)
+    stroke(scroll, T.Line, 1, 0)
+    pad(scroll, 5, 5, 5, 5)
+    vlist(scroll, 3)
+
+    local btns = {}
+    local function isSel(v)
+        if multi then return selected[v] == true end
+        return value == v
+    end
+    local function list()
+        local t = {}
+        for _, op in ipairs(options) do
+            if selected[op] then t[#t + 1] = op end
+        end
+        return t
+    end
+    local function text()
+        if multi then
+            local t = {}
+            for _, op in ipairs(options) do
+                if selected[op] then t[#t + 1] = tostring(op) end
+            end
+            return #t > 0 and table.concat(t, ", ") or (o.Placeholder or "None")
+        end
+        return value ~= nil and tostring(value) or (o.Placeholder or "Select")
+    end
+    local function paint()
+        vl.Text = text()
+        for i, b in ipairs(btns) do
+            local on = isSel(options[i])
+            tween(b, { BackgroundTransparency = on and 0 or 1 }, 0.2)
+            tween(b, { TextColor3 = on and WHITE or T.Muted }, 0.2)
+        end
+    end
+    local function panelHeight()
+        local content = #options * 33 - 3 + 10
+        local view = math.min(math.max(content, 20), 180)
+        scroll.Size = UDim2.new(1, -24, 0, view)
+        return view + 12
+    end
+    local function setOpen(v)
+        pc.Set(v, v and panelHeight() or 0)
+        tween(chev, { Rotation = v and 180 or 0 }, 0.4, Enum.EasingStyle.Quint)
+        tween(pst, { Color = v and T.Accent or T.Line }, 0.25)
+    end
+    local function fire()
+        if multi then safe(o.Callback, list()) else safe(o.Callback, value) end
+    end
+    local function build()
+        for _, b in ipairs(btns) do b:Destroy() end
+        btns = {}
+        for i, op in ipairs(options) do
+            local b = new("TextButton", {
+                Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = T.Accent, BackgroundTransparency = 1, BorderSizePixel = 0,
+                AutoButtonColor = false, Text = tostring(op), Font = F_MED, TextSize = 12, TextColor3 = T.Muted,
+                TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = i, ClipsDescendants = true,
+            }, scroll)
+            corner(b, 7)
+            pad(b, 10, 0, 10, 0)
+            b.InputBegan:Connect(function(input)
+                if isPress(input) then
+                    local rx, ry = pressRatio(b, input)
+                    ripple(b, rx, ry, WHITE, 0.8)
+                end
+            end)
+            b.MouseEnter:Connect(function()
+                if not isSel(op) then tween(b, { BackgroundTransparency = 0.82 }, 0.12) end
+            end)
+            b.MouseLeave:Connect(function()
+                if not isSel(op) then tween(b, { BackgroundTransparency = 1 }, 0.18) end
+            end)
+            b.Activated:Connect(function()
+                if multi then
+                    selected[op] = (not selected[op]) and true or nil
+                else
+                    value = op
+                    setOpen(false)
+                end
+                paint()
+                fire()
+            end)
+            btns[i] = b
+        end
+        paint()
+    end
+    build()
+    row.Activated:Connect(function() setOpen(not pc.IsOpen()) end)
+
+    local obj = { Row = wrap }
+    function obj.Get() return multi and list() or value end
+    function obj.Set(v, silent)
+        if multi then
+            selected = {}
+            for _, x in ipairs(v or {}) do selected[x] = true end
+        else
+            value = v
+        end
+        paint()
+        if not silent then fire() end
+    end
+    function obj.Refresh(newOptions, keep)
+        options = newOptions or {}
+        if not keep then
+            selected, value = {}, nil
+        end
+        build()
+        if pc.IsOpen() then setOpen(true) end
+    end
+    return obj
+end
+
+function Section:Keybind(o)
+    o = o or {}
+    local key = o.Default
+    local row, ctl = makeRow(self, o.Title, o.Desc, Vector2.new(o.Width or 104, 32), false)
+    local listening = false
+    local function nameOf(k) return k and k.Name or "None" end
+    local btn
+    btn = makeButton(ctl, {
+        Text = nameOf(key), Color = T.Elem, Size = UDim2.fromScale(1, 1), TextSize = 12,
+        Callback = function()
+            if listening then return end
+            listening = true
+            btn:SetText("...")
+            btn:SetColor(T.Accent)
+        end,
+    })
+    self.Window:_conn(UserInputService.InputBegan:Connect(function(input, gp)
+        if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+        if listening then
+            listening = false
+            if input.KeyCode == Enum.KeyCode.Backspace then
+                key = nil
+            elseif input.KeyCode ~= Enum.KeyCode.Escape then
+                key = input.KeyCode
+            end
+            btn:SetText(nameOf(key))
+            btn:SetColor(T.Elem)
+            safe(o.Changed, key)
+            return
+        end
+        if not gp and key and input.KeyCode == key then safe(o.Callback, key) end
+    end))
+    return {
+        Row = row, Get = function() return key end,
+        Set = function(k) key = k; btn:SetText(nameOf(k)) end,
+    }
+end
+
+function Section:ColorPicker(o)
+    o = o or {}
+    local h, s, v = (o.Default or T.Accent):ToHSV()
+    local color = Color3.fromHSV(h, s, v)
+    local order = nextSlot(self)
+    local wrap = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = order }, self.Card)
+    vlist(wrap, 0)
+    local row, ctl = makeRow(self, o.Title, o.Desc, Vector2.new(58, 28), true, wrap)
+    local sw = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = color, BorderSizePixel = 0 }, ctl)
+    corner(sw, 9)
+    stroke(sw, WHITE, 1, 0.7)
+    local panel, pc = makeCollapsePanel(wrap)
+    local holder = new("Frame", { Position = UDim2.fromOffset(14, 2), Size = UDim2.new(1, -28, 0, 92), BackgroundTransparency = 1 }, panel)
+    vlist(holder, 4)
+
+    local function mkTrack(order2, onAlpha)
+        local hit = new("TextButton", { Text = "", AutoButtonColor = false, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 28), LayoutOrder = order2 }, holder)
+        local tr = new("Frame", {
+            AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.new(1, 0, 0, 10),
+            BackgroundColor3 = WHITE, BorderSizePixel = 0,
+        }, hit)
+        corner(tr, 5)
+        local g = new("UIGradient", {}, tr)
+        local knob = new("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.fromOffset(18, 18),
+            BackgroundColor3 = WHITE, BorderSizePixel = 0,
+        }, tr)
+        corner(knob, 9)
+        stroke(knob, Color3.fromRGB(40, 40, 56), 2, 0)
+        local ks = new("UIScale", { Scale = 1 }, knob)
+        bindDrag(self.Window, hit, self.Tab.Page, onAlpha, function(down)
+            tween(ks, { Scale = down and 1.25 or 1 }, 0.22, Enum.EasingStyle.Back)
+        end)
+        return { Gradient = g, Knob = knob }
+    end
+
+    local hueT, satT, valT
+    local function refresh(silent)
+        color = Color3.fromHSV(h, s, v)
+        sw.BackgroundColor3 = color
+        hueT.Knob.Position = UDim2.fromScale(h, 0.5)
+        satT.Knob.Position = UDim2.fromScale(s, 0.5)
+        valT.Knob.Position = UDim2.fromScale(v, 0.5)
+        satT.Gradient.Color = ColorSequence.new(Color3.fromHSV(h, 0, v), Color3.fromHSV(h, 1, v))
+        valT.Gradient.Color = ColorSequence.new(Color3.new(0, 0, 0), Color3.fromHSV(h, s, 1))
+        if not silent then safe(o.Callback, color) end
+    end
+    hueT = mkTrack(1, function(a) h = a; refresh() end)
+    satT = mkTrack(2, function(a) s = a; refresh() end)
+    valT = mkTrack(3, function(a) v = a; refresh() end)
+    local seq = {}
+    for i = 0, 6 do seq[#seq + 1] = ColorSequenceKeypoint.new(i / 6, Color3.fromHSV(math.min(i / 6, 0.9999), 1, 1)) end
+    seq[#seq] = ColorSequenceKeypoint.new(1, Color3.fromHSV(0, 1, 1))
+    hueT.Gradient.Color = ColorSequence.new(seq)
+    refresh(true)
+    row.Activated:Connect(function() pc.Set(not pc.IsOpen(), 100) end)
+    return {
+        Row = wrap, Get = function() return color end,
+        Set = function(c, silent)
+            h, s, v = c:ToHSV()
+            refresh(silent ~= false and true or false)
+        end,
+    }
+end
+
+-- =====================================================================
 -- Tab
 -- =====================================================================
 local Tab = {}
@@ -696,8 +1213,9 @@ function Tab:Section(o)
     self._n = self._n + 1
     local wrap = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = self._n }, self.Page)
     vlist(wrap, 9)
+    local head
     if o.Title then
-        local head = new("Frame", { Size = UDim2.new(1, 0, 0, 36), BackgroundTransparency = 1, LayoutOrder = 1 }, wrap)
+        head = new("Frame", { Size = UDim2.new(1, 0, 0, 36), BackgroundTransparency = 1, LayoutOrder = 1 }, wrap)
         local x = 2
         if o.Icon then
             local tile = new("Frame", {
@@ -707,28 +1225,73 @@ function Tab:Section(o)
             iconLabel(tile, o.Icon, 18, WHITE, nil, CENTER)
             x = 44
         end
+        local rightPad = o.Collapsible and 30 or 0
         if o.Desc then
             label(head, {
-                Text = o.Title, Font = F_BOLD, TextSize = 14, Position = UDim2.fromOffset(x, 1), Size = UDim2.new(1, -x, 0, 18),
+                Text = o.Title, Font = F_BOLD, TextSize = 14, Position = UDim2.fromOffset(x, 1), Size = UDim2.new(1, -(x + rightPad), 0, 18),
                 TextTruncate = Enum.TextTruncate.AtEnd,
             })
             label(head, {
-                Text = o.Desc, TextSize = 12, TextColor3 = T.Muted, Position = UDim2.fromOffset(x, 19), Size = UDim2.new(1, -x, 0, 16),
+                Text = o.Desc, TextSize = 12, TextColor3 = T.Muted, Position = UDim2.fromOffset(x, 19), Size = UDim2.new(1, -(x + rightPad), 0, 16),
                 TextTruncate = Enum.TextTruncate.AtEnd,
             })
         else
             label(head, {
-                Text = o.Title, Font = F_BOLD, TextSize = 14, Position = UDim2.fromOffset(x, 0), Size = UDim2.new(1, -x, 1, 0),
+                Text = o.Title, Font = F_BOLD, TextSize = 14, Position = UDim2.fromOffset(x, 0), Size = UDim2.new(1, -(x + rightPad), 1, 0),
                 TextTruncate = Enum.TextTruncate.AtEnd,
             })
         end
     end
+    local shell
+    if o.Collapsible and head then
+        shell = new("Frame", {
+            Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, BorderSizePixel = 0, LayoutOrder = 2,
+        }, wrap)
+    end
     local card = new("Frame", {
         Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundColor3 = T.Card, BorderSizePixel = 0, LayoutOrder = 2,
-    }, wrap)
+    }, shell or wrap)
     corner(card, 12)
     stroke(card, T.Line, 1)
     vlist(card, 0)
+
+    if shell then
+        local open = not o.Collapsed
+        local tk = 0
+        local chev = iconLabel(head, "chevron-down", 16, T.Muted, "v", {
+            AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0),
+        })
+        chev.Rotation = open and 0 or -90
+        if not open then
+            shell.AutomaticSize = Enum.AutomaticSize.None
+            shell.Size = UDim2.new(1, 0, 0, 0)
+            shell.ClipsDescendants = true
+        end
+        local hb = new("TextButton", { Text = "", AutoButtonColor = false, BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 5 }, head)
+        hb.Activated:Connect(function()
+            local S = (self.Window.M and self.Window.M.S) or 1
+            local h = card.AbsoluteSize.Y / S
+            tk = tk + 1
+            local my = tk
+            open = not open
+            tween(chev, { Rotation = open and 0 or -90 }, 0.4, Enum.EasingStyle.Quint)
+            shell.ClipsDescendants = true
+            shell.AutomaticSize = Enum.AutomaticSize.None
+            if open then
+                tween(shell, { Size = UDim2.new(1, 0, 0, h) }, 0.42, Enum.EasingStyle.Quint)
+                task.delay(0.45, function()
+                    if tk == my then
+                        shell.AutomaticSize = AY
+                        shell.Size = UDim2.new(1, 0, 0, 0)
+                        shell.ClipsDescendants = false
+                    end
+                end)
+            else
+                shell.Size = UDim2.new(1, 0, 0, h)
+                tween(shell, { Size = UDim2.new(1, 0, 0, 0) }, 0.36, Enum.EasingStyle.Quint)
+            end
+        end)
+    end
     return setmetatable({ Tab = self, Window = self.Window, Card = card, _n = 0, Color = o.Color or self.Color }, Section)
 end
 
@@ -854,17 +1417,29 @@ end
 function Window:SelectTab(name, instant)
     local tab = self.Tabs[name]
     if not tab or self.CurrentTab == tab then return end
+    local prev = self.CurrentTab
     self.CurrentTab = tab
+    local dir = 1
+    if prev then
+        local pi, ni = 0, 0
+        for i, t in ipairs(self.TabList) do
+            if t == prev then pi = i end
+            if t == tab then ni = i end
+        end
+        dir = (ni >= pi) and 1 or -1
+    end
     for _, t in ipairs(self.TabList) do
         local on = (t == tab)
         t.Page.Visible = on
         tween(t.Button, { BackgroundTransparency = on and 0 or 1 }, 0.2)
         tween(t.Label, { TextColor3 = on and T.Text or T.Muted }, 0.2)
+        if t.Ind then tween(t.Ind, { Size = UDim2.fromOffset(3, on and 18 or 0) }, 0.4, Enum.EasingStyle.Quint) end
     end
     self:SetBreadcrumb(tab.Category, tab.Name)
     if not instant then
-        tab.Page.Position = UDim2.fromOffset(0, 14)
-        tween(tab.Page, { Position = UDim2.fromOffset(0, 0) }, 0.4, Enum.EasingStyle.Quint)
+        -- สไลด์เข้าตามทิศที่เปลี่ยนแท็บ (ลง = เลื่อนขึ้นมา, ขึ้น = เลื่อนลงมา)
+        tab.Page.Position = UDim2.fromOffset(0, 22 * dir)
+        tween(tab.Page, { Position = UDim2.fromOffset(0, 0) }, 0.55, Enum.EasingStyle.Quint)
         self._curtain.BackgroundTransparency = 0
         tween(self._curtain, { BackgroundTransparency = 1 }, 0.32, Enum.EasingStyle.Sine)
     end
@@ -892,6 +1467,12 @@ function Window:AddTab(o)
         BorderSizePixel = 0, LayoutOrder = cat.Seq * 1000 + cat.N,
     }, self._tabScroll)
     corner(btn, 11)
+    btn.ClipsDescendants = true
+    local ind = new("Frame", {
+        AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 2, 0.5, 0), Size = UDim2.fromOffset(3, 0),
+        BackgroundColor3 = color, BorderSizePixel = 0, ZIndex = 3,
+    }, btn)
+    corner(ind, 2)
     local tile = new("Frame", {
         Size = UDim2.fromOffset(30, 30), AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 9, 0.5, 0),
         BackgroundColor3 = color, BorderSizePixel = 0,
@@ -906,13 +1487,13 @@ function Window:AddTab(o)
     local page = new("ScrollingFrame", {
         Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
         ScrollBarImageColor3 = T.Muted, ScrollingDirection = Enum.ScrollingDirection.Y, CanvasSize = UDim2.new(),
-        AutomaticCanvasSize = AY, Visible = false,
+        AutomaticCanvasSize = AY, Visible = false, ElasticBehavior = Enum.ElasticBehavior.Always, ScrollBarImageTransparency = 0.35,
     }, self._pages)
     pad(page, 16, 14, 16, 20)
     vlist(page, 16)
 
     local tab = setmetatable({
-        Window = self, Name = o.Name, Category = catName, Page = page, Button = btn, Label = lbl, Color = color, _n = 0,
+        Window = self, Name = o.Name, Category = catName, Page = page, Button = btn, Label = lbl, Color = color, Ind = ind, _n = 0,
     }, Tab)
     self.Tabs[o.Name] = tab
     self.TabList[#self.TabList + 1] = tab
@@ -922,6 +1503,12 @@ function Window:AddTab(o)
     end)
     btn.MouseLeave:Connect(function()
         if self.CurrentTab ~= tab then tween(btn, { BackgroundTransparency = 1 }, 0.2) end
+    end)
+    btn.InputBegan:Connect(function(input)
+        if isPress(input) then
+            local rx, ry = pressRatio(btn, input)
+            ripple(btn, rx, ry, WHITE, 0.88)
+        end
     end)
     btn.Activated:Connect(function() self:SelectTab(o.Name) end)
 
@@ -1084,6 +1671,7 @@ function Window:Notify(a, b, c)
     }, self._toasts)
     local card = new("Frame", {
         Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, Position = UDim2.new(1.2, 0, 0, 0), BackgroundColor3 = T.Card, BorderSizePixel = 0,
+        ClipsDescendants = true,
     }, wrap)
     corner(card, 10)
     stroke(card, color, 1, 0.5)
@@ -1091,6 +1679,10 @@ function Window:Notify(a, b, c)
     new("Frame", {
         Size = UDim2.new(0, 3, 1, 8), Position = UDim2.new(0, -14, 0, -4), BackgroundColor3 = color, BorderSizePixel = 0,
     }, card)
+    local timer = new("Frame", {
+        Size = UDim2.new(1, 32, 0, 2), Position = UDim2.new(0, -20, 0, -10), BackgroundColor3 = color, BackgroundTransparency = 0.3, BorderSizePixel = 0,
+    }, card)
+    tween(timer, { Size = UDim2.new(0, 0, 0, 2) }, dur, Enum.EasingStyle.Linear)
     local inner = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1 }, card)
     vlist(inner, 2)
     if o.Title then
@@ -1100,7 +1692,7 @@ function Window:Notify(a, b, c)
         Text = tostring(o.Text or ""), Font = F_MED, TextSize = 12, TextColor3 = o.Title and T.Muted or T.Text,
         Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, TextWrapped = true, LayoutOrder = 2,
     })
-    tween(card, { Position = UDim2.new(0, 0, 0, 0) }, 0.5, Enum.EasingStyle.Quint)
+    tween(card, { Position = UDim2.new(0, 0, 0, 0) }, 0.55, Enum.EasingStyle.Back)
     -- จำกัดไม่เกิน 4 อัน
     local kids = {}
     for _, k in ipairs(self._toasts:GetChildren()) do
@@ -1115,6 +1707,62 @@ function Window:Notify(a, b, c)
             if wrap.Parent then wrap:Destroy() end
         end
     end)
+end
+
+-- กล่องยืนยัน: win:Dialog({ Title, Text, Buttons = { {Text, Color, Callback}, ... }, Dismissable = true })
+function Window:Dialog(o)
+    if self._destroyed then return end
+    o = o or {}
+    local buttons = o.Buttons or { { Text = "OK" } }
+    local overlay = new("TextButton", {
+        Text = "", AutoButtonColor = false, Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0),
+        BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 400,
+    }, self.Dock)
+    local vp = self.M and self.M.VP or Vector2.new(800, 600)
+    local card = new("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+        Size = UDim2.fromOffset(math.min(330, vp.X - 40), 0), AutomaticSize = AY,
+        BackgroundColor3 = T.Card, BorderSizePixel = 0, Active = true,
+    }, overlay)
+    corner(card, 16)
+    stroke(card, T.Line, 1, 0)
+    pad(card, 18, 18, 18, 16)
+    vlist(card, 10)
+    local dsc = new("UIScale", { Scale = 0.86 }, card)
+    if o.Title then
+        label(card, { Text = o.Title, Font = F_BOLD, TextSize = 16, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, TextWrapped = true, LayoutOrder = 1 })
+    end
+    if o.Text then
+        label(card, {
+            Text = tostring(o.Text), Font = F_MED, TextSize = 13, TextColor3 = T.Muted, Size = UDim2.new(1, 0, 0, 0),
+            AutomaticSize = AY, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, LayoutOrder = 2,
+        })
+    end
+    local row = new("Frame", { Size = UDim2.new(1, 0, 0, 40), BackgroundTransparency = 1, LayoutOrder = 3 }, card)
+    new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, row)
+    local closed = false
+    local function close()
+        if closed then return end
+        closed = true
+        tween(overlay, { BackgroundTransparency = 1 }, 0.2, Enum.EasingStyle.Sine)
+        tween(dsc, { Scale = 0.9 }, 0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+        task.delay(0.25, function() overlay:Destroy() end)
+    end
+    local n = #buttons
+    for i, b in ipairs(buttons) do
+        makeButton(row, {
+            Text = b.Text or "OK", Icon = b.Icon, Color = b.Color or ((i == n) and T.Accent or T.Elem),
+            Size = UDim2.new(1 / n, -(8 * (n - 1)) / n, 1, 0), LayoutOrder = i,
+            Callback = function()
+                close()
+                safe(b.Callback)
+            end,
+        })
+    end
+    if o.Dismissable then overlay.Activated:Connect(close) end
+    tween(overlay, { BackgroundTransparency = 0.5 }, 0.25, Enum.EasingStyle.Sine)
+    tween(dsc, { Scale = 1 }, 0.5, Enum.EasingStyle.Back)
+    return { Close = close }
 end
 
 function Window:Destroy(instant)
@@ -1378,7 +2026,7 @@ function UI:CreateWindow(opts)
     local GLOW = Color3.fromRGB(226, 196, 255)
     self._coverStroke = stroke(self._cover, Color3.fromRGB(190, 140, 255), 2.5, 1)
     local function setSweep(p)
-        local N, w = 13, 0.6
+        local N, w = 10, 0.6
         local cols, trs = {}, {}
         for i = 0, N - 1 do
             local t = i / (N - 1)
@@ -1420,12 +2068,16 @@ function UI:CreateWindow(opts)
     }, toasts)
     self._toasts = toasts
 
-    -- ---------- drag: หน้าต่าง ----------
+    -- ---------- drag: หน้าต่าง (นุ่มด้วย lerp ตามเฟรม ไม่กระตุกตามอัตราส่งอินพุต) ----------
     local sx, sy = 0, 0
-    self:_drag(top, {
+    local curX, curY, tgtX, tgtY = 0, 0, 0, 0
+    local dragOn = false
+    local winDrag = {
         Start = function()
             if self._winTween then self._winTween:Cancel() end
             sx, sy = self.OX, self.OY
+            curX, curY, tgtX, tgtY = sx, sy, sx, sy
+            dragOn = true
         end,
         Move = function(dx, dy)
             if self.State ~= "open" then return end
@@ -1433,27 +2085,27 @@ function UI:CreateWindow(opts)
             local maxX = m.VP.X / 2 + m.W / 2 - 90
             local minY = -(m.VP.Y / 2 - m.H / 2)
             local maxY = m.VP.Y / 2 - 50
-            self.OX = math.floor(clamp(sx + dx, -maxX, maxX) + 0.5)
-            self.OY = math.floor(clamp(sy + dy, minY, maxY) + 0.5)
-            win.Position = UDim2.new(0.5, self.OX, 0.5, self.OY)
+            tgtX = clamp(sx + dx, -maxX, maxX)
+            tgtY = clamp(sy + dy, minY, maxY)
         end,
-    })
-    self:_drag(head, {
-        Start = function()
-            if self._winTween then self._winTween:Cancel() end
-            sx, sy = self.OX, self.OY
+        End = function(moved)
+            dragOn = false
+            if moved and self.State == "open" then
+                self.OX, self.OY = math.floor(tgtX + 0.5), math.floor(tgtY + 0.5)
+                self:_tweenWin({ Position = UDim2.new(0.5, self.OX, 0.5, self.OY) }, 0.22, Enum.EasingStyle.Quint)
+            end
         end,
-        Move = function(dx, dy)
-            if self.State ~= "open" then return end
-            local m = self.M
-            local maxX = m.VP.X / 2 + m.W / 2 - 90
-            local minY = -(m.VP.Y / 2 - m.H / 2)
-            local maxY = m.VP.Y / 2 - 50
-            self.OX = math.floor(clamp(sx + dx, -maxX, maxX) + 0.5)
-            self.OY = math.floor(clamp(sy + dy, minY, maxY) + 0.5)
-            win.Position = UDim2.new(0.5, self.OX, 0.5, self.OY)
-        end,
-    })
+    }
+    self:_conn(RunService.RenderStepped:Connect(function(dt)
+        if not dragOn or self.State ~= "open" then return end
+        local k = 1 - math.exp(-dt * 26)
+        curX = curX + (tgtX - curX) * k
+        curY = curY + (tgtY - curY) * k
+        self.OX, self.OY = math.floor(curX + 0.5), math.floor(curY + 0.5)
+        win.Position = UDim2.new(0.5, self.OX, 0.5, self.OY)
+    end))
+    self:_drag(top, winDrag)
+    self:_drag(head, winDrag)
 
     -- ---------- drag + แตะ: วงกลม ----------
     local cx, cy = 0, 0
@@ -1501,7 +2153,7 @@ function UI:CreateWindow(opts)
     self:Relayout(false)
     local m = self.M
     win.Size = UDim2.fromOffset(m.W * 0.9, m.H * 0.9)
-    self:_tweenWin({ Size = UDim2.fromOffset(m.W, m.H) }, 0.7, Enum.EasingStyle.Quint)
+    self:_tweenWin({ Size = UDim2.fromOffset(m.W, m.H) }, 0.6, Enum.EasingStyle.Back)
     tween(self._veil, { BackgroundTransparency = 1 }, 0.4, Enum.EasingStyle.Sine)
     task.delay(0.45, function() if self._veil then self._veil.Visible = false end end)
     self.State = "open"
