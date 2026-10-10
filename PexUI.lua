@@ -962,19 +962,36 @@ function Window:_drag(handle, cbs)
 end
 
 -- ---------------- state: open / bubble ----------------
+-- ทิศจากกลางหน้าต่างไปหาปุ่มวงกลม (องศา) ใช้เป็นทิศการไล่สี
+function Window:_aimGradient(bubbleCenter, winCenter)
+    local d = bubbleCenter - winCenter
+    local ang = 0
+    if d.Magnitude > 1 then ang = math.deg(math.atan2(d.Y, d.X)) end
+    self._grad.Rotation = ang
+end
+
+function Window:_bubbleCenterPx()
+    local vp = self.M.VP
+    local R = self.BubbleSize / 2
+    local margin = 10
+    local x = (self.BubbleSide == "left") and (margin + R) or (vp.X - margin - R)
+    local y = clamp(self.BubbleY * vp.Y, R + margin, vp.Y - R - margin)
+    return Vector2.new(x, y)
+end
+
 function Window:Minimize()
     if self.State ~= "open" or self._destroyed then return end
     self.State = "bubble"
     local B = self.BubbleSize
+    local vp = self.M.VP
     self._holder.Visible = true
     self._hit.Visible = true
-    -- 1) คลุมหน้าต่างด้วยสีม่วงก่อน (หน้าต่างยังขนาดเต็ม) 2) ซ่อนเนื้อหา 3) ค่อยหดเป็นวงกลม
-    -- เนื้อหาจึงไม่ล้นขอบมนตอนหด
-    tween(self._cover, { BackgroundTransparency = 0 }, 0.22, Enum.EasingStyle.Sine)
-    tween(self._edgeStroke, { Transparency = 1 }, 0.22)
+    -- สีม่วงกวาดทับเมนูไปทางปุ่ม (ขอบกวาดจางใส เห็นเมนูทีละน้อย) แล้วค่อยหดเป็นวงกลม
+    self:_aimGradient(self:_bubbleCenterPx(), Vector2.new(vp.X / 2 + self.OX, vp.Y / 2 + self.OY))
     self._sweep.Value = 0
-    tween(self._sweep, { Value = 1 }, 0.85, Enum.EasingStyle.Quad)
-    task.delay(0.23, function()
+    tween(self._sweep, { Value = 1 }, 0.55, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+    tween(self._edgeStroke, { Transparency = 1 }, 0.4)
+    task.delay(0.58, function()
         if self.State ~= "bubble" or self._destroyed then return end
         self.Canvas.Visible = false
         self.Win.BackgroundColor3 = T.Accent
@@ -989,21 +1006,23 @@ function Window:Restore()
     if self.State ~= "bubble" or self._destroyed then return end
     self.State = "open"
     local m = self.M
+    local ap, as, dp = self.Win.AbsolutePosition, self.Win.AbsoluteSize, self.Dock.AbsolutePosition
+    local bubbleC = Vector2.new(ap.X + as.X / 2 - dp.X, ap.Y + as.Y / 2 - dp.Y)
     self._hit.Visible = false
-    -- ขยายเป็นกล่องสีม่วงก่อน แล้วค่อยเผยเนื้อหาเมื่อขนาดใกล้เต็ม (ไม่มีอะไรล้นขอบ)
+    self:_aimGradient(bubbleC, Vector2.new(m.VP.X / 2 + self.OX, m.VP.Y / 2 + self.OY))
+    self._sweep.Value = 1
+    -- ขยายเป็นกล่องสีม่วงก่อน แล้วสีม่วงถอยกลับไปทางปุ่ม เผยเมนูทีละน้อย
     self:_tweenWin({ Size = UDim2.fromOffset(m.W, m.H), Position = UDim2.new(0.5, self.OX, 0.5, self.OY) }, 0.5, Enum.EasingStyle.Quint)
     tween(self._corner, { CornerRadius = UDim.new(0, 14) }, 0.5, Enum.EasingStyle.Quint)
     tween(self._coverCorner, { CornerRadius = UDim.new(0, 14) }, 0.5, Enum.EasingStyle.Quint)
-    tween(self._bubbleIcon, { ImageTransparency = 1 }, 0.15)
-    self._sweep.Value = 1
-    tween(self._sweep, { Value = 0 }, 0.7, Enum.EasingStyle.Quad)
+    tween(self._bubbleIcon, { ImageTransparency = 1 }, 0.2)
     task.delay(0.42, function()
         if self.State ~= "open" or self._destroyed then return end
         self.Canvas.Visible = true
         self.Win.BackgroundColor3 = T.Bg
-        tween(self._cover, { BackgroundTransparency = 1 }, 0.35, Enum.EasingStyle.Sine)
-        tween(self._edgeStroke, { Transparency = 0 }, 0.35)
         self._holder.Visible = false
+        tween(self._sweep, { Value = 0 }, 0.65, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+        tween(self._edgeStroke, { Transparency = 0 }, 0.5)
     end)
 end
 
@@ -1310,30 +1329,33 @@ function UI:CreateWindow(opts)
 
     -- ---------- layer สำหรับโหมดวงกลม ----------
     self._cover = new("Frame", {
-        Name = "Cover", Size = UDim2.fromScale(1, 1), BackgroundColor3 = WHITE, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 50,
+        Name = "Cover", Size = UDim2.fromScale(1, 1), BackgroundColor3 = WHITE, BackgroundTransparency = 0, BorderSizePixel = 0, ZIndex = 50,
     }, win)
     self._coverCorner = corner(self._cover, 14)
-    -- ไล่สีแบบกวาด: ค่อยๆ เปลี่ยนจากดำ -> ม่วงไล่เฉด (ม่วงสว่าง -> น้ำเงินม่วง -> ม่วงเข้ม)
-    -- p = 0 ดำล้วน, p = 1 ม่วงเต็ม (หน้ากวาดเคลื่อนไปตามแนวทแยง)
-    self._grad = new("UIGradient", { Rotation = 45 }, self._cover)
+    -- ไล่สีแบบกวาดไปทางตำแหน่งปุ่มวงกลม
+    -- t = 0 ฝั่งไกลปุ่ม, t = 1 ฝั่งปุ่ม | หน้ากวาดเคลื่อนจากไกล -> ปุ่ม
+    -- หลังหน้ากวาด = ม่วงทึบ, ตรงขอบหน้ากวาด = ม่วงเข้ม/ดำที่ค่อยๆ จางใส (เห็นเมนูด้านในทีละน้อย)
+    self._grad = new("UIGradient", { Rotation = 0 }, self._cover)
     local PAL = {
-        Color3.fromRGB(176, 104, 255), Color3.fromRGB(98, 80, 232), Color3.fromRGB(34, 20, 84),
+        Color3.fromRGB(176, 104, 255), Color3.fromRGB(104, 84, 238), Color3.fromRGB(44, 26, 104),
     }
     local function palette(t)
         if t < 0.5 then return PAL[1]:Lerp(PAL[2], t / 0.5) end
         return PAL[2]:Lerp(PAL[3], (t - 0.5) / 0.5)
     end
-    local BLACK = Color3.fromRGB(4, 3, 10)
+    local BLACK = Color3.fromRGB(6, 4, 14)
     local function setSweep(p)
-        local N, w = 9, 0.55
-        local pts = {}
+        local N, w = 11, 0.6
+        local cols, trs = {}, {}
         for i = 0, N - 1 do
             local t = i / (N - 1)
             local q = clamp((p * (1 + w) - t) / w, 0, 1)
             q = q * q * (3 - 2 * q) -- smoothstep
-            pts[#pts + 1] = ColorSequenceKeypoint.new(t, BLACK:Lerp(palette(t), q))
+            cols[#cols + 1] = ColorSequenceKeypoint.new(t, BLACK:Lerp(palette(t), q))
+            trs[#trs + 1] = NumberSequenceKeypoint.new(t, 1 - q)
         end
-        self._grad.Color = ColorSequence.new(pts)
+        self._grad.Color = ColorSequence.new(cols)
+        self._grad.Transparency = NumberSequence.new(trs)
     end
     self._sweep = new("NumberValue", { Value = 0 }, self._cover)
     self._sweep.Changed:Connect(setSweep)
