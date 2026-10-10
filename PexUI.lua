@@ -1005,7 +1005,8 @@ function Window:Minimize()
     self:_aimGradient(self:_bubbleCenterPx(), Vector2.new(vp.X / 2 + self.OX, vp.Y / 2 + self.OY))
     self._sweep.Value = 0
     tween(self._sweep, { Value = 1 }, 0.3, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-    tween(self._edgeStroke, { Transparency = 1 }, 0.2)
+    self._edgeStroke.Transparency = 1
+    tween(self._edgeCorner, { CornerRadius = UDim.new(0, B / 2 - 1) }, 0.45, Enum.EasingStyle.Quint)
     self.Win.BackgroundColor3 = T.Accent
     self:_tweenWin({ Size = UDim2.fromOffset(B, B), Position = self:_bubblePos() }, 0.45, Enum.EasingStyle.Quint)
     tween(self._corner, { CornerRadius = UDim.new(0, B / 2) }, 0.45, Enum.EasingStyle.Quint)
@@ -1029,7 +1030,9 @@ function Window:Restore()
     self._sweep.Value = 1
     self:_clipOn()
     self.Canvas.Visible = true
-    self.Win.BackgroundColor3 = T.Bg
+    task.delay(0.2, function()
+        if self.State == "open" and not self._destroyed then self.Win.BackgroundColor3 = T.Bg end
+    end)
     self:_tweenWin({ Size = UDim2.fromOffset(m.W, m.H), Position = UDim2.new(0.5, self.OX, 0.5, self.OY) }, 0.45, Enum.EasingStyle.Quint)
     tween(self._corner, { CornerRadius = UDim.new(0, 14) }, 0.45, Enum.EasingStyle.Quint)
     tween(self._coverCorner, { CornerRadius = UDim.new(0, 14) }, 0.45, Enum.EasingStyle.Quint)
@@ -1037,7 +1040,11 @@ function Window:Restore()
     self:_clipOff(0.55)
     tween(self._bubbleIcon, { ImageTransparency = 1 }, 0.15)
     tween(self._sweep, { Value = 0 }, 0.4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-    tween(self._edgeStroke, { Transparency = 0 }, 0.4)
+    self._edgeStroke.Transparency = 1
+    tween(self._edgeCorner, { CornerRadius = UDim.new(0, 13) }, 0.45, Enum.EasingStyle.Quint)
+    task.delay(0.5, function()
+        if self.State == "open" and not self._destroyed then tween(self._edgeStroke, { Transparency = 0 }, 0.25) end
+    end)
     task.delay(0.2, function()
         if self.State == "open" and not self._destroyed then self._holder.Visible = false end
     end)
@@ -1394,7 +1401,7 @@ function UI:CreateWindow(opts)
     local edge = new("Frame", {
         Name = "Edge", Size = UDim2.new(1, -2, 1, -2), Position = UDim2.fromOffset(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 52,
     }, win)
-    corner(edge, 13)
+    self._edgeCorner = corner(edge, 13)
     self._edgeStroke = stroke(edge, T.Line, 1.5, 0)
     self._holder = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Visible = false, ZIndex = 55 }, win)
     self._bubbleIcon = iconLabel(self._holder, opts.Icon or "zap", 28, WHITE, nil, CENTER)
