@@ -26,7 +26,7 @@ local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 
 local UI = {}
-UI.Version = "1.1.0"
+UI.Version = "1.2.0"
 -- แหล่งไอคอน Lucide (spritesheet asset id) ถ้าโหลดไม่ได้ ไอคอนจะเป็นจุดแทน ไม่ทำให้ UI พัง
 UI.LucideURL = "https://github.com/latte-soft/lucide-roblox/releases/latest/download/lucide-roblox.luau"
 UI.LucideMirrors = {
@@ -34,7 +34,7 @@ UI.LucideMirrors = {
     "https://raw.githubusercontent.com/latte-soft/lucide-roblox/main/lucide-roblox.luau",
 }
 UI.CustomIcons = {}
-UI.UiScale = 1 -- ค่า != 1 จะทำให้ตัวอักษรในหน้าต่างเบลอ (CanvasGroup) แนะนำให้คงไว้ที่ 1
+UI.UiScale = 1 -- ขนาดตัวหน้าต่าง (1 = ขนาดจริง คมที่สุด)
 UI.ForceMobile = nil -- true/false = บังคับโหมดมือถือ/คอม, nil = ตรวจเอง
 
 UI.Theme = {
@@ -970,6 +970,7 @@ function Window:Minimize()
     self._hit.Visible = true
     self:_tweenWin({ Size = UDim2.fromOffset(B, B), Position = self:_bubblePos() }, 0.6, Enum.EasingStyle.Quint)
     tween(self._corner, { CornerRadius = UDim.new(0, B / 2) }, 0.6, Enum.EasingStyle.Quint)
+    tween(self._coverCorner, { CornerRadius = UDim.new(0, B / 2) }, 0.6, Enum.EasingStyle.Quint)
     tween(self._edgeStroke, { Transparency = 1 }, 0.25)
     tween(self._cover, { BackgroundTransparency = 0 }, 0.32, Enum.EasingStyle.Sine)
     task.delay(0.15, function()
@@ -988,6 +989,7 @@ function Window:Restore()
     self._hit.Visible = false
     self:_tweenWin({ Size = UDim2.fromOffset(m.W, m.H), Position = UDim2.new(0.5, self.OX, 0.5, self.OY) }, 0.65, Enum.EasingStyle.Quint)
     tween(self._corner, { CornerRadius = UDim.new(0, 14) }, 0.55, Enum.EasingStyle.Quint)
+    tween(self._coverCorner, { CornerRadius = UDim.new(0, 14) }, 0.55, Enum.EasingStyle.Quint)
     tween(self._bubbleIcon, { ImageTransparency = 1 }, 0.15)
     task.delay(0.12, function()
         if self._destroyed then return end
@@ -1078,7 +1080,8 @@ function Window:Destroy(instant)
     end
     pcall(function()
         if self._winTween then self._winTween:Cancel() end
-        tween(self.Win, { GroupTransparency = 1 }, 0.3, Enum.EasingStyle.Sine)
+        self._veil.Visible = true
+        tween(self._veil, { BackgroundTransparency = 0 }, 0.3, Enum.EasingStyle.Sine)
         if self.State ~= "bubble" then
             tween(self.Win, { Size = UDim2.fromOffset(self.M.W * 0.9, self.M.H * 0.9) }, 0.3, Enum.EasingStyle.Quint)
         end
@@ -1142,13 +1145,15 @@ function UI:CreateWindow(opts)
     local dock = new("Frame", { Name = "Dock", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0 }, gui)
     self.Dock = dock
 
-    -- หน้าต่าง (CanvasGroup = ตัดขอบมนได้ตอนย่อเป็นวงกลม + เฟดได้)
-    local win = new("CanvasGroup", {
+    -- หน้าต่าง (Frame ธรรมดา ไม่ใช้ CanvasGroup เพื่อให้ตัวอักษรคมชัด 100%)
+    local win = new("Frame", {
         Name = "Window", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(600, 380),
-        BackgroundColor3 = T.Bg, BorderSizePixel = 0, GroupTransparency = 1,
+        BackgroundColor3 = T.Bg, BorderSizePixel = 0, ClipsDescendants = true,
     }, dock)
     self.Win = win
     self._corner = corner(win, 14)
+    self._veil = new("Frame", { Name = "Veil", Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Bg, BorderSizePixel = 0, ZIndex = 300 }, win)
+    corner(self._veil, 14)
 
     local canvas = new("Frame", {
         Name = "Canvas", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(860, 500),
@@ -1160,6 +1165,8 @@ function UI:CreateWindow(opts)
     -- ---------- Sidebar ----------
     local sidebar = new("Frame", { Name = "Sidebar", Size = UDim2.new(0, SW_EXP, 1, 0), BackgroundColor3 = T.Side, BorderSizePixel = 0, ZIndex = 2 }, canvas)
     self._sidebar = sidebar
+    corner(sidebar, 14)
+    new("Frame", { Size = UDim2.new(0, 24, 1, 0), Position = UDim2.new(1, -24, 0, 0), BackgroundColor3 = T.Side, BorderSizePixel = 0 }, sidebar)
     new("Frame", { Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new(1, -1, 0, 0), BackgroundColor3 = T.Line, BorderSizePixel = 0 }, sidebar)
 
     local head = new("Frame", { Size = UDim2.new(1, 0, 0, 68), BackgroundTransparency = 1, Active = true }, sidebar)
@@ -1217,8 +1224,13 @@ function UI:CreateWindow(opts)
         BorderSizePixel = 0, ClipsDescendants = true,
     }, canvas)
     self._main = main
+    corner(main, 14)
+    new("Frame", { Size = UDim2.new(0, 24, 1, 0), BackgroundColor3 = T.Bg, BorderSizePixel = 0 }, main)
 
     local top = new("Frame", { Name = "Top", Size = UDim2.new(1, 0, 0, TOP_H), BackgroundColor3 = T.Top, BorderSizePixel = 0, ZIndex = 3, Active = true }, main)
+    corner(top, 14)
+    new("Frame", { Size = UDim2.new(0, 24, 1, 0), BackgroundColor3 = T.Top, BorderSizePixel = 0 }, top)
+    new("Frame", { Size = UDim2.new(1, 0, 0, 24), Position = UDim2.new(0, 0, 1, -24), BackgroundColor3 = T.Top, BorderSizePixel = 0 }, top)
     new("Frame", { Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.Line, BorderSizePixel = 0 }, top)
 
     local tog = new("TextButton", {
@@ -1294,6 +1306,7 @@ function UI:CreateWindow(opts)
     self._cover = new("Frame", {
         Name = "Cover", Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Accent, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 50,
     }, win)
+    self._coverCorner = corner(self._cover, 14)
     local edge = new("Frame", {
         Name = "Edge", Size = UDim2.new(1, -2, 1, -2), Position = UDim2.fromOffset(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 52,
     }, win)
@@ -1398,7 +1411,8 @@ function UI:CreateWindow(opts)
     local m = self.M
     win.Size = UDim2.fromOffset(m.W * 0.9, m.H * 0.9)
     self:_tweenWin({ Size = UDim2.fromOffset(m.W, m.H) }, 0.7, Enum.EasingStyle.Quint)
-    tween(win, { GroupTransparency = 0 }, 0.4, Enum.EasingStyle.Sine)
+    tween(self._veil, { BackgroundTransparency = 1 }, 0.4, Enum.EasingStyle.Sine)
+    task.delay(0.45, function() if self._veil then self._veil.Visible = false end end)
     self.State = "open"
     return self
 end
