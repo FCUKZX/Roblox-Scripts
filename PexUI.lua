@@ -972,7 +972,8 @@ function Window:Minimize()
     -- เนื้อหาจึงไม่ล้นขอบมนตอนหด
     tween(self._cover, { BackgroundTransparency = 0 }, 0.22, Enum.EasingStyle.Sine)
     tween(self._edgeStroke, { Transparency = 1 }, 0.22)
-    tween(self._grad, { Rotation = 150 }, 0.8, Enum.EasingStyle.Quint)
+    self._sweep.Value = 0
+    tween(self._sweep, { Value = 1 }, 0.85, Enum.EasingStyle.Quad)
     task.delay(0.23, function()
         if self.State ~= "bubble" or self._destroyed then return end
         self.Canvas.Visible = false
@@ -994,7 +995,8 @@ function Window:Restore()
     tween(self._corner, { CornerRadius = UDim.new(0, 14) }, 0.5, Enum.EasingStyle.Quint)
     tween(self._coverCorner, { CornerRadius = UDim.new(0, 14) }, 0.5, Enum.EasingStyle.Quint)
     tween(self._bubbleIcon, { ImageTransparency = 1 }, 0.15)
-    tween(self._grad, { Rotation = 30 }, 0.7, Enum.EasingStyle.Quint)
+    self._sweep.Value = 1
+    tween(self._sweep, { Value = 0 }, 0.7, Enum.EasingStyle.Quad)
     task.delay(0.42, function()
         if self.State ~= "open" or self._destroyed then return end
         self.Canvas.Visible = true
@@ -1311,15 +1313,31 @@ function UI:CreateWindow(opts)
         Name = "Cover", Size = UDim2.fromScale(1, 1), BackgroundColor3 = WHITE, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 50,
     }, win)
     self._coverCorner = corner(self._cover, 14)
-    -- ไล่สี ม่วง -> น้ำเงินม่วง -> ดำ (เหมือน UI มือถือ) ขยับหมุนตอนย่อ/ขยาย
-    self._grad = new("UIGradient", {
-        Color = ColorSequence.new({
-            ColorSequenceKeypoint.new(0, Color3.fromRGB(168, 96, 255)),
-            ColorSequenceKeypoint.new(0.5, Color3.fromRGB(98, 80, 232)),
-            ColorSequenceKeypoint.new(1, Color3.fromRGB(8, 6, 18)),
-        }),
-        Rotation = 30,
-    }, self._cover)
+    -- ไล่สีแบบกวาด: ค่อยๆ เปลี่ยนจากดำ -> ม่วงไล่เฉด (ม่วงสว่าง -> น้ำเงินม่วง -> ม่วงเข้ม)
+    -- p = 0 ดำล้วน, p = 1 ม่วงเต็ม (หน้ากวาดเคลื่อนไปตามแนวทแยง)
+    self._grad = new("UIGradient", { Rotation = 45 }, self._cover)
+    local PAL = {
+        Color3.fromRGB(176, 104, 255), Color3.fromRGB(98, 80, 232), Color3.fromRGB(34, 20, 84),
+    }
+    local function palette(t)
+        if t < 0.5 then return PAL[1]:Lerp(PAL[2], t / 0.5) end
+        return PAL[2]:Lerp(PAL[3], (t - 0.5) / 0.5)
+    end
+    local BLACK = Color3.fromRGB(4, 3, 10)
+    local function setSweep(p)
+        local N, w = 9, 0.55
+        local pts = {}
+        for i = 0, N - 1 do
+            local t = i / (N - 1)
+            local q = clamp((p * (1 + w) - t) / w, 0, 1)
+            q = q * q * (3 - 2 * q) -- smoothstep
+            pts[#pts + 1] = ColorSequenceKeypoint.new(t, BLACK:Lerp(palette(t), q))
+        end
+        self._grad.Color = ColorSequence.new(pts)
+    end
+    self._sweep = new("NumberValue", { Value = 0 }, self._cover)
+    self._sweep.Changed:Connect(setSweep)
+    setSweep(0)
     local edge = new("Frame", {
         Name = "Edge", Size = UDim2.new(1, -2, 1, -2), Position = UDim2.fromOffset(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 52,
     }, win)
