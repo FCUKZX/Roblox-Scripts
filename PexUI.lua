@@ -968,16 +968,19 @@ function Window:Minimize()
     local B = self.BubbleSize
     self._holder.Visible = true
     self._hit.Visible = true
-    self:_tweenWin({ Size = UDim2.fromOffset(B, B), Position = self:_bubblePos() }, 0.6, Enum.EasingStyle.Quint)
-    tween(self._corner, { CornerRadius = UDim.new(0, B / 2) }, 0.6, Enum.EasingStyle.Quint)
-    tween(self._coverCorner, { CornerRadius = UDim.new(0, B / 2) }, 0.6, Enum.EasingStyle.Quint)
-    tween(self._edgeStroke, { Transparency = 1 }, 0.25)
-    tween(self._cover, { BackgroundTransparency = 0 }, 0.32, Enum.EasingStyle.Sine)
-    task.delay(0.15, function()
-        if self.State == "bubble" and not self._destroyed then tween(self._bubbleIcon, { ImageTransparency = 0 }, 0.3) end
-    end)
-    task.delay(0.65, function()
-        if self.State == "bubble" and not self._destroyed then self.Canvas.Visible = false end
+    -- 1) คลุมหน้าต่างด้วยสีม่วงก่อน (หน้าต่างยังขนาดเต็ม) 2) ซ่อนเนื้อหา 3) ค่อยหดเป็นวงกลม
+    -- เนื้อหาจึงไม่ล้นขอบมนตอนหด
+    tween(self._cover, { BackgroundTransparency = 0 }, 0.22, Enum.EasingStyle.Sine)
+    tween(self._edgeStroke, { Transparency = 1 }, 0.22)
+    tween(self._grad, { Rotation = 150 }, 0.8, Enum.EasingStyle.Quint)
+    task.delay(0.23, function()
+        if self.State ~= "bubble" or self._destroyed then return end
+        self.Canvas.Visible = false
+        self.Win.BackgroundColor3 = T.Accent
+        self:_tweenWin({ Size = UDim2.fromOffset(B, B), Position = self:_bubblePos() }, 0.5, Enum.EasingStyle.Quint)
+        tween(self._corner, { CornerRadius = UDim.new(0, B / 2) }, 0.5, Enum.EasingStyle.Quint)
+        tween(self._coverCorner, { CornerRadius = UDim.new(0, B / 2) }, 0.5, Enum.EasingStyle.Quint)
+        tween(self._bubbleIcon, { ImageTransparency = 0 }, 0.3)
     end)
 end
 
@@ -985,19 +988,20 @@ function Window:Restore()
     if self.State ~= "bubble" or self._destroyed then return end
     self.State = "open"
     local m = self.M
-    self.Canvas.Visible = true
     self._hit.Visible = false
-    self:_tweenWin({ Size = UDim2.fromOffset(m.W, m.H), Position = UDim2.new(0.5, self.OX, 0.5, self.OY) }, 0.65, Enum.EasingStyle.Quint)
-    tween(self._corner, { CornerRadius = UDim.new(0, 14) }, 0.55, Enum.EasingStyle.Quint)
-    tween(self._coverCorner, { CornerRadius = UDim.new(0, 14) }, 0.55, Enum.EasingStyle.Quint)
+    -- ขยายเป็นกล่องสีม่วงก่อน แล้วค่อยเผยเนื้อหาเมื่อขนาดใกล้เต็ม (ไม่มีอะไรล้นขอบ)
+    self:_tweenWin({ Size = UDim2.fromOffset(m.W, m.H), Position = UDim2.new(0.5, self.OX, 0.5, self.OY) }, 0.5, Enum.EasingStyle.Quint)
+    tween(self._corner, { CornerRadius = UDim.new(0, 14) }, 0.5, Enum.EasingStyle.Quint)
+    tween(self._coverCorner, { CornerRadius = UDim.new(0, 14) }, 0.5, Enum.EasingStyle.Quint)
     tween(self._bubbleIcon, { ImageTransparency = 1 }, 0.15)
-    task.delay(0.12, function()
-        if self._destroyed then return end
-        tween(self._cover, { BackgroundTransparency = 1 }, 0.45, Enum.EasingStyle.Sine)
-        tween(self._edgeStroke, { Transparency = 0 }, 0.45)
-    end)
-    task.delay(0.25, function()
-        if self.State == "open" and not self._destroyed then self._holder.Visible = false end
+    tween(self._grad, { Rotation = 30 }, 0.7, Enum.EasingStyle.Quint)
+    task.delay(0.42, function()
+        if self.State ~= "open" or self._destroyed then return end
+        self.Canvas.Visible = true
+        self.Win.BackgroundColor3 = T.Bg
+        tween(self._cover, { BackgroundTransparency = 1 }, 0.35, Enum.EasingStyle.Sine)
+        tween(self._edgeStroke, { Transparency = 0 }, 0.35)
+        self._holder.Visible = false
     end)
 end
 
@@ -1304,9 +1308,18 @@ function UI:CreateWindow(opts)
 
     -- ---------- layer สำหรับโหมดวงกลม ----------
     self._cover = new("Frame", {
-        Name = "Cover", Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Accent, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 50,
+        Name = "Cover", Size = UDim2.fromScale(1, 1), BackgroundColor3 = WHITE, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 50,
     }, win)
     self._coverCorner = corner(self._cover, 14)
+    -- ไล่สี ม่วง -> น้ำเงินม่วง -> ดำ (เหมือน UI มือถือ) ขยับหมุนตอนย่อ/ขยาย
+    self._grad = new("UIGradient", {
+        Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(168, 96, 255)),
+            ColorSequenceKeypoint.new(0.5, Color3.fromRGB(98, 80, 232)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(8, 6, 18)),
+        }),
+        Rotation = 30,
+    }, self._cover)
     local edge = new("Frame", {
         Name = "Edge", Size = UDim2.new(1, -2, 1, -2), Position = UDim2.fromOffset(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 52,
     }, win)
@@ -1371,7 +1384,7 @@ function UI:CreateWindow(opts)
             if self._winTween then self._winTween:Cancel() end
             local ap, as, dp = win.AbsolutePosition, win.AbsoluteSize, dock.AbsolutePosition
             cx, cy = ap.X + as.X / 2 - dp.X, ap.Y + as.Y / 2 - dp.Y
-            tween(self._cover, { BackgroundColor3 = T.Accent:Lerp(WHITE, 0.15) }, 0.1)
+            tween(self._cover, { BackgroundColor3 = Color3.fromRGB(205, 205, 220) }, 0.1)
         end,
         Move = function(dx, dy)
             local vp = self.M.VP
@@ -1379,7 +1392,7 @@ function UI:CreateWindow(opts)
             win.Position = UDim2.fromOffset(clamp(cx + dx, R, vp.X - R), clamp(cy + dy, R, vp.Y - R))
         end,
         End = function(moved)
-            tween(self._cover, { BackgroundColor3 = T.Accent }, 0.2)
+            tween(self._cover, { BackgroundColor3 = WHITE }, 0.2)
             if not moved then
                 self:Restore()
                 return
