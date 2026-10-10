@@ -979,6 +979,20 @@ function Window:_bubbleCenterPx()
     return Vector2.new(x, y)
 end
 
+function Window:_clipOn()
+    self._clipToken = (self._clipToken or 0) + 1
+    self.Canvas.Parent = self._clip
+end
+
+-- คืนเมนูกลับมาอยู่นอกตัวตัด (หลังหน้าต่างขยายเสร็จ)
+function Window:_clipOff(delay)
+    local token = self._clipToken
+    task.delay(delay, function()
+        if self._destroyed or self._clipToken ~= token or self.State ~= "open" then return end
+        self.Canvas.Parent = self.Win
+    end)
+end
+
 function Window:Minimize()
     if self.State ~= "open" or self._destroyed then return end
     self.State = "bubble"
@@ -986,19 +1000,20 @@ function Window:Minimize()
     local vp = self.M.VP
     self._holder.Visible = true
     self._hit.Visible = true
-    -- สีม่วงกวาดทับเมนูไปทางปุ่ม (ขอบกวาดจางใส เห็นเมนูทีละน้อย) แล้วค่อยหดเป็นวงกลม
+    self:_clipOn()
+    -- ทุกอย่างเริ่มพร้อมกันทันที: แสงม่วงกวาดไปทางปุ่ม + หน้าต่างหดเข้าหาปุ่ม
     self:_aimGradient(self:_bubbleCenterPx(), Vector2.new(vp.X / 2 + self.OX, vp.Y / 2 + self.OY))
     self._sweep.Value = 0
-    tween(self._sweep, { Value = 1 }, 0.55, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-    tween(self._edgeStroke, { Transparency = 1 }, 0.4)
-    task.delay(0.58, function()
-        if self.State ~= "bubble" or self._destroyed then return end
-        self.Canvas.Visible = false
-        self.Win.BackgroundColor3 = T.Accent
-        self:_tweenWin({ Size = UDim2.fromOffset(B, B), Position = self:_bubblePos() }, 0.5, Enum.EasingStyle.Quint)
-        tween(self._corner, { CornerRadius = UDim.new(0, B / 2) }, 0.5, Enum.EasingStyle.Quint)
-        tween(self._coverCorner, { CornerRadius = UDim.new(0, B / 2) }, 0.5, Enum.EasingStyle.Quint)
-        tween(self._bubbleIcon, { ImageTransparency = 0 }, 0.3)
+    tween(self._sweep, { Value = 1 }, 0.3, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+    tween(self._edgeStroke, { Transparency = 1 }, 0.2)
+    self.Win.BackgroundColor3 = T.Accent
+    self:_tweenWin({ Size = UDim2.fromOffset(B, B), Position = self:_bubblePos() }, 0.45, Enum.EasingStyle.Quint)
+    tween(self._corner, { CornerRadius = UDim.new(0, B / 2) }, 0.45, Enum.EasingStyle.Quint)
+    tween(self._coverCorner, { CornerRadius = UDim.new(0, B / 2) }, 0.45, Enum.EasingStyle.Quint)
+    tween(self._clipCorner, { CornerRadius = UDim.new(0, B / 2) }, 0.45, Enum.EasingStyle.Quint)
+    tween(self._bubbleIcon, { ImageTransparency = 0 }, 0.25)
+    task.delay(0.3, function()
+        if self.State == "bubble" and not self._destroyed then self.Canvas.Visible = false end
     end)
 end
 
@@ -1010,19 +1025,21 @@ function Window:Restore()
     local bubbleC = Vector2.new(ap.X + as.X / 2 - dp.X, ap.Y + as.Y / 2 - dp.Y)
     self._hit.Visible = false
     self:_aimGradient(bubbleC, Vector2.new(m.VP.X / 2 + self.OX, m.VP.Y / 2 + self.OY))
+    -- เริ่มพร้อมกันทันที: หน้าต่างขยาย + แสงม่วงถอยกลับไปทางปุ่ม เผยเมนูพร้อมกัน
     self._sweep.Value = 1
-    -- ขยายเป็นกล่องสีม่วงก่อน แล้วสีม่วงถอยกลับไปทางปุ่ม เผยเมนูทีละน้อย
-    self:_tweenWin({ Size = UDim2.fromOffset(m.W, m.H), Position = UDim2.new(0.5, self.OX, 0.5, self.OY) }, 0.5, Enum.EasingStyle.Quint)
-    tween(self._corner, { CornerRadius = UDim.new(0, 14) }, 0.5, Enum.EasingStyle.Quint)
-    tween(self._coverCorner, { CornerRadius = UDim.new(0, 14) }, 0.5, Enum.EasingStyle.Quint)
-    tween(self._bubbleIcon, { ImageTransparency = 1 }, 0.2)
-    task.delay(0.42, function()
-        if self.State ~= "open" or self._destroyed then return end
-        self.Canvas.Visible = true
-        self.Win.BackgroundColor3 = T.Bg
-        self._holder.Visible = false
-        tween(self._sweep, { Value = 0 }, 0.65, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-        tween(self._edgeStroke, { Transparency = 0 }, 0.5)
+    self:_clipOn()
+    self.Canvas.Visible = true
+    self.Win.BackgroundColor3 = T.Bg
+    self:_tweenWin({ Size = UDim2.fromOffset(m.W, m.H), Position = UDim2.new(0.5, self.OX, 0.5, self.OY) }, 0.45, Enum.EasingStyle.Quint)
+    tween(self._corner, { CornerRadius = UDim.new(0, 14) }, 0.45, Enum.EasingStyle.Quint)
+    tween(self._coverCorner, { CornerRadius = UDim.new(0, 14) }, 0.45, Enum.EasingStyle.Quint)
+    tween(self._clipCorner, { CornerRadius = UDim.new(0, 14) }, 0.45, Enum.EasingStyle.Quint)
+    self:_clipOff(0.55)
+    tween(self._bubbleIcon, { ImageTransparency = 1 }, 0.15)
+    tween(self._sweep, { Value = 0 }, 0.4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+    tween(self._edgeStroke, { Transparency = 0 }, 0.4)
+    task.delay(0.2, function()
+        if self.State == "open" and not self._destroyed then self._holder.Visible = false end
     end)
 end
 
@@ -1179,6 +1196,13 @@ function UI:CreateWindow(opts)
     self._corner = corner(win, 14)
     self._veil = new("Frame", { Name = "Veil", Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Bg, BorderSizePixel = 0, ZIndex = 300 }, win)
     corner(self._veil, 14)
+
+    -- ตัวตัดขอบมน "เฉพาะตอนย่อ/ขยาย": ย้ายเมนูเข้ามาในนี้ชั่วคราวเพื่อให้มุมไม่โผล่พ้นขอบโค้ง
+    -- (ตอนนิ่งเมนูอยู่นอกตัวนี้ จึงยังคมชัดเต็มที่)
+    self._clip = new("CanvasGroup", {
+        Name = "TransitionClip", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 1,
+    }, win)
+    self._clipCorner = corner(self._clip, 14)
 
     local canvas = new("Frame", {
         Name = "Canvas", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(860, 500),
@@ -1344,18 +1368,25 @@ function UI:CreateWindow(opts)
         return PAL[2]:Lerp(PAL[3], (t - 0.5) / 0.5)
     end
     local BLACK = Color3.fromRGB(6, 4, 14)
+    local GLOW = Color3.fromRGB(226, 196, 255)
+    self._coverStroke = stroke(self._cover, Color3.fromRGB(190, 140, 255), 2.5, 1)
     local function setSweep(p)
-        local N, w = 11, 0.6
+        local N, w = 13, 0.6
         local cols, trs = {}, {}
         for i = 0, N - 1 do
             local t = i / (N - 1)
             local q = clamp((p * (1 + w) - t) / w, 0, 1)
             q = q * q * (3 - 2 * q) -- smoothstep
-            cols[#cols + 1] = ColorSequenceKeypoint.new(t, BLACK:Lerp(palette(t), q))
-            trs[#trs + 1] = NumberSequenceKeypoint.new(t, 1 - q)
+            -- เรืองแสง: ตรงขอบหน้ากวาด (q กลางๆ) สว่างขึ้นเป็นแถบแสง
+            local g = 4 * q * (1 - q)
+            local col = BLACK:Lerp(palette(t), q):Lerp(GLOW, g * 0.8)
+            cols[#cols + 1] = ColorSequenceKeypoint.new(t, col)
+            trs[#trs + 1] = NumberSequenceKeypoint.new(t, clamp(1 - q, 0, 1))
         end
         self._grad.Color = ColorSequence.new(cols)
         self._grad.Transparency = NumberSequence.new(trs)
+        -- ขอบเรืองแสงรอบหน้าต่างสว่างสุดกลางการกวาด
+        self._coverStroke.Transparency = 1 - math.sin(math.pi * clamp(p, 0, 1)) * 0.85
     end
     self._sweep = new("NumberValue", { Value = 0 }, self._cover)
     self._sweep.Changed:Connect(setSweep)
