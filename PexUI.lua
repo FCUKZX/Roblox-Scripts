@@ -26,31 +26,35 @@ local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 
 local UI = {}
-UI.Version = "1.0.0"
+UI.Version = "1.1.0"
 -- แหล่งไอคอน Lucide (spritesheet asset id) ถ้าโหลดไม่ได้ ไอคอนจะเป็นจุดแทน ไม่ทำให้ UI พัง
 UI.LucideURL = "https://github.com/latte-soft/lucide-roblox/releases/latest/download/lucide-roblox.luau"
+UI.LucideMirrors = {
+    "https://github.com/latte-soft/lucide-roblox/releases/latest/download/lucide-roblox.luau",
+    "https://raw.githubusercontent.com/latte-soft/lucide-roblox/main/lucide-roblox.luau",
+}
 UI.CustomIcons = {}
 UI.ForceMobile = nil -- true/false = บังคับโหมดมือถือ/คอม, nil = ตรวจเอง
 
 UI.Theme = {
-    Bg = Color3.fromRGB(13, 13, 19),
-    Side = Color3.fromRGB(16, 16, 23),
-    Top = Color3.fromRGB(15, 15, 21),
-    Card = Color3.fromRGB(21, 21, 30),
-    Inset = Color3.fromRGB(14, 14, 20),
-    Elem = Color3.fromRGB(32, 32, 45),
-    Line = Color3.fromRGB(37, 37, 51),
-    Text = Color3.fromRGB(236, 236, 246),
-    Muted = Color3.fromRGB(139, 139, 162),
-    Accent = Color3.fromRGB(86, 98, 232),
-    Good = Color3.fromRGB(46, 184, 108),
-    Bad = Color3.fromRGB(226, 70, 86),
-    Warn = Color3.fromRGB(232, 168, 52),
-    Blue = Color3.fromRGB(48, 132, 236),
-    Purple = Color3.fromRGB(150, 84, 232),
-    Pink = Color3.fromRGB(232, 64, 140),
-    Orange = Color3.fromRGB(240, 150, 40),
-    Cyan = Color3.fromRGB(30, 178, 200),
+    Bg = Color3.fromRGB(16, 16, 24),
+    Side = Color3.fromRGB(20, 20, 30),
+    Top = Color3.fromRGB(19, 19, 28),
+    Card = Color3.fromRGB(26, 26, 38),
+    Inset = Color3.fromRGB(17, 17, 25),
+    Elem = Color3.fromRGB(42, 42, 60),
+    Line = Color3.fromRGB(58, 58, 80),
+    Text = Color3.fromRGB(246, 246, 255),
+    Muted = Color3.fromRGB(176, 176, 200),
+    Accent = Color3.fromRGB(98, 112, 255),
+    Good = Color3.fromRGB(52, 202, 120),
+    Bad = Color3.fromRGB(240, 82, 98),
+    Warn = Color3.fromRGB(240, 178, 60),
+    Blue = Color3.fromRGB(56, 142, 248),
+    Purple = Color3.fromRGB(160, 96, 245),
+    Pink = Color3.fromRGB(244, 76, 150),
+    Orange = Color3.fromRGB(250, 160, 50),
+    Cyan = Color3.fromRGB(36, 190, 212),
 }
 local T = UI.Theme
 local WHITE = Color3.new(1, 1, 1)
@@ -98,7 +102,7 @@ local function vlist(o, gap)
 end
 local function label(parent, props)
     local base = {
-        BackgroundTransparency = 1, BorderSizePixel = 0, Font = F_REG, TextSize = 13, TextColor3 = T.Text,
+        BackgroundTransparency = 1, BorderSizePixel = 0, Font = F_MED, TextSize = 13, TextColor3 = T.Text,
         TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center,
     }
     for k, v in pairs(props) do base[k] = v end
@@ -126,9 +130,19 @@ local function loadLucide()
     if lucideTried then return lucide end
     lucideTried = true
     local ok, res = pcall(function()
-        local src = httpGet(UI.LucideURL)
-        if not src then return nil end
-        return loadstring(src)()
+        local urls = { UI.LucideURL }
+        for _, u in ipairs(UI.LucideMirrors) do if u ~= UI.LucideURL then urls[#urls + 1] = u end end
+        for _, u in ipairs(urls) do
+            local src = httpGet(u)
+            if src then
+                local fn = loadstring(src)
+                if fn then
+                    local ok2, mod = pcall(fn)
+                    if ok2 and type(mod) == "table" then return mod end
+                end
+            end
+        end
+        return nil
     end)
     if ok and type(res) == "table" and type(res.GetAsset) == "function" then lucide = res end
     return lucide
@@ -199,6 +213,102 @@ local function applyIcon(img, icon, px)
     return false
 end
 
+
+-- ไอคอนวาดเองด้วย Frame (ใช้เมื่อ Lucide โหลดไม่ได้ ไม่ต้องพึ่งเน็ตหรือ asset id)
+local VEC = {}
+local function bar(parent, color, x, y, w, h, rot, r)
+    local f = new("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(x, y), Size = UDim2.fromScale(w, h),
+        BackgroundColor3 = color, BorderSizePixel = 0, Rotation = rot or 0,
+    }, parent)
+    if r then corner(f, r) end
+    return f
+end
+VEC["x"] = function(p, c)
+    bar(p, c, 0.5, 0.5, 0.78, 0.12, 45, 3)
+    bar(p, c, 0.5, 0.5, 0.78, 0.12, -45, 3)
+end
+VEC["plus"] = function(p, c)
+    bar(p, c, 0.5, 0.5, 0.74, 0.12, 0, 3)
+    bar(p, c, 0.5, 0.5, 0.12, 0.74, 0, 3)
+end
+VEC["minus"] = function(p, c) bar(p, c, 0.5, 0.5, 0.74, 0.12, 0, 3) end
+VEC["check"] = function(p, c)
+    bar(p, c, 0.36, 0.6, 0.3, 0.13, 45, 3)
+    bar(p, c, 0.6, 0.52, 0.56, 0.13, -50, 3)
+end
+VEC["trash-2"] = function(p, c)
+    bar(p, c, 0.5, 0.24, 0.8, 0.1, 0, 2)            -- ฝา
+    bar(p, c, 0.5, 0.15, 0.28, 0.1, 0, 2)           -- หูจับ
+    local body = new("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.fromScale(0.5, 0.3), Size = UDim2.fromScale(0.62, 0.62),
+        BackgroundTransparency = 1, BorderSizePixel = 0,
+    }, p)
+    corner(body, 4)
+    stroke(body, c, 2, 0)
+    bar(body, c, 0.33, 0.5, 0.1, 0.5, 0, 2)
+    bar(body, c, 0.67, 0.5, 0.1, 0.5, 0, 2)
+end
+VEC["trash"] = VEC["trash-2"]
+VEC["chevron-down"] = function(p, c)
+    bar(p, c, 0.34, 0.5, 0.5, 0.13, 45, 3)
+    bar(p, c, 0.66, 0.5, 0.5, 0.13, -45, 3)
+end
+VEC["chevron-up"] = function(p, c)
+    bar(p, c, 0.34, 0.5, 0.5, 0.13, -45, 3)
+    bar(p, c, 0.66, 0.5, 0.5, 0.13, 45, 3)
+end
+VEC["chevrons-up-down"] = function(p, c)
+    bar(p, c, 0.36, 0.3, 0.38, 0.12, -45, 3)
+    bar(p, c, 0.64, 0.3, 0.38, 0.12, 45, 3)
+    bar(p, c, 0.36, 0.7, 0.38, 0.12, 45, 3)
+    bar(p, c, 0.64, 0.7, 0.38, 0.12, -45, 3)
+end
+VEC["panel-left"] = function(p, c)
+    local box = new("Frame", { Size = UDim2.fromScale(0.86, 0.76), AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5), BackgroundTransparency = 1 }, p)
+    corner(box, 4)
+    stroke(box, c, 2, 0)
+    bar(p, c, 0.38, 0.5, 0.1, 0.62, 0, 2)
+end
+VEC["menu"] = function(p, c)
+    for i = 1, 3 do bar(p, c, 0.5, 0.2 + (i - 1) * 0.3, 0.76, 0.11, 0, 3) end
+end
+VEC["search"] = function(p, c)
+    local ring = new("Frame", { Size = UDim2.fromScale(0.56, 0.56), Position = UDim2.fromScale(0.1, 0.1),
+        BackgroundTransparency = 1 }, p)
+    corner(ring, 99)
+    stroke(ring, c, 2, 0)
+    bar(p, c, 0.78, 0.78, 0.34, 0.12, 45, 3)
+end
+VEC["copy"] = function(p, c)
+    local a = new("Frame", { Size = UDim2.fromScale(0.5, 0.5), Position = UDim2.fromScale(0.34, 0.34), BackgroundTransparency = 1 }, p)
+    corner(a, 3) stroke(a, c, 2, 0)
+    local b = new("Frame", { Size = UDim2.fromScale(0.5, 0.5), Position = UDim2.fromScale(0.12, 0.12), BackgroundTransparency = 1 }, p)
+    corner(b, 3) stroke(b, c, 2, 0)
+end
+VEC["clipboard-copy"] = VEC["copy"]
+VEC["folder-open"] = function(p, c)
+    local f = new("Frame", { Size = UDim2.fromScale(0.84, 0.58), AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.56), BackgroundTransparency = 1 }, p)
+    corner(f, 3) stroke(f, c, 2, 0)
+    bar(p, c, 0.28, 0.24, 0.3, 0.1, 0, 2)
+end
+
+local function drawVector(img, icon, color)
+    local name = tostring(icon)
+    local fn = VEC[name]
+    if not fn then
+        local al = ALIASES[name]
+        if al then for _, n in ipairs(al) do if VEC[n] then fn = VEC[n] break end end end
+    end
+    if not fn then return false end
+    img.Image = ""
+    local holder = new("Frame", { Name = "Vec", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1 }, img)
+    fn(holder, color or WHITE)
+    return true, holder
+end
+
 -- สร้าง ImageLabel ไอคอน (ถ้าไอคอนโหลดไม่ได้ จะโชว์จุดเล็กๆ หรือข้อความสำรอง ไม่ใช่อีโมจิ)
 local function iconLabel(parent, icon, px, color, fallbackText, extra)
     local img = new("ImageLabel", {
@@ -210,7 +320,26 @@ local function iconLabel(parent, icon, px, color, fallbackText, extra)
     end
     img.Parent = parent
     if not applyIcon(img, icon, px) then
-        if fallbackText then
+        local okVec, holder = false, nil
+        if type(icon) == "string" then okVec, holder = drawVector(img, icon, color or WHITE) end
+        if okVec then
+            -- ให้ไอคอนวาดเองเปลี่ยนสีตาม ImageColor3 (hover ฯลฯ)
+            img:GetPropertyChangedSignal("ImageColor3"):Connect(function()
+                for _, d in ipairs(holder:GetDescendants()) do
+                    if d:IsA("Frame") and d.BackgroundTransparency < 1 then d.BackgroundColor3 = img.ImageColor3 end
+                    if d:IsA("UIStroke") then d.Color = img.ImageColor3 end
+                end
+                for _, d in ipairs(holder:GetChildren()) do
+                    if d:IsA("Frame") and d.BackgroundTransparency < 1 then d.BackgroundColor3 = img.ImageColor3 end
+                end
+            end)
+            img:GetPropertyChangedSignal("ImageTransparency"):Connect(function()
+                for _, d in ipairs(holder:GetDescendants()) do
+                    if d:IsA("Frame") and d.BackgroundTransparency < 1 then d.BackgroundTransparency = img.ImageTransparency end
+                    if d:IsA("UIStroke") then d.Transparency = img.ImageTransparency end
+                end
+            end)
+        elseif fallbackText then
             label(img, {
                 Size = UDim2.fromScale(1, 1), Text = fallbackText, Font = F_BOLD, TextSize = math.max(10, px - 2),
                 TextColor3 = color or WHITE, TextXAlignment = Enum.TextXAlignment.Center,
@@ -246,6 +375,7 @@ local function makeButton(parent, o)
         Size = o.Size or UDim2.new(1, 0, 0, 38), LayoutOrder = o.LayoutOrder or 0, ClipsDescendants = true,
     }, parent)
     corner(b, 9)
+    stroke(b, WHITE, 1, 0.85)
     local sc = new("UIScale", { Scale = 1 }, b)
     local content = new("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1) }, b)
     new("UIListLayout", {
@@ -337,13 +467,13 @@ local function makeRow(sec, title, desc, ctlSize, clickable)
     }, row)
     vlist(block, 2)
     local tl = label(block, {
-        Text = title or "", Font = F_MED, TextSize = 14, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY,
+        Text = title or "", Font = F_BOLD, TextSize = 14, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY,
         TextWrapped = true, LayoutOrder = 1,
     })
     local dl
     if desc and desc ~= "" then
         dl = label(block, {
-            Text = desc, TextSize = 12, TextColor3 = T.Muted, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY,
+            Text = desc, TextSize = 12, TextColor3 = T.Muted, Font = F_MED, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY,
             TextWrapped = true, LayoutOrder = 2,
         })
     end
@@ -364,6 +494,7 @@ function Section:Toggle(o)
     local row, ctl = makeRow(self, o.Title, o.Desc, Vector2.new(46, 26), true)
     local track = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Elem, BorderSizePixel = 0 }, ctl)
     corner(track, 13)
+    stroke(track, T.Line, 1, 0)
     local knob = new("Frame", {
         Size = UDim2.fromOffset(20, 20), Position = UDim2.fromOffset(3, 3), BackgroundColor3 = WHITE, BorderSizePixel = 0,
     }, track)
@@ -410,10 +541,11 @@ function Section:Input(o)
     local row, ctl = makeRow(self, o.Title, o.Desc, Vector2.new(w, 32), false)
     local holder = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Elem, BorderSizePixel = 0 }, ctl)
     corner(holder, 9)
-    local st = stroke(holder, T.Accent, 1, 1)
+    stroke(holder, T.Line, 1, 0)
+    local st = stroke(holder, T.Accent, 1.5, 1)
     local box = new("TextBox", {
         Size = UDim2.new(1, -20, 1, 0), Position = UDim2.fromOffset(10, 0), BackgroundTransparency = 1,
-        Text = o.Default or "", PlaceholderText = o.Placeholder or "", PlaceholderColor3 = Color3.fromRGB(105, 105, 128),
+        Text = o.Default or "", PlaceholderText = o.Placeholder or "", PlaceholderColor3 = Color3.fromRGB(150, 150, 176),
         TextColor3 = T.Text, Font = F_MED, TextSize = 13, ClearTextOnFocus = false,
         TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
     }, holder)
@@ -431,6 +563,7 @@ function Section:Stepper(o)
     local row, ctl = makeRow(self, o.Title, o.Desc, Vector2.new(o.Width or 140, 32), false)
     local holder = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Elem, BorderSizePixel = 0 }, ctl)
     corner(holder, 9)
+    stroke(holder, T.Line, 1, 0)
     local function fmt(v)
         if v % 1 == 0 then return tostring(math.floor(v + 0.5)) end
         return string.format("%.1f", v)
@@ -517,6 +650,7 @@ function Section:List(o)
         ScrollingDirection = Enum.ScrollingDirection.Y,
     }, holder)
     corner(sf, 9)
+    stroke(sf, T.Line, 1, 0)
     pad(sf, 6, 6, 8, 6)
     vlist(sf, 4)
     local list = { Frame = sf, Holder = holder }
@@ -540,6 +674,7 @@ function Section:List(o)
             TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = it.Order or 0,
         }, sf)
         corner(b, 8)
+        stroke(b, sel and T.Accent:Lerp(WHITE, 0.25) or T.Line, 1, 0)
         pad(b, 12, 0, 8, 0)
         b.MouseEnter:Connect(function() tween(b, { BackgroundColor3 = base:Lerp(WHITE, 0.1) }, 0.15) end)
         b.MouseLeave:Connect(function() tween(b, { BackgroundColor3 = base }, 0.2) end)
@@ -736,7 +871,7 @@ function Window:AddTab(o)
     if not cat then
         self._catSeq = self._catSeq + 1
         local lbl = label(self._tabScroll, {
-            Text = catName, Font = F_BOLD, TextSize = 11, TextColor3 = T.Muted, Size = UDim2.new(1, 0, 0, self.SidebarCollapsed and 8 or 24),
+            Text = catName, Font = F_BOLD, TextSize = 12, TextColor3 = T.Muted, Size = UDim2.new(1, 0, 0, self.SidebarCollapsed and 8 or 24),
             LayoutOrder = self._catSeq * 1000, TextTransparency = self.SidebarCollapsed and 1 or 0,
             TextYAlignment = Enum.TextYAlignment.Bottom,
         })
@@ -1158,7 +1293,7 @@ function UI:CreateWindow(opts)
         Name = "Edge", Size = UDim2.new(1, -2, 1, -2), Position = UDim2.fromOffset(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 52,
     }, win)
     corner(edge, 13)
-    self._edgeStroke = stroke(edge, T.Line, 1, 0)
+    self._edgeStroke = stroke(edge, T.Line, 1.5, 0)
     self._holder = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Visible = false, ZIndex = 55 }, win)
     self._bubbleIcon = iconLabel(self._holder, opts.Icon or "zap", 28, WHITE, nil, CENTER)
     self._bubbleIcon.ImageTransparency = 1
