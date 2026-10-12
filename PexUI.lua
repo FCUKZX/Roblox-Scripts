@@ -318,6 +318,29 @@ VEC["folder-open"] = function(p, c)
     corner(f, 3) stroke(f, c, 2, 0)
     bar(p, c, 0.28, 0.24, 0.3, 0.1, 0, 2)
 end
+-- ไอคอนสำรองของแจ้งเตือน (วงกลม + เครื่องหมาย / กระดิ่ง) ใช้เมื่อ Lucide โหลดไม่ได้
+local function ring(p, c)
+    local r = new("Frame", { Size = UDim2.fromScale(0.86, 0.86), AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5), BackgroundTransparency = 1 }, p)
+    corner(r, 99) stroke(r, c, 2, 0)
+end
+VEC["alert-triangle"] = function(p, c)
+    ring(p, c)
+    bar(p, c, 0.5, 0.38, 0.11, 0.3, 0, 2)
+    bar(p, c, 0.5, 0.69, 0.12, 0.12, 0, 6)
+end
+VEC["info"] = function(p, c)
+    ring(p, c)
+    bar(p, c, 0.5, 0.31, 0.12, 0.12, 0, 6)
+    bar(p, c, 0.5, 0.6, 0.11, 0.3, 0, 2)
+end
+VEC["bell"] = function(p, c)
+    local dome = new("Frame", { Size = UDim2.fromScale(0.56, 0.52), AnchorPoint = Vector2.new(0.5, 0),
+        Position = UDim2.fromScale(0.5, 0.12), BackgroundTransparency = 1 }, p)
+    corner(dome, 99) stroke(dome, c, 2, 0)
+    bar(p, c, 0.5, 0.72, 0.8, 0.1, 0, 2)
+    bar(p, c, 0.5, 0.88, 0.2, 0.1, 0, 5)
+end
 
 local function drawVector(img, icon, color)
     local name = tostring(icon)
@@ -1712,9 +1735,12 @@ function Window:Notify(a, b, c)
     -- ไอคอนอัตโนมัติตามสี (ใส่ Icon = "ชื่อ" เพื่อเปลี่ยน หรือ Icon = false เพื่อซ่อน)
     local icon = o.Icon
     if icon == nil then
-        if color == T.Good then icon = "check"
-        elseif color == T.Bad then icon = "x"
-        elseif color == T.Warn or color == T.Orange then icon = "alert-triangle"
+        -- เดาจากโทนสี (ไม่ต้องตรงกับสีธีมเป๊ะ สีที่สคริปต์ส่งมาเองก็ได้ไอคอนถูก)
+        local h, s = color:ToHSV()
+        if s < 0.3 then icon = "bell"
+        elseif h < 0.04 or h > 0.93 then icon = "x" -- แดง
+        elseif h < 0.18 then icon = "alert-triangle" -- ส้ม/เหลือง
+        elseif h > 0.25 and h < 0.46 then icon = "check" -- เขียว
         else icon = "bell" end
     end
     local hasIcon = icon ~= false
