@@ -41,7 +41,7 @@ UI.LucideMirrors = {
 UI.CustomIcons = {}
 UI.UiScale = 1 -- ขนาดตัวหน้าต่าง (1 = ขนาดจริง คมที่สุด)
 UI.ForceMobile = nil -- true/false = บังคับโหมดมือถือ/คอม, nil = ตรวจเอง
-UI.DragHoldTime = 0 -- กดค้างที่หัวหน้าต่างกี่วินาทีถึงจะลากได้ (0 = ลากได้ทันที ค่าเริ่มต้น)
+UI.DragHoldTime = 1 -- กดค้างที่หัวหน้าต่างกี่วินาทีถึงจะลากได้ (0 = ลากได้ทันที)
 
 UI.Theme = {
     Bg = Color3.fromRGB(16, 16, 24),
@@ -430,61 +430,27 @@ UI.Ripple = ripple
 -- ล็อกการลากทั้งระบบ: ลากได้ทีละอย่างเท่านั้น (กันนิ้วลากผ่านตัวอื่นแล้วลากพร้อมกัน)
 UI._dragLock = nil
 
--- สไลเดอร์ต้องกดค้างที่ตัวลากครบ UI.SliderHoldTime วินาที (มีแถบนับเวลาวิ่งใต้สไลเดอร์) ถึงจะลากได้
--- ถ้านิ้วขยับก่อนครบเวลา = ยกเลิก ปล่อยให้หน้าเลื่อนตามปกติ (0 = ลากได้ทันที)
-UI.SliderHoldTime = 0.5
-
-local function bindDrag(win, hit, page, onAlpha, onState, accent)
-    local dragging, armed, active, startPos, token = false, false, nil, nil, 0
+local function bindDrag(win, hit, page, onAlpha, onState)
+    local dragging, active = false, nil
     local function alphaOf(input)
         return clamp((input.Position.X - hit.AbsolutePosition.X) / math.max(1, hit.AbsoluteSize.X), 0, 1)
     end
-    -- แถบนับเวลา
-    local bar = new("Frame", {
-        AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(0, 0, 0, 2),
-        BackgroundColor3 = accent or T.Accent, BackgroundTransparency = 1, BorderSizePixel = 0,
-    }, hit)
-    corner(bar, 1)
-    local function hideBar() tween(bar, { BackgroundTransparency = 1 }, 0.2, Enum.EasingStyle.Sine) end
     hit.InputBegan:Connect(function(input)
         if not isPress(input) then return end
         if UI._dragLock then return end
         UI._dragLock = input
-        dragging, armed, active, startPos = true, false, input, input.Position
-        token = token + 1
-        local my = token
-        local hold = UI.SliderHoldTime or 0
-        local function arm()
-            armed = true
-            if page then page.ScrollingEnabled = false end
-            if onState then onState(true) end
-            onAlpha(alphaOf(active))
-        end
-        if hold <= 0 then
-            arm()
-        else
-            bar.Size = UDim2.new(0, 0, 0, 2)
-            bar.BackgroundTransparency = 0.1
-            tween(bar, { Size = UDim2.new(1, 0, 0, 2) }, hold, Enum.EasingStyle.Linear)
-            task.delay(hold, function()
-                if dragging and token == my and not armed then
-                    hideBar()
-                    arm()
-                end
-            end)
-        end
+        dragging, active = true, input
+        if page then page.ScrollingEnabled = false end
+        if onState then onState(true) end
+        onAlpha(alphaOf(input))
         local c
         c = input.Changed:Connect(function()
             if input.UserInputState == Enum.UserInputState.End then
                 c:Disconnect()
                 if UI._dragLock == input then UI._dragLock = nil end
-                token = token + 1
-                hideBar()
-                if dragging and armed then
-                    if page then page.ScrollingEnabled = true end
-                    if onState then onState(false) end
-                end
-                dragging, armed = false, false
+                dragging = false
+                if page then page.ScrollingEnabled = true end
+                if onState then onState(false) end
             end
         end)
     end)
@@ -493,17 +459,7 @@ local function bindDrag(win, hit, page, onAlpha, onState, accent)
         local t = input.UserInputType
         if (t == Enum.UserInputType.MouseMovement and active.UserInputType ~= Enum.UserInputType.Touch)
             or (t == Enum.UserInputType.Touch and input == active) then
-            if armed then
-                onAlpha(alphaOf(input))
-            else
-                local d = input.Position - startPos
-                if math.abs(d.X) + math.abs(d.Y) > 12 then
-                    -- ขยับก่อนครบเวลา = ไม่ใช่การกดค้าง ยกเลิกรอบนี้
-                    token = token + 1
-                    dragging = false
-                    hideBar()
-                end
-            end
+            onAlpha(alphaOf(input))
         end
     end))
 end
@@ -983,7 +939,7 @@ function Section:Slider(o)
         apply(min + a * (max - min))
     end, function(down)
         tween(ks, { Scale = down and 1.28 or 1 }, 0.25, Enum.EasingStyle.Back)
-    end, accent)
+    end)
     box.Focused:Connect(function() box.Text = tostring(value) end)
     box.FocusLost:Connect(function()
         local n = tonumber(box.Text:match("-?%d+%.?%d*"))
@@ -1750,34 +1706,109 @@ function Window:Notify(a, b, c)
     if self._destroyed then return end
     local o = type(a) == "table" and a or { Text = a, Color = b, Duration = c }
     local color = o.Color or T.Accent
-    local dur = o.Duration or 3
+    local dur = math.max(0.5, o.Duration or 3)
     self._toastN = self._toastN + 1
+
+    -- ไอคอนอัตโนมัติตามสี (ใส่ Icon = "ชื่อ" เพื่อเปลี่ยน หรือ Icon = false เพื่อซ่อน)
+    local icon = o.Icon
+    if icon == nil then
+        if color == T.Good then icon = "check"
+        elseif color == T.Bad then icon = "x"
+        elseif color == T.Warn or color == T.Orange then icon = "alert-triangle"
+        else icon = "bell" end
+    end
+    local hasIcon = icon ~= false
+
     local wrap = new("Frame", {
         Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = self._toastN,
     }, self._toasts)
+
+    -- การ์ด: พื้นไล่เฉดโทนสีแจ้งเตือนจางๆ + ขอบสี
     local card = new("Frame", {
-        Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, Position = UDim2.new(1.2, 0, 0, 0), BackgroundColor3 = T.Card, BorderSizePixel = 0,
-        ClipsDescendants = true,
+        Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, Position = UDim2.new(1.2, 0, 0, 0),
+        BackgroundColor3 = WHITE, BorderSizePixel = 0,
     }, wrap)
-    corner(card, 10)
-    stroke(card, color, 1, 0.5)
-    pad(card, 20, 10, 12, 10)
-    new("Frame", {
-        Size = UDim2.new(0, 3, 1, 8), Position = UDim2.new(0, -14, 0, -4), BackgroundColor3 = color, BorderSizePixel = 0,
+    corner(card, 12)
+    stroke(card, color, 1, 0.55)
+    new("UIGradient", { Color = ColorSequence.new(T.Card:Lerp(color, 0.2), T.Card), Rotation = 0 }, card)
+
+    -- แถบสีด้านซ้าย (เว้นจากขอบบน/ล่าง ไม่ชนมุมโค้ง)
+    local pill = new("Frame", {
+        Size = UDim2.new(0, 3, 1, -20), Position = UDim2.new(0, 7, 0, 10), BackgroundColor3 = color, BorderSizePixel = 0,
     }, card)
-    local timer = new("Frame", {
-        Size = UDim2.new(1, 32, 0, 2), Position = UDim2.new(0, -20, 0, -10), BackgroundColor3 = color, BackgroundTransparency = 0.3, BorderSizePixel = 0,
-    }, card)
-    tween(timer, { Size = UDim2.new(0, 0, 0, 2) }, dur, Enum.EasingStyle.Linear)
-    local inner = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1 }, card)
-    vlist(inner, 2)
-    if o.Title then
-        label(inner, { Text = o.Title, Font = F_BOLD, TextSize = 13, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, TextWrapped = true, LayoutOrder = 1 })
+    corner(pill, 2)
+
+    -- เนื้อหา: [ไอคอน | ข้อความ] แล้วตามด้วยเส้นนับเวลา อยู่ในเลย์เอาต์เดียวกัน (ภายใต้ padding) -> ไม่มีทางล้นออกนอกการ์ด
+    local body = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1 }, card)
+    pad(body, 18, 11, 14, 11)
+    vlist(body, 8)
+
+    local row = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = 1 }, body)
+    new("UIListLayout", {
+        FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder,
+        VerticalAlignment = Enum.VerticalAlignment.Center,
+    }, row)
+
+    if hasIcon then
+        local badge = new("Frame", {
+            Size = UDim2.fromOffset(28, 28), BackgroundColor3 = color, BackgroundTransparency = 0.82, BorderSizePixel = 0, LayoutOrder = 1,
+        }, row)
+        corner(badge, 8)
+        stroke(badge, color, 1, 0.65)
+        iconLabel(badge, icon, 16, color, nil, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5) })
     end
-    label(inner, {
+
+    local txt = new("Frame", {
+        Size = UDim2.new(1, hasIcon and -38 or 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = 2,
+    }, row)
+    vlist(txt, 2)
+    if o.Title then
+        label(txt, { Text = o.Title, Font = F_BOLD, TextSize = 13, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, TextWrapped = true, LayoutOrder = 1 })
+    end
+    label(txt, {
         Text = tostring(o.Text or ""), Font = F_MED, TextSize = 12, TextColor3 = o.Title and T.Muted or T.Text,
         Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, TextWrapped = true, LayoutOrder = 2,
     })
+
+    -- เส้นนับเวลา: ราง + แท่งเต็มที่หดจากขวาไปซ้าย (อยู่ในกรอบของราง ไม่ล้น)
+    local track = new("Frame", {
+        Size = UDim2.new(1, 0, 0, 3), BackgroundColor3 = color, BackgroundTransparency = 0.86, BorderSizePixel = 0, LayoutOrder = 2,
+    }, body)
+    corner(track, 2)
+    local fill = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = WHITE, BorderSizePixel = 0 }, track)
+    corner(fill, 2)
+    new("UIGradient", { Color = ColorSequence.new(color, color:Lerp(WHITE, 0.5)), Rotation = 0 }, fill)
+    tween(fill, { Size = UDim2.new(0, 0, 1, 0) }, dur, Enum.EasingStyle.Linear)
+
+    -- แสงสีขาวเอียงวิ่งตัดผ่านการ์ด (ใช้ UIGradient บนเฟรมที่มีมุมโค้งเท่าการ์ด -> ไม่เลยขอบ)
+    local shine = new("Frame", {
+        Size = UDim2.fromScale(1, 1), BackgroundColor3 = WHITE, BorderSizePixel = 0, Active = false, ZIndex = 10,
+    }, card)
+    corner(shine, 12)
+    local sg = new("UIGradient", {
+        Rotation = 24, Offset = Vector2.new(-1, 0),
+        Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(0.34, 1),
+            NumberSequenceKeypoint.new(0.44, 0.9),
+            NumberSequenceKeypoint.new(0.50, 0.7),
+            NumberSequenceKeypoint.new(0.56, 0.9),
+            NumberSequenceKeypoint.new(0.60, 1),
+            NumberSequenceKeypoint.new(0.63, 1),
+            NumberSequenceKeypoint.new(0.65, 0.78),
+            NumberSequenceKeypoint.new(0.67, 1),
+            NumberSequenceKeypoint.new(1, 1),
+        }),
+    }, shine)
+    task.spawn(function()
+        task.wait(0.3)
+        while wrap.Parent do
+            sg.Offset = Vector2.new(-1, 0)
+            tween(sg, { Offset = Vector2.new(1, 0) }, 0.95, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+            task.wait(2.5) -- วิ่ง 0.95 วิ แล้วเว้นช่วงก่อนวิ่งรอบใหม่
+        end
+    end)
+
     tween(card, { Position = UDim2.new(0, 0, 0, 0) }, 0.55, Enum.EasingStyle.Back)
     -- จำกัดไม่เกิน 4 อัน
     local kids = {}
