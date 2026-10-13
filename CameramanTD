@@ -1,0 +1,2766 @@
+-- LocalScript: Pex Hub (Tower Macro v2)  |  UI: PexUI โหลดจาก GitHub
+-- ปรับจาก Skibidi-Defense v8.1 ให้ใช้กับแมพใหม่ (ModuleLoader.Shared.Network.RemoteEvent)
+--
+-- ลำดับของเกม (สคริปต์ตรวจจับจาก GUI):
+--   PlayerGui.GameUI.GamemodeVoting เปิด  = เกมเพิ่งเริ่ม  -> โหวตโหมด (ModeVote)  *เริ่มบันทึกได้เฉพาะตอนหน้านี้เปิด*
+--   TowerAdd / TowerUpgrade                = วาง / อัปเกรดยูนิต (บันทึกแล้วเล่นซ้ำ)
+--   PlayerGui.GameUI.FinalUI เปิด          = เกมจบ -> กด Content.PlayAgain (เกมย้ายเซิร์ฟ สคริปต์ต่อเองหลังย้าย)
+--   PlayerGui.GameUI.Stats.AutoSkip.Button.UIStroke  แดง = ปิด / ไม่แดง = เปิด  (สคริปต์กดให้เปิดอัตโนมัติ)
+--   เงิน = Players.LocalPlayer.leaderstats.Money
+--
+-- ก่อนวางยูนิต: หา Id จาก Players.<เรา> Attributes (SlotN = ชื่อ, SlotNId = Id) ที่ชื่อตรงกับที่บันทึกไว้
+-- RightShift = ซ่อน/แสดงหน้าต่าง
+-- ไม่แน่ใจว่า Id ของยูนิตมาจากไหน -> สคริปต์ดักหาเอง (event ที่เซิร์ฟเวอร์ส่งกลับ + ของที่โผล่ใน Workspace)
+--   ดูผลที่แท็บ Log / Settings > Detection ถ้าจับ Id ไม่ได้ ก็คัดลอก Log ส่งมาดูได้
+
+-- =====================================================================
+--  ตั้งค่าที่แก้เองได้ (ไม่บังคับ)
+--  ใช้ให้สคริปต์รันต่ออัตโนมัติหลังกด PlayAgain แล้วเกมย้ายเซิร์ฟ เลือกอย่างใดอย่างหนึ่ง:
+--    1) วางสคริปต์นี้ไว้ในโฟลเดอร์ autoexec ของ executor (ไม่ต้องใส่อะไรตรงนี้)
+--    2) ใส่ลิงก์ raw ของสคริปต์นี้ที่ SCRIPT_URL   -> ใช้ queue_on_teleport ให้
+--    3) เซฟสคริปต์เป็นไฟล์ในโฟลเดอร์ workspace ของ executor แล้วใส่ชื่อไฟล์ที่ SCRIPT_FILE
+-- =====================================================================
+local SCRIPT_URL = ""
+local SCRIPT_FILE = ""
+
+if not game:IsLoaded() then game.Loaded:Wait() end
+
+-- =====================================================================
+--  ด่านแรกสุด: ไม่เจอ PlayerGui.GameUI.GamemodeVoting "จริงๆ" = สคริปต์ไม่ทำงานอะไรเลย
+--  (ไม่โหลด UI / ไม่ hook / ไม่สร้างลูปใดๆ) -- อยู่ลอบบี้ก็จบตรงนี้
+--  รอได้สูงสุด GATE_WAIT วินาที เผื่อ GUI ของเกมยังโหลดไม่เสร็จ (เช่นหลังย้ายเซิร์ฟ)
+--  ถ้าปิด "ทำงานเฉพาะตอนอยู่ในเกม" (REQUIRE_VOTE_UI) ในหน้า Settings ไว้ ก็จะข้ามด่านนี้
+-- =====================================================================
+do
+    local GATE_WAIT = 20
+    local needGate = true
+    pcall(function()
+        if isfile and readfile and isfile("PexSkibidiTD_Settings.json") then
+            local d = game:GetService("HttpService"):JSONDecode(readfile("PexSkibidiTD_Settings.json"))
+            if type(d) == "table" and d.REQUIRE_VOTE_UI == false then needGate = false end
+        end
+    end)
+    if needGate then
+        local lp = game:GetService("Players").LocalPlayer
+        local pg = lp and lp:WaitForChild("PlayerGui", 10)
+        local found = false
+        local t0 = os.clock()
+        while pg and os.clock() - t0 < GATE_WAIT do
+            local g = pg:FindFirstChild("GameUI")
+            if g and g:FindFirstChild("GamemodeVoting") then
+                found = true
+                break
+            end
+            task.wait(0.25)
+        end
+        if not found then
+            warn("[PexTD] ไม่เจอ GameUI.GamemodeVoting (ลอบบี้?) สคริปต์ไม่ทำงาน")
+            return
+        end
+    end
+end
+
+-- กันรันซ้อน (เช่น autoexec + queue_on_teleport ทำงานพร้อมกัน): ปิดตัวเก่าก่อน
+local genv = (getgenv and getgenv()) or _G
+if type(genv.__PexTD) == "table" and type(genv.__PexTD.stop) == "function" then
+    pcall(genv.__PexTD.stop)
+end
+
+-- =====================================================================
+--  ภาค A : ตรรกะ (UI ผูกทีหลังผ่านตาราง ui)
+-- =====================================================================
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
+local GuiService = game:GetService("GuiService")
+local VirtualUser = game:GetService("VirtualUser")
+local _okVIM, VirtualInputManager = pcall(function() return game:GetService("VirtualInputManager") end)
+if not _okVIM then VirtualInputManager = nil end
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local FOLDER = "PexSkibidiTD"
+local SETTINGS_FILE = "PexSkibidiTD_Settings.json"
+local RESUME_FILE = "PexSkibidiTD_Resume.json"
+local MAX_LOOPS = 999
+
+local ui = {}          -- reference ของ GUI (ผูกทีหลัง)
+local alive = true     -- false = สคริปต์ถูกปิดแล้ว (ให้ลูป/hook หยุด)
+local conns = {}
+local function track(c) conns[#conns + 1] = c return c end
+
+-- ========== Log ==========
+local logBuf, logDirty = {}, false
+local function log(msg)
+    msg = tostring(msg)
+    logBuf[#logBuf + 1] = os.date("%H:%M:%S") .. "  " .. msg
+    if #logBuf > 200 then table.remove(logBuf, 1) end
+    logDirty = true
+end
+local function logf(fmt, ...) log(string.format(fmt, ...)) end
+
+-- ========== Settings (จำค่าลงไฟล์) ==========
+local DEFAULTS = {
+    CFG_VERSION = 1,
+
+    -- [เล่นมาโคร] ความเร็ว / การลองซ้ำ
+    EAGER_ON = true,        -- เปิด = เงินใกล้ถึงก็ลองซื้อเลย | ปิด = รอเงินครบก่อนเท่านั้น
+    EAGER_PERCENT = 100,     -- เงินถึงกี่ % ของราคา แล้วเริ่ม "ลองยิงเลย"
+    PROBE_INTERVAL = 0.7,   -- ระหว่างรอเงิน ลองยิงซ้ำทุกกี่วินาที
+    START_DELAY = 2,        -- วินาทีรอหลังหน้าโหวตโหมดปิด ก่อนเริ่มวางยูนิต
+    PLACE_RETRIES = 5,      -- วางไม่ติด ลองซ้ำกี่ครั้ง
+    UPGRADE_RETRIES = 5,    -- อัปเกรดไม่ติด ลองซ้ำกี่ครั้ง
+    RETRY_DELAY = 0.3,      -- เว้นก่อนลองใหม่ (วิ)
+    MONEY_TIMEOUT = 90,     -- รอเงินสูงสุดต่อแอคชัน (วิ) เกินแล้วลองยิงเลย
+    UNKNOWN_COST_WAIT = 25, -- แอคชันที่ยังไม่รู้ราคา: ลองซ้ำนานสุดกี่วินาที
+    COST_MARGIN = 0,        -- เผื่อเงินเพิ่มตอนรอ (บวกเข้าราคา)
+    ID_WAIT = 4,            -- รอ Id ของยูนิตที่เพิ่งวางสูงสุดกี่วินาที
+    VOTE_WAIT = 45,         -- รอหน้าโหวตโหมดเปิดสูงสุดกี่วินาที (ไม่เจอ = ถือว่าเกมเริ่มแล้ว)
+    VOTE_CLOSE_WAIT = 40,   -- รอหน้าโหวตโหมดปิดหลังโหวตสูงสุดกี่วินาที
+
+    -- [PlayAgain / ย้ายเซิร์ฟ]
+    AUTO_REPLAY = true,     -- กด PlayAgain เองเมื่อเกมจบ
+    REPLAY_WAIT = 7,        -- กด PlayAgain แล้วเกมนับถอยหลัง ~5 วิ -> รอกี่วินาทีก่อนกดซ้ำ
+    REPLAY_MAX_TRIES = 15,
+    AUTO_RESUME = true,     -- หลังย้ายเซิร์ฟ เล่นต่ออัตโนมัติ (ต้องมี autoexec / SCRIPT_URL / SCRIPT_FILE)
+    RESUME_MAX_AGE = 300,   -- ไฟล์ resume เก่ากว่านี้ (วิ) ไม่เอา
+
+    -- [บันทึก]
+    REQUIRE_VOTE_UI = true, -- ทำงานเฉพาะตอนในเกม (ต้องมี GamemodeVoting จริง) + เริ่มบันทึกได้เฉพาะตอนมันเปิดอยู่
+    AUTO_STOP_REC = true,   -- หยุดบันทึกอัตโนมัติเมื่อเกมจบ (FinalUI)
+
+    -- [ระบบ / อื่นๆ]
+    SNIFFER = true,         -- จด remote ที่เข้า/ออกช่วงหลังวาง/อัปเกรด ลงแท็บ Log (ไว้หา Id)
+    ANTI_AFK = true,
+    WEBHOOK_ON = false,
+    WEBHOOK_URL = "",
+    STOP_KEY = "",          -- ชื่อ KeyCode ของปุ่มลัด "หยุดทั้งหมด" (ว่าง = ไม่ใช้)
+    AUTO_SKIP = true,       -- สถานะที่ต้องการของ AutoSkip (เปิด = สคริปต์กดให้เป็นสีไม่แดง)
+    GAMESPEED_ON = true,   -- เปิด = สคริปต์กดปรับ GameSpeed ให้เป็นตัวที่เลือก
+    GAMESPEED_PICK = "1.5",    -- ชื่อปุ่มความเร็วที่เลือก (ตรงกับชื่อใน GameUI.GameSpeeds เช่น "1.5")
+}
+-- มีแค่ค่าเหล่านี้ที่เซฟ/โหลดจากไฟล์ (ค่าอื่นล็อกตาม DEFAULTS เสมอ)
+local USER_KEYS = {
+    "EAGER_ON", "START_DELAY", "AUTO_REPLAY", "REPLAY_WAIT", "AUTO_RESUME", "REQUIRE_VOTE_UI", "SNIFFER",
+    "ANTI_AFK", "WEBHOOK_ON", "WEBHOOK_URL", "STOP_KEY", "AUTO_SKIP", "GAMESPEED_ON", "GAMESPEED_PICK",
+}
+local CONFIG = {}
+for k, v in pairs(DEFAULTS) do CONFIG[k] = v end
+
+do
+    local ok, data = pcall(function()
+        if isfile and readfile and isfile(SETTINGS_FILE) then
+            return HttpService:JSONDecode(readfile(SETTINGS_FILE))
+        end
+    end)
+    if ok and type(data) == "table" then
+        for _, k in ipairs(USER_KEYS) do
+            if type(data[k]) == type(DEFAULTS[k]) then CONFIG[k] = data[k] end
+        end
+    end
+end
+
+local function saveSettings()
+    if not writefile then return end
+    local out = { CFG_VERSION = DEFAULTS.CFG_VERSION }
+    for _, k in ipairs(USER_KEYS) do out[k] = CONFIG[k] end
+    pcall(function() writefile(SETTINGS_FILE, HttpService:JSONEncode(out)) end)
+end
+
+-- ========== Remotes ==========
+-- ReplicatedStorage.ModuleLoader.Shared.Network.RemoteEvent.{ModeVote, TowerAdd, TowerUpgrade}
+local function waitPath(root, names, timeout)
+    local node = root
+    for _, n in ipairs(names) do
+        node = node and node:WaitForChild(n, timeout)
+        if not node then return nil end
+    end
+    return node
+end
+
+local netFolder = waitPath(ReplicatedStorage, { "ModuleLoader", "Shared", "Network", "RemoteEvent" }, 10)
+local modeVoteRE = netFolder and netFolder:FindFirstChild("ModeVote")
+local towerAddRE = netFolder and netFolder:FindFirstChild("TowerAdd")
+local towerUpgradeRE = netFolder and netFolder:FindFirstChild("TowerUpgrade")
+
+-- ========== Serializer ==========
+local function enc(v)
+    local t = typeof(v)
+    if t == "number" or t == "string" or t == "boolean" then
+        return v
+    elseif t == "Vector3" then
+        return { __t = "V3", x = v.X, y = v.Y, z = v.Z }
+    elseif t == "Vector2" then
+        return { __t = "V2", x = v.X, y = v.Y }
+    elseif t == "CFrame" then
+        return { __t = "CF", c = { v:GetComponents() } }
+    elseif t == "Color3" then
+        return { __t = "C3", r = v.R, g = v.G, b = v.B }
+    elseif t == "table" then
+        local isArray = #v > 0
+        if isArray then
+            for k in pairs(v) do
+                if type(k) ~= "number" then isArray = false break end
+            end
+        end
+        if isArray then
+            local o = {}
+            for i, x in ipairs(v) do o[i] = enc(x) end
+            return o
+        end
+        local d = {}
+        for k, x in pairs(v) do
+            d[type(k) == "number" and ("#" .. k) or tostring(k)] = enc(x)
+        end
+        return { __t = "D", d = d }
+    end
+    return nil
+end
+
+local function dec(v)
+    if type(v) ~= "table" then return v end
+    local t = v.__t
+    if t == "V3" then return Vector3.new(v.x, v.y, v.z)
+    elseif t == "V2" then return Vector2.new(v.x, v.y)
+    elseif t == "CF" then return CFrame.new(table.unpack(v.c))
+    elseif t == "C3" then return Color3.new(v.r, v.g, v.b)
+    elseif t == "D" then
+        local o = {}
+        for k, x in pairs(v.d) do
+            local key = k
+            if k:sub(1, 1) == "#" then key = tonumber(k:sub(2)) or k end
+            o[key] = dec(x)
+        end
+        return o
+    end
+    local o = {}
+    for i, x in ipairs(v) do o[i] = dec(x) end
+    return o
+end
+
+-- ========== File system ==========
+local canFile = writefile and readfile and listfiles and delfile and makefolder and isfolder and isfile
+if canFile and not isfolder(FOLDER) then pcall(makefolder, FOLDER) end
+
+local function pathOf(name) return FOLDER .. "/" .. name .. ".json" end
+
+local function cleanName(s)
+    s = (s or ""):gsub('[\\/:*?"<>|%.]', ""):gsub("^%s+", ""):gsub("%s+$", "")
+    return s
+end
+
+local function listMacros()
+    local names = {}
+    if not canFile then return names end
+    local ok, files = pcall(listfiles, FOLDER)
+    if ok and files then
+        for _, f in ipairs(files) do
+            local n = f:match("([^/\\]+)%.json$")
+            if n then table.insert(names, n) end
+        end
+    end
+    table.sort(names)
+    return names
+end
+
+-- meta = { vote = { "Easy" } }  (อาร์กิวเมนต์ที่เรียก ModeVote ตอนบันทึก)
+local function saveMacro(name, actions, meta)
+    if not canFile then return false, "executor ไม่รองรับไฟล์" end
+    local ok, err = pcall(function()
+        writefile(pathOf(name), HttpService:JSONEncode({
+            version = 7,
+            vote = (meta and meta.vote) and enc(meta.vote) or nil,
+            actions = enc(actions),
+        }))
+    end)
+    return ok, err
+end
+
+-- คืน actions, meta  (หรือ nil ถ้าโหลดไม่ได้)
+local function loadMacro(name)
+    if not canFile then return nil end
+    local ok, a, m = pcall(function()
+        local data = HttpService:JSONDecode(readfile(pathOf(name)))
+        return dec(data.actions), { vote = data.vote and dec(data.vote) or nil }
+    end)
+    if ok and type(a) == "table" then return a, m end
+    return nil
+end
+
+local function uniqueName(base)
+    local name, i = base, 2
+    while canFile and isfile(pathOf(name)) do
+        name = base .. "_" .. i
+        i = i + 1
+    end
+    return name
+end
+
+-- ========== State ==========
+local recordedActions = {}
+local macroMeta = { vote = nil }
+local selectedName = nil
+local macroDirty = false
+local isRecording = false
+local isPlaying = false
+local playToken = 0
+local selfFiring = false   -- true ระหว่างที่สคริปต์ยิง remote เอง (ไม่ให้ hook บันทึกซ้ำ)
+
+local stats = {
+    rounds = 0, placed = 0, upgraded = 0, retries = 0, failures = 0,
+    replayClicks = 0, sessionStart = nil, lastRound = 0, totalRoundTime = 0,
+}
+
+local function notify(text, color, dur, icon)
+    if ui.notify then ui.notify(text, color, dur, icon) end
+end
+
+-- สถานะแสดงเป็นป๊อปอัปมุมจอ  setStatus(ข้อความ, สี, ไอคอน)  สี = "ok" เขียว / "warn" เหลือง / "bad" แดง
+-- ข้อความเดิมที่ต่างกันแค่ตัวเลข จะไม่เด้งซ้ำภายใน 5 วิ และเด้งห่างกันอย่างน้อย 1.2 วิ
+local setStatus, fmtNum
+do
+    local COLORS = {
+        ok = Color3.fromRGB(60, 200, 120),
+        warn = Color3.fromRGB(230, 170, 60),
+        bad = Color3.fromRGB(230, 70, 80),
+    }
+    local lastKey, lastTime, waiting = nil, -100, nil
+
+    -- 1234567 -> 1,234,567
+    function fmtNum(n)
+        local txt = string.format("%.0f", tonumber(n) or 0)
+        local sign, digits = txt:match("^(-?)(%d+)$")
+        if not digits then return txt end
+        digits = digits:reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
+        return sign .. digits
+    end
+
+    local function show(text, kind, icon)
+        lastTime = os.clock()
+        local len = utf8.len(text) or #text
+        notify(text, COLORS[kind], math.clamp(3 + len * 0.06, 4, 8), icon)
+    end
+
+    function setStatus(text, kind, icon)
+        text = tostring(text)
+        if ui.dot then
+            ui.dot.BackgroundColor3 = isRecording and Color3.fromRGB(230, 70, 80)
+                or isPlaying and Color3.fromRGB(60, 200, 120)
+                or Color3.fromRGB(130, 130, 150)
+        end
+
+        local key = text:gsub("%d[%d,%.]*", "#")
+        local now = os.clock()
+        if key == lastKey and now - lastTime < 5 then return end
+        lastKey = key
+
+        local gap = 1.2 - (now - lastTime)
+        if gap > 0 then
+            local first = waiting == nil
+            waiting = { text, kind, icon }
+            if first then
+                task.delay(gap, function()
+                    local w = waiting
+                    waiting = nil
+                    if w and alive then show(w[1], w[2], w[3]) end
+                end)
+            end
+            return
+        end
+        show(text, kind, icon)
+    end
+end
+
+-- ========== Webhook ==========
+local httpRequest = (syn and syn.request) or (http and http.request) or http_request or request
+    or (fluxus and fluxus.request)
+
+local function sendWebhook(title, desc, force)
+    if not (CONFIG.WEBHOOK_ON or force) or CONFIG.WEBHOOK_URL == "" or not httpRequest then return false end
+    task.spawn(function()
+        pcall(httpRequest, {
+            Url = CONFIG.WEBHOOK_URL,
+            Method = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = HttpService:JSONEncode({
+                embeds = { {
+                    title = title,
+                    description = desc,
+                    color = 8148223,
+                    footer = { text = "Auto Macro Hub | " .. player.Name },
+                } },
+            }),
+        })
+    end)
+    return true
+end
+
+-- ========== Anti-AFK ==========
+track(player.Idled:Connect(function()
+    if not CONFIG.ANTI_AFK then return end
+    pcall(function()
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new())
+    end)
+end))
+
+local function getPing()
+    local ok, p = pcall(function() return player:GetNetworkPing() end)
+    if ok and type(p) == "number" then return p end
+    return 0.1
+end
+
+-- ========== Money (leaderstats.Money) ==========
+local MONEY = { obj = nil, last = nil, log = {}, head = 1, tail = 0, sig = nil }
+local SUFFIX = { K = 1e3, M = 1e6, B = 1e9, T = 1e12 }
+
+local function parseNumber(s)
+    if type(s) ~= "string" then return nil end
+    local clean = s:gsub(",", ""):gsub("%s", "")
+    local num, suf = clean:match("^%$?(%d+%.?%d*)([KkMmBbTt]?)")
+    if not num then return nil end
+    local n = tonumber(num)
+    if not n then return nil end
+    if suf ~= "" then n = n * (SUFFIX[suf:upper()] or 1) end
+    return n
+end
+
+local function readMoneyFrom(obj)
+    if not obj then return nil end
+    local ok, v = pcall(function()
+        if obj:IsA("ValueBase") then return obj.Value end
+        return obj.Text
+    end)
+    if not ok then return nil end
+    if type(v) == "number" then return v end
+    return parseNumber(tostring(v))
+end
+
+local function pushMoney(v)
+    if v == nil or v == MONEY.last then return end
+    local now = os.clock()
+    if MONEY.last ~= nil then
+        MONEY.tail = MONEY.tail + 1
+        MONEY.log[MONEY.tail] = { t = now, m = v, d = v - MONEY.last }
+    end
+    MONEY.last = v
+    while MONEY.head <= MONEY.tail and now - MONEY.log[MONEY.head].t > 15 do
+        MONEY.log[MONEY.head] = nil
+        MONEY.head = MONEY.head + 1
+    end
+end
+
+local function hookMoney(obj)
+    if MONEY.sig then MONEY.sig:Disconnect() MONEY.sig = nil end
+    MONEY.obj = obj
+    MONEY.last = nil
+    if not obj then return end
+    local prop = obj:IsA("ValueBase") and "Value" or "Text"
+    local ok, sig = pcall(function() return obj:GetPropertyChangedSignal(prop) end)
+    if ok and sig then
+        MONEY.sig = sig:Connect(function() pushMoney(readMoneyFrom(obj)) end)
+    end
+    MONEY.last = readMoneyFrom(obj)
+end
+
+local function findMoneyObj()
+    local ls = player:FindFirstChild("leaderstats")
+    return ls and ls:FindFirstChild("Money")
+end
+
+do
+    local lastTry = 0
+    track(RunService.Heartbeat:Connect(function()
+        if not alive then return end
+        if not (MONEY.obj and MONEY.obj.Parent) then
+            local now = os.clock()
+            if now - lastTry > 2 then
+                lastTry = now
+                local o = findMoneyObj()
+                if o then hookMoney(o) end
+            end
+            return
+        end
+        pushMoney(readMoneyFrom(MONEY.obj))
+    end))
+end
+
+local function moneyOK() return MONEY.obj ~= nil and MONEY.last ~= nil end
+local function getMoney() return MONEY.last end
+
+-- เงินลดลงรวม >= minDrop นับตั้งแต่ t0 ไหม
+local function spendSince(t0, minDrop)
+    local spent = 0
+    for i = MONEY.head, MONEY.tail do
+        local e = MONEY.log[i]
+        if e and e.t >= t0 - 0.02 and e.d < 0 then spent = spent - e.d end
+    end
+    return spent >= minDrop, spent
+end
+
+-- ========== GUI helpers ==========
+local function gameUI(...)
+    local node = playerGui:FindFirstChild("GameUI")
+    for _, n in ipairs({ ... }) do
+        node = node and node:FindFirstChild(n)
+    end
+    return node
+end
+
+local function guiVisible(obj)
+    if not obj then return false end
+    local cur = obj
+    while cur and cur ~= playerGui do
+        if cur:IsA("GuiObject") and not cur.Visible then return false end
+        if cur:IsA("ScreenGui") and not cur.Enabled then return false end
+        cur = cur.Parent
+    end
+    return cur == playerGui
+end
+
+local function votingOpen()
+    local f = gameUI("GamemodeVoting")
+    return f ~= nil and guiVisible(f)
+end
+
+-- อยู่ในเกมจริงไหม: ต้องเคยเจอ GameUI.GamemodeVoting (มีอยู่จริง ไม่จำเป็นต้องเปิดอยู่)
+-- ลอบบี้ไม่มีตัวนี้ -> false  (เจอแล้วจะจำไว้จนกว่า GameUI จะหายไป)
+-- ปิด REQUIRE_VOTE_UI = ข้ามการเช็กนี้ (ถือว่าอยู่ในเกมเสมอ)
+local gameLatched = false
+local function inGame()
+    if not CONFIG.REQUIRE_VOTE_UI then return true end
+    local g = gameUI()
+    if not g then
+        gameLatched = false
+        return false
+    end
+    if g:FindFirstChild("GamemodeVoting") then gameLatched = true end
+    return gameLatched
+end
+
+local goCache = { t = 0, v = false }
+local function isGameOver()
+    local now = os.clock()
+    if now - goCache.t < 0.08 then return goCache.v end
+    local f = gameUI("FinalUI")
+    goCache.v = (f ~= nil) and guiVisible(f)
+    goCache.t = now
+    return goCache.v
+end
+
+-- ปุ่มที่กดได้: ตัวมันเอง > ลูก > พ่อ
+local function clickable(obj)
+    if obj:IsA("GuiButton") then return obj end
+    for _, d in ipairs(obj:GetDescendants()) do
+        if d:IsA("GuiButton") then return d end
+    end
+    local p = obj.Parent
+    for _ = 1, 3 do
+        if p and p:IsA("GuiButton") then return p end
+        p = p and p.Parent
+    end
+    return obj
+end
+
+-- วิธี 1: สั่ง connection ของปุ่มโดยตรง
+local function clickButton(btn)
+    if not (getconnections and btn) then return false end
+    local fired = false
+    for _, sigName in ipairs({ "MouseButton1Click", "Activated", "MouseButton1Down" }) do
+        local ok, list = pcall(function() return getconnections(btn[sigName]) end)
+        if ok and list then
+            for _, c in ipairs(list) do
+                pcall(function() c:Fire() end)
+                fired = true
+            end
+        end
+        if fired then break end
+    end
+    return fired
+end
+
+-- วิธี 2: จำลองเมาส์คลิกตรงกลางปุ่ม
+local function mouseClick(btn)
+    if not (VirtualInputManager and btn) then return false end
+    local ok = pcall(function()
+        local pos, size = btn.AbsolutePosition, btn.AbsoluteSize
+        -- ScreenGui ที่ IgnoreGuiInset = true พิกัดเป็นพิกัดจอจริงอยู่แล้ว ห้ามบวก inset (ไม่งั้นคลิกเลื่อนลงไปโดนปุ่มข้างเคียง)
+        local gui = btn:FindFirstAncestorWhichIsA("ScreenGui")
+        local insetY = (gui and gui.IgnoreGuiInset) and 0 or GuiService:GetGuiInset().Y
+        local x = pos.X + size.X / 2
+        local y = pos.Y + size.Y / 2 + insetY
+        VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 1)
+        task.wait(0.05)
+        VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 1)
+    end)
+    return ok
+end
+
+-- attempt เลขคี่ = วิธี 1 / เลขคู่ = วิธี 2 (สลับกันเผื่อวิธีใดวิธีหนึ่งไม่ติด)
+local function pressObj(obj, tag, attempt)
+    local btn = clickable(obj)
+    if (attempt or 1) % 2 == 1 then
+        if clickButton(btn) then return true end
+        return mouseClick(btn)
+    end
+    if mouseClick(btn) then return true end
+    return clickButton(btn)
+end
+
+-- ========== Remote ยิงเอง ==========
+local function fire(rem, ...)
+    local args = table.pack(...)
+    selfFiring = true
+    local ok, err = pcall(function() rem:FireServer(table.unpack(args, 1, args.n)) end)
+    selfFiring = false
+    return ok, err
+end
+
+-- ========== ตัวช่วยแปลงค่าเป็นข้อความสั้น (ใช้ใน Log) ==========
+local function short(v, depth)
+    depth = depth or 0
+    local t = typeof(v)
+    if t == "string" then
+        return '"' .. (#v > 40 and (v:sub(1, 40) .. "…") or v) .. '"'
+    elseif t == "number" then
+        return string.format("%.4g", v)
+    elseif t == "boolean" or t == "nil" then
+        return tostring(v)
+    elseif t == "Vector3" then
+        return string.format("V3(%.1f,%.1f,%.1f)", v.X, v.Y, v.Z)
+    elseif t == "CFrame" then
+        local p = v.Position
+        return string.format("CF(%.1f,%.1f,%.1f)", p.X, p.Y, p.Z)
+    elseif t == "Instance" then
+        return "<" .. v.Name .. ">"
+    elseif t == "table" then
+        if depth >= 3 then return "{…}" end
+        local parts, n = {}, 0
+        for k, x in pairs(v) do
+            n = n + 1
+            if n > 8 then parts[#parts + 1] = "…" break end
+            parts[#parts + 1] = (type(k) == "number" and "" or (tostring(k) .. "=")) .. short(x, depth + 1)
+        end
+        return "{" .. table.concat(parts, ", ") .. "}"
+    end
+    return "<" .. t .. ">"
+end
+
+local function shortArgs(args)
+    local out = {}
+    for i = 1, args.n do out[i] = short(args[i], 0) end
+    local s = table.concat(out, " | ")
+    if #s > 220 then s = s:sub(1, 220) .. "…" end
+    return s
+end
+
+-- =====================================================================
+--  หา Id ของยูนิตที่เพิ่งวาง
+--  แหล่งหลัก: workspace.Game.Towers  -> ตัวที่เด้งเข้ามาหลังวางคือยูนิตนั้น  ชื่อ (Name) = Id ที่ใช้อัปเกรด
+--  แหล่งสำรอง: GUID ที่เซิร์ฟเวอร์ส่งมากับ RemoteEvent (OnClientEvent) ช่วงหลังวาง
+-- =====================================================================
+local TD = {
+    cands = {},        -- { id, t, src, inst?, name?, pos?, bare? }
+    used = {},         -- Id ที่จับคู่แล้วในรอบนี้
+    upg = {},          -- [Id] = { t, level, price }  จาก TowerUpgrade.OnClientEvent
+    scanUntil = 0,     -- ก่อนเวลานี้ ถึงจะสแกน event หา GUID
+    sniffUntil = 0,    -- ก่อนเวลานี้ ถึงจะจด event ลง Log
+    rate = {},
+    tapped = {},
+    towersFolder = nil,
+}
+
+local function isGuid(s)
+    return type(s) == "string" and #s == 36 and string.match(s, "^%x+%-%x+%-%x+%-%x+%-%x+$") ~= nil
+end
+
+local function addCand(c)
+    c.t = c.t or os.clock()
+    TD.cands[#TD.cands + 1] = c
+    local now = os.clock()
+    while #TD.cands > 80 or (TD.cands[1] and now - TD.cands[1].t > 60) do
+        table.remove(TD.cands, 1)
+    end
+end
+
+local function instPos(inst)
+    if not inst then return nil end
+    local ok, p = pcall(function()
+        if inst:IsA("Model") then return inst:GetPivot().Position end
+        if inst:IsA("BasePart") then return inst.Position end
+    end)
+    if ok then return p end
+    return nil
+end
+
+-- ---- แหล่งหลัก : workspace.Game.Towers ----
+local function hookTowersFolder(folder)
+    if not folder or TD.towersFolder == folder then return end
+    TD.towersFolder = folder
+    track(folder.ChildAdded:Connect(function(child)
+        if not alive then return end
+        addCand({ id = child.Name, src = "towers", inst = child })
+        if CONFIG.SNIFFER then
+            logf("◀ Towers +%s  pos=%s", child.Name, short(instPos(child), 0))
+        end
+    end))
+end
+
+task.spawn(function()
+    local g = workspace:WaitForChild("Game", 30)
+    local f = g and g:WaitForChild("Towers", 30)
+    if f and alive then
+        hookTowersFolder(f)
+        log("ผูก workspace.Game.Towers แล้ว")
+    elseif alive then
+        log("⚠️ ไม่เจอ workspace.Game.Towers (จะรอใหม่เมื่อเกมโหลด)")
+    end
+end)
+
+-- ---- แหล่งสำรอง : GUID จาก event ----
+local ID_KEYS = { "Id", "ID", "id", "TowerId", "TowerID", "Guid", "GUID", "UID", "Uid" }
+
+local function collectIds(v, out, seen, depth, budget)
+    if depth > 3 or budget.n <= 0 then return end
+    if type(v) == "string" then
+        if isGuid(v) and not seen[v] then
+            local c = { id = v, bare = true }
+            seen[v] = c
+            out[#out + 1] = c
+        end
+        return
+    end
+    if type(v) ~= "table" then return end
+    budget.n = budget.n - 1
+    for _, k in ipairs(ID_KEYS) do
+        local x = v[k]
+        if isGuid(x) then
+            local pos = v.Pos or v.Position
+            if typeof(pos) ~= "Vector3" then
+                pos = (typeof(v.CFrame) == "CFrame") and v.CFrame.Position or nil
+            end
+            local c = seen[x]
+            if not c then
+                c = { id = x }
+                seen[x] = c
+                out[#out + 1] = c
+            end
+            c.bare = nil
+            c.name = c.name or v.Name or v.UnitName or v.TowerName
+            c.pos = c.pos or pos
+            break
+        end
+    end
+    for k, x in pairs(v) do
+        budget.n = budget.n - 1
+        if k ~= "UnitId" and k ~= "UnitID" then
+            collectIds(x, out, seen, depth + 1, budget)
+        end
+    end
+end
+
+local function onRemoteEvent(rem, ...)
+    local name = rem.Name
+    local args = table.pack(...)
+    local now = os.clock()
+
+    if name == "TowerUpgrade" then
+        local p = args[1]
+        if type(p) == "table" and p.Id ~= nil then
+            local st = type(p.Stats) == "table" and p.Stats or nil
+            TD.upg[tostring(p.Id)] = {
+                t = now,
+                level = tonumber(p.Level),
+                price = st and tonumber(st.Price) or nil,
+            }
+        end
+    end
+
+    if CONFIG.SNIFFER and now < TD.sniffUntil then
+        local r = TD.rate[name]
+        if not r or now - r.t0 >= 1 then
+            r = { t0 = now, n = 0 }
+            TD.rate[name] = r
+        end
+        r.n = r.n + 1
+        if r.n <= 3 then log("◀ " .. name .. "  " .. shortArgs(args)) end
+    end
+
+    if name ~= "TowerUpgrade" and now < TD.scanUntil then
+        local out, seen, budget = {}, {}, { n = 80 }
+        for i = 1, args.n do collectIds(args[i], out, seen, 0, budget) end
+        for _, c in ipairs(out) do
+            c.t = now
+            c.src = "event"
+            c.from = name
+            addCand(c)
+        end
+    end
+end
+
+local function tapRemote(rem)
+    if TD.tapped[rem] then return end
+    if not rem:IsA("RemoteEvent") then return end
+    TD.tapped[rem] = true
+    track(rem.OnClientEvent:Connect(function(...)
+        if not alive then return end
+        local ok, err = pcall(onRemoteEvent, rem, ...)
+        if not ok then logf("onRemoteEvent error: %s", tostring(err)) end
+    end))
+end
+
+if netFolder then
+    for _, c in ipairs(netFolder:GetChildren()) do tapRemote(c) end
+    track(netFolder.ChildAdded:Connect(tapRemote))
+end
+
+-- ---- จับคู่ผู้สมัครกับยูนิตที่วาง ----
+local function nameMatch(a, b)
+    a, b = string.lower(tostring(a)), string.lower(tostring(b))
+    return a == b or string.find(a, b, 1, true) ~= nil or string.find(b, a, 1, true) ~= nil
+end
+
+local function scoreCand(c, a)
+    local s
+    if c.src == "towers" then s = 3 elseif c.bare then s = 0.5 else s = 1 end
+
+    local cpos = c.pos or (c.inst and instPos(c.inst))
+    if typeof(cpos) == "Vector3" and typeof(a.pos) == "Vector3" then
+        local d = Vector3.new(cpos.X - a.pos.X, 0, cpos.Z - a.pos.Z).Magnitude
+        if d <= 5 then s = s + 5 elseif d > 25 then return nil end
+    end
+    if c.name and a.name then
+        if nameMatch(c.name, a.name) then s = s + 2 else return nil end
+    end
+    return s
+end
+
+-- หาผู้สมัครที่ดีที่สุดที่โผล่หลังเวลา since (ไม่รอ)
+function TD.pick(action, since)
+    local best, bestScore
+    for _, c in ipairs(TD.cands) do
+        if c.t >= since and not TD.used[c.id] and c.id ~= action.unitId
+            and not (c.inst and not c.inst.Parent) then
+            local sc = scoreCand(c, action)
+            if sc and (not bestScore or sc > bestScore) then best, bestScore = c, sc end
+        end
+    end
+    return best
+end
+
+-- รอจนเจอ Id (หรือหมดเวลา)  คืน id หรือ nil
+function TD.claim(action, since, timeout, active)
+    local deadline = os.clock() + timeout
+    repeat
+        local c = TD.pick(action, since)
+        if c then
+            TD.used[c.id] = true
+            return c.id, c.src
+        end
+        task.wait(0.05)
+    until os.clock() > deadline or (active and not active())
+    return nil
+end
+
+-- =====================================================================
+--  บันทึกมาโคร (ดัก FireServer ของ ModeVote / TowerAdd / TowerUpgrade)
+-- =====================================================================
+local lastVote = nil   -- { args = {...}, t = เวลา }  โหวตล่าสุดที่ผู้เล่นกดเอง
+local rec = { times = {}, ticketIssued = 0, ticketServing = 0, pending = 0, measures = 0 }
+
+local function refreshAll()
+    if ui.refreshAll then pcall(ui.refreshAll) end
+end
+
+local function nextAfter(tc)
+    local best
+    for _, t in ipairs(rec.times) do
+        if t > tc and (not best or t < best) then best = t end
+    end
+    return best
+end
+
+-- เงินที่ลดลงในช่วง [t0, t1]  (ทำเครื่องหมายว่าใช้แล้ว กันนับซ้ำกับแอคชันถัดไป)
+local function measureCost(t0, t1)
+    local tot = 0
+    for i = MONEY.head, MONEY.tail do
+        local e = MONEY.log[i]
+        if e and not e.claimed and e.t >= t0 - 0.1 and e.t <= t1 and e.d < 0 then
+            tot = tot - e.d
+            e.claimed = true
+        end
+    end
+    return tot
+end
+
+local function scheduleMeasure(action, tc)
+    rec.measures = rec.measures + 1
+    task.spawn(function()
+        local win = math.max(1.0, getPing() * 2 + 0.7)
+        task.wait(win)
+        local t1 = tc + win
+        local nxt = nextAfter(tc)
+        if nxt and nxt < t1 then t1 = nxt end
+
+        local cost = 0
+        if moneyOK() then cost = measureCost(tc, t1) end
+
+        if action.type == "Upgrade" then
+            local u = TD.upg[action.tid]
+            if u and u.t >= tc - 0.1 then
+                action.level = u.level
+                if cost <= 0 and u.price then
+                    cost = u.price
+                elseif u.price and math.abs(cost - u.price) <= 1 then
+                    action.costExact = true
+                end
+            end
+        end
+        action.cost = cost
+        rec.measures = rec.measures - 1
+        refreshAll()
+    end)
+end
+
+-- หา Id ของยูนิตที่เพิ่งวาง (เรียงคิว กันสองตัวแย่งกัน)
+local function registerPlaced(action, tc)
+    rec.pending = rec.pending + 1
+    rec.ticketIssued = rec.ticketIssued + 1
+    local my = rec.ticketIssued
+    task.spawn(function()
+        while rec.ticketServing + 1 ~= my and alive do task.wait(0.05) end
+        local id, src = TD.claim(action, tc - 0.3, CONFIG.ID_WAIT + 1, function() return alive end)
+        if id then
+            action.tid = id
+            logf("ยูนิต %s -> Id %s (จาก %s)", tostring(action.name), tostring(id), tostring(src))
+        else
+            logf("⚠️ จับ Id ของ %s ไม่ได้ (ดู Log / Settings > Detection)", tostring(action.name))
+        end
+        rec.ticketServing = my
+        rec.pending = rec.pending - 1
+        refreshAll()
+    end)
+end
+
+local function recordPlace(p, tc)
+    if type(p) ~= "table" then return end
+    local cf = typeof(p.CFrame) == "CFrame" and p.CFrame or nil
+    local pos = typeof(p.Pos) == "Vector3" and p.Pos or (cf and cf.Position) or nil
+    local action = {
+        type = "Place", name = p.Name, unitId = p.UnitId,
+        cframe = cf, pos = pos, cost = 0,
+    }
+    recordedActions[#recordedActions + 1] = action
+    rec.times[#rec.times + 1] = tc
+    macroDirty = true
+    setStatus(string.format("บันทึก #%d วาง %s", #recordedActions, tostring(p.Name)), "ok", "circle-dot")
+    registerPlaced(action, tc)
+    scheduleMeasure(action, tc)
+    refreshAll()
+end
+
+local function recordUpgrade(p, tc)
+    if type(p) ~= "table" or p.Id == nil then return end
+    local action = { type = "Upgrade", tid = tostring(p.Id), cost = 0 }
+    recordedActions[#recordedActions + 1] = action
+    rec.times[#rec.times + 1] = tc
+    macroDirty = true
+    setStatus(string.format("บันทึก #%d อัปเกรด", #recordedActions), "ok", "circle-dot")
+    scheduleMeasure(action, tc)
+    refreshAll()
+end
+
+-- จับคู่ Upgrade -> Place ผ่าน tid (ถ้า Place ไหนไม่มี tid ให้เดาจากลำดับ)
+local function linkUnits(actions)
+    local idToIndex = {}
+    for i, a in ipairs(actions) do
+        if a.type == "Place" and a.tid then idToIndex[a.tid] = i end
+    end
+    local unresolved, guessed = 0, 0
+    for i, a in ipairs(actions) do
+        if a.type == "Upgrade" then
+            if not idToIndex[a.tid] then
+                for j = 1, i - 1 do
+                    local p = actions[j]
+                    if p.type == "Place" and not p.tid then
+                        p.tid = a.tid
+                        idToIndex[a.tid] = j
+                        guessed = guessed + 1
+                        break
+                    end
+                end
+            end
+            a.unitRef = idToIndex[a.tid]
+            if not a.unitRef then unresolved = unresolved + 1 end
+        end
+    end
+    return unresolved, guessed
+end
+
+-- ---------- hook FireServer ----------
+local function onOutgoing(rem, args)
+    if not alive then return end
+    local now = os.clock()
+    TD.scanUntil = now + 8
+    TD.sniffUntil = now + 6
+    if CONFIG.SNIFFER then log("▶ " .. rem.Name .. "  " .. shortArgs(args)) end
+
+    if rem == modeVoteRE then
+        lastVote = { args = { table.unpack(args, 1, args.n) }, t = now }
+        if isRecording and not isPlaying then
+            macroMeta.vote = lastVote.args
+            macroDirty = true
+            notify("จับการโหวตโหมด: " .. short(lastVote.args[1], 0), nil, 4, "flag")
+            refreshAll()
+        end
+    elseif isRecording and not isPlaying then
+        if rem == towerAddRE then
+            recordPlace(args[1], now)
+        elseif rem == towerUpgradeRE then
+            recordUpgrade(args[1], now)
+        end
+    end
+end
+
+if hookmetamethod and getnamecallmethod then
+    local oldNamecall
+    oldNamecall = hookmetamethod(game, "__namecall", (newcclosure or function(f) return f end)(function(self, ...)
+        local method = getnamecallmethod()
+        if alive and method == "FireServer" and not selfFiring
+            and not (checkcaller and checkcaller())
+            and (self == towerAddRE or self == towerUpgradeRE or self == modeVoteRE) then
+            local args = table.pack(...)
+            task.defer(onOutgoing, self, args)
+        end
+        if setnamecallmethod then setnamecallmethod(method) end
+        return oldNamecall(self, ...)
+    end))
+else
+    log("⚠️ executor ไม่รองรับ hookmetamethod: บันทึกมาโครไม่ได้ (เล่นของที่เซฟไว้ได้)")
+end
+
+-- ---------- เริ่ม / จบการบันทึก ----------
+local function startRecording()
+    if isPlaying then
+        setStatus("กำลังเล่นมาโครอยู่ หยุดก่อนจึงจะบันทึกได้", "warn", "square")
+        return false
+    end
+    if isRecording then return false end
+    if not (towerAddRE and towerUpgradeRE) then
+        setStatus("ไม่พบ Remote ของเกม (TowerAdd / TowerUpgrade)", "bad", "x")
+        return false
+    end
+    if not (hookmetamethod and getnamecallmethod) then
+        setStatus("executor ไม่รองรับ hookmetamethod บันทึกไม่ได้", "bad", "x")
+        return false
+    end
+    if not inGame() then
+        setStatus("ตอนนี้อยู่ลอบบี้ (ไม่เจอ GamemodeVoting) บันทึกได้เฉพาะตอนอยู่ในเกม", "warn", "flag")
+        return false
+    end
+    if CONFIG.REQUIRE_VOTE_UI and not votingOpen() then
+        setStatus("เริ่มบันทึกได้เฉพาะตอนหน้าโหวตโหมด (GamemodeVoting) เปิดอยู่ รอเกมใหม่แล้วกดอีกครั้ง", "warn", "flag")
+        return false
+    end
+
+    recordedActions = {}
+    macroMeta = { vote = nil }
+    rec.times = {}
+    rec.ticketIssued, rec.ticketServing, rec.pending, rec.measures = 0, 0, 0, 0
+    TD.used = {}
+    selectedName = nil
+    macroDirty = true
+    -- ผู้เล่นโหวตไปก่อนกดบันทึก (หน้าโหวตยังเปิดอยู่) ก็เก็บโหวตนั้นไว้
+    if lastVote and os.clock() - lastVote.t < 60 and votingOpen() then
+        macroMeta.vote = lastVote.args
+    end
+    isRecording = true
+    setStatus("เริ่มบันทึก: โหวตโหมด วางยูนิต อัปเกรดตามปกติ", "ok", "circle-dot")
+    refreshAll()
+    return true
+end
+
+local function finishRecording(reason)
+    if not isRecording then return end
+    isRecording = false
+    refreshAll()
+    setStatus(reason or "กำลังสรุปการบันทึก...", "warn", "hourglass")
+    task.spawn(function()
+        local t = os.clock()
+        while (rec.pending > 0 or rec.measures > 0) and os.clock() - t < 8 and alive do
+            task.wait(0.1)
+        end
+        local unresolved, guessed = linkUnits(recordedActions)
+        macroDirty = true
+
+        if #recordedActions == 0 then
+            setStatus("ไม่ได้บันทึกอะไรเลย", "warn", "x")
+            refreshAll()
+            return
+        end
+
+        local base = cleanName(ui.nameBox and ui.nameBox.Text or "")
+        if base == "" then base = "Macro_" .. os.date("%H%M%S") end
+        local name = uniqueName(base)
+        local ok, err = saveMacro(name, recordedActions, macroMeta)
+        if ok then
+            selectedName = name
+            macroDirty = false
+        end
+
+        local msg = string.format("จบการบันทึก %d แอคชัน | โหวต: %s", #recordedActions,
+            macroMeta.vote and short(macroMeta.vote[1], 0) or "ไม่มี")
+        if ok then msg = msg .. " | เซฟเป็น " .. name else msg = msg .. " | เซฟไม่สำเร็จ: " .. tostring(err) end
+        if guessed > 0 then msg = msg .. string.format(" | เดา Id จากลำดับ %d ตัว", guessed) end
+        if unresolved > 0 then msg = msg .. string.format(" | อัปเกรดหาตัวอ้างอิงไม่ได้ %d", unresolved) end
+        setStatus(msg, (unresolved > 0 or not ok) and "warn" or "ok", "save")
+        refreshAll()
+    end)
+end
+
+-- =====================================================================
+--  เล่นมาโครซ้ำ
+-- =====================================================================
+local function costInfo(action)
+    local base = action.cost or 0
+    local cost = base > 0 and (base + CONFIG.COST_MARGIN) or 0
+    local free = base <= 0 and action.costExact == true
+    local unknown = base <= 0 and not free
+    return cost, free, unknown
+end
+
+-- รอจนเงินพอ  คืน "ready" | "probe" (ใกล้พอ ลองยิง) | "timeout" | "aborted" | "gameover"
+local function waitUntilAffordable(spec, lastFireT)
+    if spec.unknown or spec.cost <= 0 or not moneyOK() then return "ready" end
+    spec.waitSince = spec.waitSince or os.clock()
+    local eager = CONFIG.EAGER_PERCENT / 100
+    local lastNotice = 0
+    while true do
+        if not spec.active() then return "aborted" end
+        if isGameOver() then return "gameover" end
+        local m = getMoney()
+        if m == nil or m >= spec.cost then return "ready" end
+        local now = os.clock()
+        if CONFIG.EAGER_ON and m >= spec.cost * eager and now - lastFireT >= CONFIG.PROBE_INTERVAL then
+            return "probe"
+        end
+        if now - spec.waitSince > CONFIG.MONEY_TIMEOUT then return "timeout" end
+        if now - lastNotice > 1 then
+            lastNotice = now
+            setStatus(string.format("%s | รอเงิน %s/%s", spec.label, fmtNum(m), fmtNum(spec.cost)), "warn", "coins")
+        end
+        task.wait(0.1)
+    end
+end
+
+-- spec = { label, cost, unknown, maxAttempts, statKey, active, attempt = function(t0) -> ok, extra }
+-- คืน "ok", extra | "failed" | "aborted" | "gameover"
+local function runWithRetry(spec)
+    local startT, attempts, lastFireT = os.clock(), 0, -math.huge
+    while true do
+        if spec.unknown then
+            if attempts > 0 and os.clock() - startT > CONFIG.UNKNOWN_COST_WAIT then break end
+        elseif attempts >= spec.maxAttempts then
+            break
+        end
+
+        local w = waitUntilAffordable(spec, lastFireT)
+        if w == "aborted" or w == "gameover" then return w end
+        local probing = (w == "probe")
+        if w == "timeout" then
+            logf("%s: รอเงินเกิน %d วิ ลองยิงเลย", spec.label, CONFIG.MONEY_TIMEOUT)
+        end
+        if not probing then attempts = attempts + 1 end
+
+        local t0 = os.clock()
+        lastFireT = t0
+        local okCall, success, extra = pcall(spec.attempt, t0)
+        if not okCall then
+            logf("%s: error %s", spec.label, tostring(success))
+            success, extra = false, nil
+        end
+        if not spec.active() then return "aborted" end
+
+        if success then
+            stats[spec.statKey] = stats[spec.statKey] + 1
+            return "ok", extra
+        end
+        if not probing then
+            stats.retries = stats.retries + 1
+            task.wait(CONFIG.RETRY_DELAY)
+        end
+    end
+    stats.failures = stats.failures + 1
+    logf("%s: ไม่สำเร็จ", spec.label)
+    return "failed"
+end
+
+-- วางแล้วสำเร็จไหม: เจอ Id ใหม่ใน workspace.Game.Towers (หรือ event) หรือเงินลดลง
+local function awaitPlaced(action, since, active, minDrop, t0)
+    local deadline = t0 + math.max(1.5, getPing() * 2 + 1.0)
+    while os.clock() < deadline and active() do
+        local c = TD.pick(action, since - 0.3)
+        if c then
+            TD.used[c.id] = true
+            return true, c.id
+        end
+        if moneyOK() and spendSince(since, minDrop) then
+            -- เงินลดแล้ว = วางสำเร็จ แต่ขอรอ Id อีกนิด (ต้องใช้ตอนอัปเกรด)
+            local d2 = os.clock() + CONFIG.ID_WAIT
+            while os.clock() < d2 and active() do
+                local c2 = TD.pick(action, since - 0.3)
+                if c2 then
+                    TD.used[c2.id] = true
+                    return true, c2.id
+                end
+                task.wait(0.05)
+            end
+            return true, nil
+        end
+        task.wait(0.05)
+    end
+    return false
+end
+
+-- =====================================================================
+--  UnitId จาก Attributes ของผู้เล่น (Players.<ชื่อเรา>:GetAttributes())
+--    Slot1 = "Camera Helicopter"   Slot1Id = "2dfed4cf-7359-..."
+--  UnitId เปลี่ยนได้ทุกครั้งที่เข้าเกม -> ก่อนวางให้หาช่องที่ "ชื่อตรงกับที่บันทึกไว้" แล้วใช้ Id ของช่องนั้น
+-- =====================================================================
+local function normName(v)
+    return (tostring(v):gsub("^%s+", ""):gsub("%s+$", "")):lower()
+end
+
+local function hasSlotAttrs()
+    for k in pairs(player:GetAttributes()) do
+        if type(k) == "string" and k:match("^Slot%d+$") then return true end
+    end
+    return false
+end
+
+-- คืน id, เลขช่อง  (ชื่อซ้ำหลายช่อง = เอาช่องเลขน้อยสุด)  ไม่เจอ = nil
+local function slotUnitId(name)
+    if name == nil then return nil end
+    local attrs = player:GetAttributes()
+    local want = normName(name)
+    local bestId, bestSlot
+    for k, v in pairs(attrs) do
+        local n = type(k) == "string" and k:match("^Slot(%d+)$")
+        if n and type(v) == "string" and normName(v) == want then
+            local id = attrs["Slot" .. n .. "Id"]
+            local num = tonumber(n)
+            if type(id) == "string" and id ~= "" and (not bestSlot or num < bestSlot) then
+                bestId, bestSlot = id, num
+            end
+        end
+    end
+    return bestId, bestSlot
+end
+
+-- รอ Attributes ขึ้น (สูงสุด 3 วิ) แล้วหา Id ของยูนิตชื่อนี้  ไม่เจอ = nil
+local function resolveUnitId(name, active)
+    local deadline = os.clock() + 3
+    repeat
+        local id, slot = slotUnitId(name)
+        if id then return id, slot end
+        if hasSlotAttrs() then break end   -- Slot มีแล้วแต่ไม่มีชื่อนี้ ไม่ต้องรอ
+        task.wait(0.1)
+    until os.clock() > deadline or (active and not active())
+    return nil
+end
+
+local function playPlace(action, i, total, active, label)
+    local cost, _, unknown = costInfo(action)
+    local minDrop = math.max(1, (action.cost or 0) * 0.5)
+    local firstT
+
+    -- ก่อนวาง: เอา Id ของยูนิตที่ชื่อตรงกับที่บันทึกไว้ จาก Slot ของผู้เล่นมาใส่
+    local liveId, liveSlot = resolveUnitId(action.name, active)
+    if liveId then
+        if liveId ~= action.unitId then
+            logf("UnitId ของ %s: ใช้ %s (Slot%d) แทนที่บันทึกไว้ %s",
+                tostring(action.name), liveId, liveSlot, tostring(action.unitId))
+        end
+        action.unitId = liveId
+    else
+        logf("⚠️ ไม่เจอยูนิต %s ใน Slot ของผู้เล่น ใช้ UnitId ที่บันทึกไว้ (%s)",
+            tostring(action.name), tostring(action.unitId))
+    end
+
+    return runWithRetry({
+        label = string.format("%s | #%d/%d วาง %s", label, i, total, tostring(action.name)),
+        cost = cost, unknown = unknown, maxAttempts = CONFIG.PLACE_RETRIES,
+        statKey = "placed", active = active,
+        attempt = function(t0)
+            firstT = firstT or t0
+            TD.scanUntil = os.clock() + 8
+            TD.sniffUntil = os.clock() + 6
+            action.unitId = slotUnitId(action.name) or action.unitId   -- เผื่อ Slot เปลี่ยนระหว่างรอเงิน
+            local ok, err = fire(towerAddRE, {
+                UnitId = action.unitId, CFrame = action.cframe,
+                Name = action.name, Pos = action.pos,
+            })
+            if not ok then
+                logf("ยิง TowerAdd ไม่ได้: %s", tostring(err))
+                return false
+            end
+            return awaitPlaced(action, firstT, active, minDrop, t0)
+        end,
+    })
+end
+
+local function playUpgrade(action, i, total, active, label, placedMap, failedRef)
+    local ref = action.unitRef
+    if ref and failedRef[ref] then
+        logf("ข้าม #%d: ยูนิตอ้างอิง #%d วางไม่สำเร็จ", i, ref)
+        return "skipped"
+    end
+
+    local id = ref and placedMap[ref] or nil
+    if not id and ref then
+        -- เก็บ Id ย้อนหลังจากตัวที่โผล่ใน Towers แต่ยังไม่ถูกจับคู่
+        local pa = recordedActions[ref]
+        local c = pa and TD.pick(pa, (TD.roundT or 0) - 0.3)
+        if c then
+            TD.used[c.id] = true
+            id = c.id
+            placedMap[ref] = id
+            logf("เก็บ Id ย้อนหลังของ #%d -> %s", ref, tostring(id))
+        end
+    end
+    if not id then id = action.tid end
+    if not id then
+        logf("ข้าม #%d: ไม่รู้ Id ของยูนิต", i)
+        return "skipped"
+    end
+
+    local cost, _, unknown = costInfo(action)
+    local minDrop = math.max(1, (action.cost or 0) * 0.5)
+    local firstT, before
+    local refName = ref and recordedActions[ref] and recordedActions[ref].name or "?"
+    return runWithRetry({
+        label = string.format("%s | #%d/%d อัปเกรด %s", label, i, total, tostring(refName)),
+        cost = cost, unknown = unknown, maxAttempts = CONFIG.UPGRADE_RETRIES,
+        statKey = "upgraded", active = active,
+        attempt = function(t0)
+            firstT = firstT or t0
+            before = before or ((TD.upg[id] and TD.upg[id].level) or 0)
+            TD.sniffUntil = os.clock() + 6
+            local ok, err = fire(towerUpgradeRE, { Id = id })
+            if not ok then
+                logf("ยิง TowerUpgrade ไม่ได้: %s", tostring(err))
+                return false
+            end
+            local deadline = t0 + math.max(0.8, getPing() * 2 + 0.6)
+            while os.clock() < deadline and active() do
+                local u = TD.upg[id]
+                if u and u.t >= firstT - 0.02 and (not u.level or u.level > before) then return true end
+                if moneyOK() and spendSince(firstT, minDrop) then return true end
+                task.wait(0.05)
+            end
+            return false
+        end,
+    })
+end
+
+-- เล่นแอคชันทั้งหมด 1 รอบ  คืน "done" | "gameover" | "aborted"
+local function playActions(active, label)
+    TD.used = {}
+    TD.roundT = os.clock()
+    local placedMap, failedRef = {}, {}
+    local total = #recordedActions
+    for i, action in ipairs(recordedActions) do
+        if not active() then return "aborted" end
+        if isGameOver() then return "gameover" end
+
+        local st, extra
+        if action.type == "Place" then
+            if towerAddRE then
+                st, extra = playPlace(action, i, total, active, label)
+                if st == "ok" then
+                    if extra then placedMap[i] = extra end
+                elseif st == "failed" then
+                    failedRef[i] = true
+                end
+            end
+        elseif action.type == "Upgrade" then
+            if towerUpgradeRE then
+                st = playUpgrade(action, i, total, active, label, placedMap, failedRef)
+            end
+        end
+        if st == "aborted" or st == "gameover" then return st end
+        task.wait(0.05)
+    end
+    return "done"
+end
+
+-- =====================================================================
+--  เริ่มเกม (โหวตโหมด) / จบเกม (PlayAgain) / ต่อหลังย้ายเซิร์ฟ
+-- =====================================================================
+local function waitRoundStart(active, label)
+    local t0 = os.clock()
+    while active() do
+        if isGameOver() then return "gameover" end
+        if votingOpen() then break end
+        if os.clock() - t0 > CONFIG.VOTE_WAIT then
+            logf("ไม่เจอหน้าโหวตโหมดภายใน %d วิ ถือว่าเกมเริ่มแล้ว", CONFIG.VOTE_WAIT)
+            return "started"
+        end
+        setStatus(string.format("รอบ %s | รอหน้าโหวตโหมด", label), "warn", "hourglass")
+        task.wait(0.2)
+    end
+    if not active() then return "aborted" end
+
+    local vote = macroMeta.vote
+    local votedAt, voteTries = -10, 0
+    local tOpen = os.clock()
+    while active() and votingOpen() and os.clock() - tOpen < CONFIG.VOTE_CLOSE_WAIT do
+        if vote and #vote > 0 and modeVoteRE and voteTries < 4 and os.clock() - votedAt >= 3 then
+            voteTries = voteTries + 1
+            votedAt = os.clock()
+            TD.sniffUntil = os.clock() + 6
+            fire(modeVoteRE, table.unpack(vote, 1, #vote))
+            logf("โหวตโหมด: %s (ครั้งที่ %d)", short(vote[1], 0), voteTries)
+            setStatus(string.format("รอบ %s | โหวตโหมด: %s", label, short(vote[1], 0)), "ok", "flag")
+        end
+        task.wait(0.2)
+    end
+    if not active() then return "aborted" end
+
+    local delay = CONFIG.START_DELAY
+    if delay > 0 then
+        setStatus(string.format("รอบ %s | เริ่มใน %d วิ", label, delay), "ok", "timer")
+        local t = os.clock()
+        while active() and os.clock() - t < delay do task.wait(0.1) end
+    end
+    return active() and "started" or "aborted"
+end
+
+-- ----- resume (เล่นต่อหลังย้ายเซิร์ฟ) -----
+local function clearResume()
+    if isfile and delfile and isfile(RESUME_FILE) then pcall(delfile, RESUME_FILE) end
+end
+
+local function saveResume(completed, total, forever)
+    if not (writefile and CONFIG.AUTO_RESUME and selectedName) then return end
+    local data = {
+        playing = true, ts = os.time(), gameId = game.GameId, name = selectedName,
+        round = completed, total = forever and 0 or total, forever = forever and true or false,
+        stats = {
+            rounds = stats.rounds, placed = stats.placed, upgraded = stats.upgraded,
+            retries = stats.retries, failures = stats.failures, replayClicks = stats.replayClicks,
+            lastRound = stats.lastRound, totalRoundTime = stats.totalRoundTime,
+        },
+    }
+    pcall(function() writefile(RESUME_FILE, HttpService:JSONEncode(data)) end)
+end
+
+-- เกมจบ -> กด PlayAgain  คืน "ok" | "stopped" | "aborted"
+local function goPlayAgain(active, label, completed, total, forever)
+    if not CONFIG.AUTO_REPLAY then
+        while active() and isGameOver() do
+            setStatus(string.format("รอบ %s | เกมจบ รอกด PlayAgain เอง", label), "warn", "hourglass")
+            task.wait(0.5)
+        end
+        return active() and "ok" or "aborted"
+    end
+
+    task.wait(0.6)
+    saveResume(completed, total, forever)   -- เซฟก่อนกด เพราะเซิร์ฟที่ย้ายไปต้องรู้ว่าเล่นถึงไหนแล้ว
+
+    local tries, attempt = 0, 0
+    while active() and isGameOver() do
+        if tries >= CONFIG.REPLAY_MAX_TRIES then
+            if not forever then return "stopped" end
+            setStatus(string.format("รอบ %s | กด PlayAgain ไม่ติด พัก 8 วิแล้วลองใหม่", label), "warn", "hourglass")
+            local t = os.clock()
+            while active() and os.clock() - t < 8 do task.wait(0.2) end
+            tries = 0
+        end
+        tries = tries + 1
+        attempt = attempt + 1
+        stats.replayClicks = stats.replayClicks + 1
+
+        local btn = gameUI("FinalUI", "Content", "PlayAgain")
+        if not btn then
+            setStatus(string.format("รอบ %s | ยังไม่เจอปุ่ม PlayAgain", label), "warn", "hourglass")
+        else
+            setStatus(string.format("รอบ %s | กด PlayAgain (%d/%d)", label, tries, CONFIG.REPLAY_MAX_TRIES), "ok", "repeat")
+            local okc, errc = pcall(pressObj, btn, "PlayAgain", attempt)
+            if not okc then logf("กด PlayAgain error: %s", tostring(errc)) end
+        end
+
+        -- กดแล้วเกมจะนับถอยหลัง (~5 วิ) ห้ามกดซ้ำระหว่างนั้น -> รอ REPLAY_WAIT วิ (ค่าเริ่มต้น 7)
+        -- ถ้าเกมย้ายเซิร์ฟ สคริปต์ตัวนี้จะถูกปิดไปเอง / ถ้าครบเวลาแล้วหน้าจบเกมยังอยู่ ค่อยกดใหม่
+        if btn then
+            local e = 0
+            while e < CONFIG.REPLAY_WAIT and active() and isGameOver() do
+                setStatus(string.format("รอบ %s | กด PlayAgain แล้ว รอเกมนับถอยหลัง %d วิ", label,
+                    math.ceil(CONFIG.REPLAY_WAIT - e)), "ok", "hourglass")
+                task.wait(0.2)
+                e = e + 0.2
+            end
+        else
+            task.wait(0.5)
+        end
+    end
+    if not active() then return "aborted" end
+    return "ok"
+end
+
+-- ----- สถิติ -----
+local function fmtTime(sec)
+    sec = math.max(0, math.floor(sec or 0))
+    return string.format("%d:%02d:%02d", sec // 3600, (sec % 3600) // 60, sec % 60)
+end
+
+local function statsText()
+    local avg = stats.rounds > 0 and (stats.totalRoundTime / stats.rounds) or 0
+    local session = stats.sessionStart and (os.clock() - stats.sessionStart) or 0
+    return table.concat({
+        string.format("รอบที่เล่นจบ: %d", stats.rounds),
+        string.format("วางยูนิต: %d | อัปเกรด: %d", stats.placed, stats.upgraded),
+        string.format("ลองซ้ำ: %d | ล้มเหลว: %d", stats.retries, stats.failures),
+        string.format("กด PlayAgain: %d", stats.replayClicks),
+        string.format("รอบล่าสุด: %s | เฉลี่ย: %s", fmtTime(stats.lastRound), fmtTime(avg)),
+        string.format("เวลาที่รันสคริปต์: %s", fmtTime(session)),
+        moneyOK() and ("เงินตอนนี้: " .. fmtNum(getMoney())) or "เงินตอนนี้: ไม่พบ leaderstats.Money",
+    }, "\n")
+end
+
+-- ----- ลูปหลัก: เล่นกี่รอบก็ได้ (total = math.huge = ไม่จำกัด) -----
+local function runLoops(total, startCompleted, waitForGame)
+    if isPlaying then return end
+    if isRecording then
+        setStatus("หยุดบันทึกก่อนจึงจะเล่นได้", "warn", "square")
+        return
+    end
+    if #recordedActions == 0 then
+        setStatus("ยังไม่มีมาโครให้เล่น (บันทึกหรือโหลดก่อน)", "warn", "x")
+        return
+    end
+    if not (towerAddRE and towerUpgradeRE) then
+        setStatus("ไม่พบ Remote ของเกม (TowerAdd / TowerUpgrade)", "bad", "x")
+        return
+    end
+    if not inGame() and not waitForGame then
+        setStatus("ตอนนี้อยู่ลอบบี้ (ไม่เจอ GamemodeVoting) เล่นมาโครได้เฉพาะตอนอยู่ในเกม", "warn", "flag")
+        return
+    end
+    if not moneyOK() then
+        notify("ไม่พบเงิน (leaderstats.Money) จะเล่นแบบไม่รอเงิน", nil, 5, "coins")
+    end
+
+    local forever = (total == math.huge)
+    isPlaying = true
+    playToken = playToken + 1
+    local my = playToken
+    local function active() return alive and isPlaying and playToken == my end
+    stats.sessionStart = stats.sessionStart or os.clock()
+    refreshAll()
+
+    task.spawn(function()
+        local completed = startCompleted or 0
+        local stopMsg
+        local okRun, errRun = pcall(function()
+            -- เล่นต่อหลังย้ายเซิร์ฟ: รอจน GamemodeVoting โผล่ (GUI ของเกมยังโหลดไม่เสร็จ)
+            if waitForGame then
+                local tw = os.clock()
+                while active() and not inGame() and os.clock() - tw < 90 do
+                    setStatus("รอเข้าเกม (รอ GamemodeVoting)", "warn", "hourglass")
+                    task.wait(0.5)
+                end
+                if active() and not inGame() then
+                    stopMsg = "รอเข้าเกมนานเกิน 90 วิ ไม่เล่นต่อ"
+                end
+            end
+
+            while active() and not stopMsg and (forever or completed < total) do
+                local label = string.format("%d/%s", completed + 1, forever and "∞" or tostring(total))
+
+                if not inGame() then
+                    -- หลุดออกจากเกม/กลับลอบบี้: รอเฉยๆ ไม่ทำอะไร
+                    setStatus(string.format("รอบ %s | ไม่อยู่ในเกม (ลอบบี้?) รอ GamemodeVoting", label), "warn", "hourglass")
+                    task.wait(0.5)
+                else
+
+                -- A) หน้าจบเกมค้างอยู่ -> PlayAgain
+                if isGameOver() then
+                    local r = goPlayAgain(active, label, completed, total, forever)
+                    if r == "stopped" then
+                        stopMsg = "กด PlayAgain ไม่ติด หยุดเล่น"
+                        break
+                    elseif r ~= "ok" then
+                        break
+                    end
+                end
+
+                -- B) รอเกมเริ่ม + โหวตโหมด
+                local st = waitRoundStart(active, label)
+                if st == "aborted" then break end
+
+                if st == "started" then
+                    local roundStart = os.clock()
+                    logf("เริ่มรอบ %s", label)
+                    local result = playActions(active, label)
+                    if result == "aborted" then break end
+
+                    -- C) รอเกมจบ (AutoSkip จะข้ามเวฟให้เอง)
+                    while active() and not isGameOver() do
+                        setStatus(string.format("รอบ %s | วางครบแล้ว รอเกมจบ", label), "ok", "hourglass")
+                        task.wait(0.3)
+                    end
+                    if not active() then break end
+
+                    local dur = os.clock() - roundStart
+                    completed = completed + 1
+                    stats.rounds = stats.rounds + 1
+                    stats.lastRound = dur
+                    stats.totalRoundTime = stats.totalRoundTime + dur
+                    logf("จบรอบ %s ใช้เวลา %s", label, fmtTime(dur))
+                    sendWebhook("จบรอบ " .. label, statsText())
+                    refreshAll()
+                end
+                end -- inGame()
+            end
+        end)
+
+        if not okRun then
+            logf("runLoops error: %s", tostring(errRun))
+            stopMsg = "เกิดข้อผิดพลาด: " .. tostring(errRun)
+        end
+        if playToken == my then
+            isPlaying = false
+            clearResume()
+            refreshAll()
+            if alive then
+                setStatus(stopMsg or string.format("เล่นครบ %d รอบแล้ว", completed), stopMsg and "warn" or "ok", "trophy")
+            end
+        end
+    end)
+end
+
+local function stopAll(reason)
+    local was = isPlaying or isRecording
+    if isRecording then finishRecording("หยุดบันทึก") end
+    isPlaying = false
+    playToken = playToken + 1
+    clearResume()
+    refreshAll()
+    if was then setStatus(reason or "หยุดทั้งหมดแล้ว", "warn", "square") end
+end
+
+-- ----- ต่อหลังย้ายเซิร์ฟ -----
+local function setupQueue()
+    if not (CONFIG.AUTO_RESUME and queue_on_teleport) then return "ไม่ใช้ / executor ไม่รองรับ queue_on_teleport" end
+    local src
+    if SCRIPT_URL ~= "" then
+        src = string.format("loadstring(game:HttpGet(%q))()", SCRIPT_URL)
+    elseif SCRIPT_FILE ~= "" then
+        src = string.format("loadstring(readfile(%q))()", SCRIPT_FILE)
+    end
+    if not src then return "ไม่ได้ตั้ง SCRIPT_URL/SCRIPT_FILE (ต้องใช้ autoexec)" end
+    local ok = pcall(queue_on_teleport, src)
+    return ok and "queue_on_teleport พร้อม" or "queue_on_teleport ใช้ไม่ได้"
+end
+
+local function tryResume()
+    if not (CONFIG.AUTO_RESUME and isfile and readfile and isfile(RESUME_FILE)) then return end
+    local ok, d = pcall(function() return HttpService:JSONDecode(readfile(RESUME_FILE)) end)
+    if not ok or type(d) ~= "table" or not d.playing then return end
+    if os.time() - (tonumber(d.ts) or 0) > CONFIG.RESUME_MAX_AGE then
+        log("ไฟล์ resume เก่าเกินไป ไม่เล่นต่อ")
+        clearResume()
+        return
+    end
+    if d.gameId and d.gameId ~= game.GameId then
+        clearResume()
+        return
+    end
+    local actions, meta = loadMacro(tostring(d.name))
+    if not actions then
+        log("resume: โหลดมาโคร " .. tostring(d.name) .. " ไม่ได้")
+        clearResume()
+        return
+    end
+
+    recordedActions, macroMeta, selectedName = actions, meta or { vote = nil }, tostring(d.name)
+    macroDirty = false
+    if type(d.stats) == "table" then
+        for k, v in pairs(d.stats) do
+            if type(v) == "number" and stats[k] ~= nil then stats[k] = v end
+        end
+    end
+    refreshAll()
+
+    local forever = d.forever == true
+    local total = forever and math.huge or math.max(1, tonumber(d.total) or 1)
+    local completed = tonumber(d.round) or 0
+    if not forever and completed >= total then
+        clearResume()
+        return
+    end
+    notify(string.format("ย้ายเซิร์ฟแล้ว เล่นต่อจากรอบ %d: %s", completed + 1, selectedName), nil, 6, "play")
+    logf("resume: %s รอบที่ %d", selectedName, completed + 1)
+    task.wait(3)   -- ให้ GUI ของเกมโหลดก่อน
+    if alive then runLoops(total, completed, true) end
+end
+
+-- ----- AutoSkip: UIStroke โซนแดง = ปิด / ไม่แดง = เปิด -----
+local AS = { fail = 0, nextAt = 0, seen = 0 }
+
+local function skipZone()
+    local btn = gameUI("Stats", "AutoSkip", "Button")
+    local stroke = btn and btn:FindFirstChild("UIStroke")
+    if not stroke then return nil, btn end
+    local color
+    local grad = stroke:FindFirstChildOfClass("UIGradient")
+    if grad then
+        local okk, kps = pcall(function() return grad.Color.Keypoints end)
+        if okk and kps and #kps > 0 then
+            local r, g, b = 0, 0, 0
+            for _, k in ipairs(kps) do
+                r, g, b = r + k.Value.R, g + k.Value.G, b + k.Value.B
+            end
+            color = Color3.new(r / #kps, g / #kps, b / #kps)
+        end
+    end
+    color = color or stroke.Color
+    local h, s, v = color:ToHSV()
+    local red = s >= 0.35 and v >= 0.3 and (h <= 0.06 or h >= 0.94)
+    return red and "red" or "on", btn
+end
+
+local function skipStateText()
+    local zone, btn = skipZone()
+    if not btn then return "ไม่พบปุ่ม" end
+    if not zone then return "ไม่พบ UIStroke" end
+    return zone == "red" and "แดง (ปิด)" or "ไม่แดง (เปิด)"
+end
+
+-- ----- GameSpeed: GameUI.GameSpeeds["1" / "1.5" / "2" ...].TroopFrame.Background.UIShadow -----
+-- UIShadow สี (8, 138, 12) = ตัวที่กำลังใช้อยู่
+local GS = { fail = 0, nextAt = 0, seen = 0 }
+local GS_TARGET = { 8, 138, 12 }
+
+-- รายการปุ่มความเร็วที่มีในเกม เรียงจากน้อยไปมาก  { {n=1.5, name="1.5", obj=...}, ... }
+local function speedList()
+    local root = gameUI("GameSpeeds")
+    if not root then return nil end
+    local list = {}
+    for _, c in ipairs(root:GetChildren()) do
+        local n = tonumber(c.Name)
+        if n then list[#list + 1] = { n = n, name = c.Name, obj = c } end
+    end
+    table.sort(list, function(a, b) return a.n < b.n end)
+    return list
+end
+
+local function colorIsActive(c)
+    return math.abs(c.R * 255 - GS_TARGET[1]) <= 14
+        and math.abs(c.G * 255 - GS_TARGET[2]) <= 14
+        and math.abs(c.B * 255 - GS_TARGET[3]) <= 14
+end
+
+-- true = กำลังใช้อยู่ / false = ไม่ใช้ / nil = ไม่เจอ UIShadow
+-- (ไม่รู้ว่า UIShadow เป็นคลาสอะไร เลยลองอ่านสีจากทุกพร็อพที่เป็นไปได้ ถ้าตัวใดตัวหนึ่งตรงสีเขียวก็ถือว่าเปิดอยู่)
+local function speedActive(frame)
+    local tf = frame:FindFirstChild("TroopFrame")
+    local bg = tf and tf:FindFirstChild("Background")
+    local sh = bg and bg:FindFirstChild("UIShadow")
+    if not sh then return nil end
+    for _, prop in ipairs({ "Color", "Color3", "ImageColor3", "BackgroundColor3" }) do
+        local ok, v = pcall(function() return sh[prop] end)
+        if ok and typeof(v) == "Color3" and colorIsActive(v) then return true end
+    end
+    return false
+end
+
+local function activeSpeedName()
+    local list = speedList()
+    if not list then return nil end
+    for _, it in ipairs(list) do
+        if speedActive(it.obj) == true then return it.name end
+    end
+    -- สีไม่ขึ้น แต่แจ้งเตือนเพิ่งบอกว่าเปลี่ยนเป็นตัวนี้ -> ถือว่าตัวนี้ใช้อยู่
+    if GS.notif then
+        for _, it in ipairs(list) do
+            if tonumber(it.name) == tonumber(GS.notif) then return it.name end
+        end
+    end
+    return nil
+end
+
+-- ปุ่มของความเร็วนั้นๆ: GameSpeeds[ชื่อ].TroopFrame.InteractiveButton (ไม่ไต่ขึ้นไปหาพ่อ กันไปกดปุ่มอื่น)
+local function speedButtonOf(frame)
+    local tf = frame:FindFirstChild("TroopFrame")
+    local b = tf and tf:FindFirstChild("InteractiveButton")
+    if b then
+        if b:IsA("GuiButton") then return b end
+        return b:FindFirstChildWhichIsA("GuiButton", true) or b
+    end
+    return frame:FindFirstChildWhichIsA("GuiButton", true) or frame
+end
+
+-- กดทั้ง 2 วิธีพร้อมกัน: สั่ง connection ของปุ่ม + จำลองเมาส์คลิกกลางปุ่ม
+local function pressSpeed(frame)
+    local btn = speedButtonOf(frame)
+    local fired = clickButton(btn)
+    local clicked = false
+    if btn.AbsoluteSize.X > 0 and btn.AbsoluteSize.Y > 0 then
+        clicked = mouseClick(btn)
+    end
+    return fired, clicked, btn
+end
+
+-- ---- ยืนยันจากแจ้งเตือน: GameUI.Notifications.Actions.Title ----
+-- ข้อความประมาณ "xxx just changed the game speed to 1.5!"  ขอแค่มี "speed to <ตัวเลข>!"
+-- เจอแล้วถือว่าเปลี่ยนความเร็วเป็นตัวนั้นแล้ว (แม้สี UIShadow จะไม่เปลี่ยน)
+-- แจ้งเตือนล่าสุดชนะเสมอ (ถ้าถูกเปลี่ยนเป็นตัวอื่นทีหลัง ก็ไม่ถือว่ายืนยันแล้ว)
+GS.notif = nil   -- ความเร็วล่าสุดที่แจ้งเตือนบอก (string เช่น "1.5")
+
+local function readSpeedNotif(label)
+    local ok, txt = pcall(function() return label.Text end)
+    if not ok or type(txt) ~= "string" then return end
+    txt = txt:gsub("<[^>]+>", ""):lower()
+    local n = txt:match("speed to%s+([%d%.]+)!")
+    if n and GS.notif ~= n then
+        GS.notif = n
+        logf("GameSpeed: แจ้งเตือนบอกว่าเปลี่ยนเป็น x%s แล้ว", n)
+    end
+end
+
+local function hookNotifLabel(d)
+    if d.Name ~= "Title" then return end
+    if not (d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox")) then return end
+    if GS.hookedLabels[d] then return end
+    GS.hookedLabels[d] = true
+    readSpeedNotif(d)
+    track(d:GetPropertyChangedSignal("Text"):Connect(function()
+        if alive then readSpeedNotif(d) end
+    end))
+end
+
+GS.hookedLabels = setmetatable({}, { __mode = "k" })
+GS.actions = nil
+
+-- ผูกกับ Notifications.Actions (เรียกซ้ำได้ ผูกใหม่ถ้าเกมสร้าง GUI ใหม่)
+local function hookNotifications()
+    local acts = gameUI("Notifications", "Actions")
+    if not acts or GS.actions == acts then return end
+    GS.actions = acts
+    for _, d in ipairs(acts:GetDescendants()) do hookNotifLabel(d) end
+    track(acts.DescendantAdded:Connect(function(d)
+        if alive then hookNotifLabel(d) end
+    end))
+    log("ผูก GameUI.Notifications.Actions แล้ว (ดักข้อความเปลี่ยนความเร็ว)")
+end
+
+local function notifConfirms(pick)
+    return GS.notif ~= nil and tonumber(GS.notif) ~= nil and tonumber(GS.notif) == tonumber(pick)
+end
+
+local function speedTick()
+    if not (CONFIG.GAMESPEED_ON and CONFIG.GAMESPEED_PICK ~= "") or not inGame() then
+        GS.seen = 0
+        return
+    end
+    pcall(hookNotifications)
+
+    -- รอบใหม่ / เกมจบ: ความเร็วถูกรีเซ็ต -> ลืมข้อความยืนยันเก่า
+    if isGameOver() or votingOpen() then GS.notif = nil end
+
+    local root = gameUI("GameSpeeds")
+    local frame = root and root:FindFirstChild(CONFIG.GAMESPEED_PICK)
+    if not frame or not guiVisible(frame) then
+        GS.seen = 0
+        return
+    end
+
+    -- ยืนยันจากแจ้งเตือน "speed to <pick>!" = ถือว่าเปลี่ยนแล้ว (ไม่สนสี)
+    if notifConfirms(CONFIG.GAMESPEED_PICK) then
+        GS.seen, GS.fail = 0, 0
+        return
+    end
+
+    local active = speedActive(frame)
+    if active == nil then return end
+    if active then
+        GS.seen, GS.fail = 0, 0
+        return
+    end
+    GS.seen = GS.seen + 1
+    if GS.seen >= 2 and os.clock() >= GS.nextAt then
+        GS.fail = GS.fail + 1
+        local okp, fired, clicked, btn = pcall(pressSpeed, frame)
+        if okp then
+            logf("GameSpeed: กด x%s | connection=%s เมาส์=%s | %s (ครั้งที่ %d)",
+                CONFIG.GAMESPEED_PICK, tostring(fired), tostring(clicked), btn:GetFullName(), GS.fail)
+        else
+            logf("GameSpeed error: %s", tostring(fired))
+        end
+        GS.nextAt = os.clock() + (GS.fail >= 6 and 10 or 1)
+    end
+end
+
+-- ----- ปิดสคริปต์ -----
+local function shutdown()
+    if not alive then return end
+    alive = false
+    isPlaying = false
+    isRecording = false
+    playToken = playToken + 1
+    for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
+    if MONEY.sig then pcall(function() MONEY.sig:Disconnect() end) end
+    if ui.win then
+        pcall(function()
+            if ui.win.Destroy then ui.win:Destroy() end
+        end)
+    end
+end
+genv.__PexTD = { stop = shutdown }
+
+-- =====================================================================
+--  ภาค B : UI (PexUI)
+-- =====================================================================
+local PEX_URL = "https://raw.githubusercontent.com/FCUKZX/Roblox-Scripts/refs/heads/main/PexUI.lua"
+
+local function loadPexUI()
+    local src
+    local okGet, res = pcall(function() return game:HttpGet(PEX_URL) end)
+    if okGet and type(res) == "string" and #res > 0 then src = res end
+    if not src and httpRequest then
+        local ok2, r = pcall(httpRequest, { Url = PEX_URL, Method = "GET" })
+        if ok2 and r and type(r.Body) == "string" and #r.Body > 0 then src = r.Body end
+    end
+    if not src then return nil, "โหลด PexUI ไม่ได้ (เช็กอินเทอร์เน็ต / executor ต้องรองรับ HttpGet)" end
+    local fn, cerr = loadstring(src)
+    if not fn then return nil, "PexUI คอมไพล์ไม่ผ่าน: " .. tostring(cerr) end
+    local okRun, lib = pcall(fn)
+    if not okRun or type(lib) ~= "table" or type(lib.CreateWindow) ~= "function" then
+        return nil, "PexUI ทำงานผิดพลาด: " .. tostring(lib)
+    end
+    return lib
+end
+
+local PEX, pexErr = loadPexUI()
+if not PEX then
+    shutdown()
+    warn("[PexTD] " .. tostring(pexErr))
+    return
+end
+
+local PT = PEX.Theme
+local new = PEX.New
+
+local win = PEX:CreateWindow({
+    Title = "Pex Hub",
+    Subtitle = "Tower Macro v2",
+    Icon = "zap",
+    Name = "PexHubTD",
+    OnClose = function()
+        if alive then clearResume() end   -- ผู้ใช้กดปิดเอง = ยกเลิกการเล่นต่อหลังย้ายเซิร์ฟ
+        shutdown()
+    end,
+})
+ui.win = win
+ui.dot = win.StatusDot
+ui.notify = function(text, color, dur, icon)
+    win:Notify({ Text = tostring(text), Color = color, Duration = dur or 2.4, Icon = icon })
+end
+
+-- ---------- ตัวช่วยผูกค่ากับ CONFIG ----------
+local function cfgToggle(sec, title, key, extra, desc)
+    return sec:Toggle({
+        Title = title, Desc = desc, Default = CONFIG[key],
+        Callback = function(v)
+            CONFIG[key] = v
+            saveSettings()
+            if extra then extra(v) end
+        end,
+    })
+end
+
+do
+    local saveTok = 0
+    ui.saveSoon = function()
+        saveTok = saveTok + 1
+        local my = saveTok
+        task.delay(0.6, function()
+            if my == saveTok then saveSettings() end
+        end)
+    end
+end
+
+ui.numSlider = function(sec, title, key, lo, hi, step, suffix)
+    return sec:Slider({
+        Title = title, Min = lo, Max = hi, Step = step or 1, Suffix = suffix or "", Default = CONFIG[key],
+        Callback = function(v)
+            CONFIG[key] = v
+            ui.saveSoon()
+        end,
+    })
+end
+
+-- วาดหน้าจอซ้ำแบบรวบเรียก (ถูกเรียกบ่อยตอนบันทึก)
+ui.refreshAll = function()
+    if ui.refreshPending then return end
+    ui.refreshPending = true
+    task.delay(0.1, function()
+        ui.refreshPending = false
+        if not alive then return end
+        pcall(ui.setRecordUI, isRecording)
+        pcall(ui.refreshList)
+        pcall(ui.updateLoaded)
+        pcall(ui.refreshEditor)
+    end)
+end
+
+local function getLoopCount()
+    local n = tonumber(ui.loopBox and ui.loopBox.Text) or 1
+    return math.clamp(math.floor(n), 1, MAX_LOOPS)
+end
+
+-- =====================================================================
+--  TAB 1 : Macro
+-- =====================================================================
+local tMacro = win:AddTab({ Name = "Macro", Category = "Macro", Icon = "video", Color = PT.Accent })
+
+local sRec = tMacro:Section({
+    Title = "Recording", Desc = "เริ่มบันทึกได้ตอนหน้าโหวตโหมดเปิดอยู่เท่านั้น",
+    Icon = "circle-dot", Color = PT.Bad,
+})
+ui.loadedLabel = sRec:Label({ Text = "Loaded: —" })
+ui.voteLabel = sRec:Label({ Text = "โหวตโหมด: —" })
+ui.recordBtn = sRec:Action({
+    Text = "เริ่มบันทึก", Icon = "circle-dot", Color = PT.Bad,
+    Callback = function()
+        if isRecording then
+            finishRecording("หยุดบันทึก")
+        else
+            startRecording()
+        end
+        ui.refreshAll()
+    end,
+})
+ui.nameBox = sRec:Input({ Title = "ชื่อบันทึก", Placeholder = "ว่าง = ตั้งอัตโนมัติ" })
+
+local sPlay = tMacro:Section({ Title = "Playback", Desc = "เล่นมาโครที่โหลดไว้", Icon = "play", Color = PT.Good })
+ui.loopBox = sPlay:Input({
+    Title = "จำนวนรอบ (1-" .. MAX_LOOPS .. ")", Default = "1", Placeholder = "1", Width = 110,
+    Callback = function(box) box.Text = tostring(getLoopCount()) end,
+})
+sPlay:Actions({
+    { Text = "เล่นตามรอบ", Icon = "play", Color = PT.Good, Callback = function() runLoops(getLoopCount()) end },
+    { Text = "เล่นวนตลอด", Icon = "infinity", Color = PT.Blue, Callback = function() runLoops(math.huge) end },
+})
+sPlay:Action({ Text = "หยุดทั้งหมด", Icon = "square", Color = PT.Elem, Callback = function() stopAll() end })
+
+ui.setRecordUI = function(on)
+    ui.recordBtn:SetText(on and "หยุดบันทึก" or "เริ่มบันทึก")
+    ui.recordBtn:SetColor(on and PT.Warn or PT.Bad)
+    ui.recordBtn:SetIcon(on and "square" or "circle-dot")
+end
+
+ui.updateLoaded = function()
+    if isRecording then
+        ui.loadedLabel.Text = string.format("กำลังบันทึก... (%d แอคชัน)", #recordedActions)
+    elseif selectedName then
+        ui.loadedLabel.Text = string.format("Loaded: %s (%d แอคชัน)", selectedName, #recordedActions)
+    elseif #recordedActions > 0 then
+        ui.loadedLabel.Text = string.format("ยังไม่เซฟ (%d แอคชัน)", #recordedActions)
+    else
+        ui.loadedLabel.Text = "Loaded: — (เลือกที่แท็บ Saves)"
+    end
+    local v = macroMeta.vote
+    ui.voteLabel.Text = "โหวตโหมด: " .. ((v and #v > 0) and short(v[1], 0) or "— (ไม่ได้จับ)")
+end
+
+-- =====================================================================
+--  TAB 2 : Saves
+-- =====================================================================
+local tSaves = win:AddTab({ Name = "Saves", Category = "Macro", Icon = "save", Color = PT.Blue })
+local sSaves = tSaves:Section({ Title = "Saved macros", Desc = "แตะชื่อเพื่อโหลดมาเล่น/แก้ไข", Icon = "folder-open", Color = PT.Blue })
+ui.saveList = sSaves:List({ Height = 170 })
+
+ui.doDelete = function(name)
+    local ok = canFile and pcall(delfile, pathOf(name))
+    if ok then
+        if selectedName == name then
+            recordedActions = {}
+            macroMeta = { vote = nil }
+            selectedName = nil
+            macroDirty = false
+        end
+        notify("ลบแล้ว: " .. name, PT.Warn, nil, "trash-2")
+    else
+        notify("ลบไม่สำเร็จ", PT.Bad, nil, "x")
+    end
+    ui.refreshAll()
+end
+
+local saveBtns = sSaves:Actions({
+    { Text = "รีเฟรช", Icon = "refresh-cw", Color = PT.Elem, Callback = function() ui.refreshAll() end },
+    {
+        Text = "ลบที่เลือก", Icon = "trash-2", Color = PT.Bad,
+        Callback = function()
+            if isPlaying or isRecording then setStatus("หยุดก่อนจึงจะลบได้", "warn") return end
+            if not selectedName then setStatus("ยังไม่ได้เลือกบันทึก", "warn") return end
+            local name = selectedName
+            win:Dialog({
+                Title = "ลบบันทึกนี้?", Text = "\"" .. name .. "\" จะถูกลบถาวร กู้คืนไม่ได้", Dismissable = true,
+                Buttons = {
+                    { Text = "ยกเลิก" },
+                    { Text = "ลบ", Icon = "trash-2", Color = PT.Bad, Callback = function() ui.doDelete(name) end },
+                },
+            })
+        end,
+    },
+})
+
+local function selectMacro(name)
+    if isPlaying then setStatus("หยุดการเล่นก่อนจึงจะเปลี่ยนบันทึกได้", "warn") return end
+    if isRecording then setStatus("หยุดบันทึกก่อนจึงจะเปลี่ยนบันทึกได้", "warn") return end
+    local actions, meta = loadMacro(name)
+    if actions then
+        recordedActions = actions
+        macroMeta = meta or { vote = nil }
+        selectedName = name
+        macroDirty = false
+        notify(string.format("โหลด: %s (%d แอคชัน)", name, #actions), PT.Good, nil, "folder-open")
+    else
+        notify("โหลดไม่สำเร็จ", PT.Bad, nil, "x")
+    end
+    ui.refreshAll()
+end
+
+ui.refreshList = function()
+    ui.saveList:Clear()
+    local names = listMacros()
+    if #names == 0 then
+        ui.saveList:Note("ยังไม่มีบันทึก")
+        return
+    end
+    for i, name in ipairs(names) do
+        ui.saveList:Add({
+            Text = name, Selected = (name == selectedName), Order = i,
+            Callback = function() selectMacro(name) end,
+        })
+    end
+end
+
+-- =====================================================================
+--  TAB 3 : Editor
+-- =====================================================================
+local tEdit = win:AddTab({ Name = "Editor", Category = "Macro", Icon = "pencil-ruler", Color = PT.Purple })
+local sEdit = tEdit:Section({ Title = "แก้ไขบันทึกที่โหลดอยู่", Desc = "เปลี่ยนชื่อ / แก้ราคา / ลบแถว", Icon = "pencil-ruler", Color = PT.Purple })
+ui.editInfo = sEdit:Label({ Text = "ยังไม่ได้โหลดบันทึก" })
+ui.renameBox = sEdit:Input({ Title = "ชื่อใหม่", Placeholder = "พิมพ์ชื่อแล้วกดเปลี่ยน" })
+sEdit:Action({
+    Text = "เปลี่ยนชื่อบันทึก", Icon = "pencil", Color = PT.Blue,
+    Callback = function()
+        if isPlaying or isRecording then setStatus("หยุดก่อนจึงจะเปลี่ยนชื่อได้", "warn") return end
+        if not selectedName or not canFile then notify("ยังไม่ได้เลือกบันทึก", PT.Warn) return end
+        local newName = cleanName(ui.renameBox.Text)
+        if newName == "" then notify("ชื่อว่างเปล่า", PT.Warn) return end
+        if isfile(pathOf(newName)) then notify("มีชื่อนี้อยู่แล้ว", PT.Bad) return end
+        local ok = saveMacro(newName, recordedActions, macroMeta)
+        if ok then
+            pcall(delfile, pathOf(selectedName))
+            selectedName = newName
+            ui.renameBox.Text = ""
+            notify("เปลี่ยนชื่อแล้ว", PT.Good, nil, "pencil")
+            ui.refreshAll()
+        else
+            notify("เปลี่ยนชื่อไม่สำเร็จ", PT.Bad)
+        end
+    end,
+})
+
+local sRows = tEdit:Section({ Title = "แอคชันที่บันทึก", Desc = "แตะแถวเพื่อเลือก", Icon = "layout-list", Color = PT.Cyan })
+ui.editListObj = sRows:List({ Height = 200 })
+ui.editList = ui.editListObj.Frame
+sRows:Actions({
+    {
+        Text = "บันทึกการแก้ไข", Icon = "save", Color = PT.Good,
+        Callback = function()
+            if not selectedName then notify("ยังไม่ได้เลือกบันทึก", PT.Warn) return end
+            local ok = saveMacro(selectedName, recordedActions, macroMeta)
+            macroDirty = not ok
+            notify(ok and "บันทึกแล้ว" or "บันทึกไม่สำเร็จ", ok and PT.Good or PT.Bad, nil, ok and "save" or "x")
+        end,
+    },
+    {
+        Text = "รีเซ็ตราคา", Icon = "eraser", Color = PT.Warn,
+        Callback = function()
+            for _, a in ipairs(recordedActions) do a.costExact = false end
+            macroDirty = true
+            ui.refreshAll()
+            notify("รีเซ็ตสถานะราคาแล้ว", PT.Warn, nil, "rotate-ccw")
+        end,
+    },
+})
+sRows:Label({ Text = "แตะแถวเพื่อเลือก แล้วใช้ปุ่มด้านล่างเลื่อน/ซ้ำ/แซกอัปเกรด | แก้ช่องราคา = ล็อกค่านั้น (✓) และปรับยูนิตชื่อเดียวกันตาม | ✕ ลบ | แก้เสร็จกด \"บันทึกการแก้ไข\"" })
+
+local sMove = tEdit:Section({ Title = "ปรับลำดับ / แซกแอคชัน", Desc = "เลื่อน ทำซ้ำ หรือเพิ่มอัปเกรด", Icon = "arrow-up-down", Color = PT.Orange })
+do
+    local function editBlocked()
+        if isPlaying or isRecording then
+            notify("หยุดเล่น/บันทึกก่อนจึงจะแก้ได้", PT.Warn)
+            return true
+        end
+        return false
+    end
+
+    -- unitRef ของอัปเกรดคือ "เลขแถวของ Place" -> ย้าย/แทรกแล้วต้องแก้เลขตาม
+    local function remapRefs(fn)
+        for _, a in ipairs(recordedActions) do
+            if a.type == "Upgrade" and a.unitRef then a.unitRef = fn(a.unitRef) end
+        end
+    end
+
+    local function moveAction(i, dir)
+        local j = i + dir
+        if j < 1 or j > #recordedActions then return false end
+        recordedActions[i], recordedActions[j] = recordedActions[j], recordedActions[i]
+        remapRefs(function(r)
+            if r == i then return j elseif r == j then return i end
+            return r
+        end)
+        macroDirty = true
+        ui.editSel = j
+        return true
+    end
+
+    local function insertAction(pos, action)
+        table.insert(recordedActions, pos, action)
+        for _, a in ipairs(recordedActions) do
+            if a ~= action and a.type == "Upgrade" and a.unitRef and a.unitRef >= pos then
+                a.unitRef = a.unitRef + 1
+            end
+        end
+        macroDirty = true
+    end
+
+    sMove:Actions({
+        {
+            Text = "ขึ้น", Icon = "arrow-up", Color = PT.Blue,
+            Callback = function()
+                if editBlocked() then return end
+                if not ui.editSel then notify("แตะเลือกแถวก่อน", PT.Warn) return end
+                moveAction(ui.editSel, -1)
+                ui.refreshAll()
+            end,
+        },
+        {
+            Text = "ลง", Icon = "arrow-down", Color = PT.Blue,
+            Callback = function()
+                if editBlocked() then return end
+                if not ui.editSel then notify("แตะเลือกแถวก่อน", PT.Warn) return end
+                moveAction(ui.editSel, 1)
+                ui.refreshAll()
+            end,
+        },
+        {
+            Text = "ซ้ำ", Icon = "copy", Color = PT.Elem,
+            Callback = function()
+                if editBlocked() then return end
+                local a = ui.editSel and recordedActions[ui.editSel]
+                if not a then notify("แตะเลือกแถวก่อน", PT.Warn) return end
+                if a.type ~= "Upgrade" then
+                    notify("ซ้ำได้เฉพาะแถวอัปเกรด (Place ซ้ำตำแหน่งเดิมจะวางไม่ได้)", PT.Warn, 4)
+                    return
+                end
+                -- ราคาที่ก๊อปมาเป็นแค่ค่าเริ่มต้น (ไม่ล็อก)
+                local copy = { type = "Upgrade", tid = a.tid, unitRef = a.unitRef, cost = a.cost or 0, costExact = false }
+                insertAction(ui.editSel + 1, copy)
+                ui.editSel = ui.editSel + 1
+                ui.refreshAll()
+            end,
+        },
+    })
+
+    sMove:Action({
+        Text = "แซกอัปเกรดยูนิตนี้ (ต่อท้ายแถวที่เลือก)", Icon = "plus", Color = PT.Good,
+        Callback = function()
+            if editBlocked() then return end
+            local sel = ui.editSel
+            local a = sel and recordedActions[sel]
+            local ref
+            if a and a.type == "Place" then
+                ref = sel
+            elseif a and a.type == "Upgrade" and a.unitRef then
+                ref = a.unitRef
+            end
+            if not ref then
+                notify("เลือกแถว Place หรืออัปเกรดที่จับคู่ยูนิตแล้วก่อน", PT.Warn, 4)
+                return
+            end
+            local pos = sel + 1
+            local est = 0   -- ใช้ราคาอัปเกรดก่อนหน้าของยูนิตเดียวกันเป็นค่าเริ่มต้น
+            for k = sel, 1, -1 do
+                local x = recordedActions[k]
+                if x.type == "Upgrade" and x.unitRef == ref then est = x.cost or 0 break end
+            end
+            insertAction(pos, {
+                type = "Upgrade", tid = recordedActions[ref].tid, unitRef = ref, cost = est, costExact = false,
+            })
+            ui.editSel = pos
+            ui.refreshAll()
+            notify("แซกอัปเกรดแล้ว แก้ช่องราคาได้ (ไม่แก้ก็ได้)", PT.Good, 3.5, "plus")
+        end,
+    })
+
+    ui.targetBox = sMove:Input({
+        Title = "เป้าหมายอัปเกรด (# ของ Place)", Placeholder = "เลือกแถวอัปเกรดก่อน",
+        Callback = function(box)
+            if editBlocked() then box.Text = "" return end
+            local n = tonumber(box.Text)
+            box.Text = ""
+            local a = ui.editSel and recordedActions[ui.editSel]
+            if not a or a.type ~= "Upgrade" then
+                notify("เลือกแถวอัปเกรดก่อน", PT.Warn)
+                return
+            end
+            n = n and math.floor(n)
+            local t = n and recordedActions[n]
+            if not t or t.type ~= "Place" then
+                notify("เลข # นั้นไม่ใช่แถว Place", PT.Bad)
+                return
+            end
+            a.unitRef = n
+            a.tid = t.tid or a.tid
+            macroDirty = true
+            ui.refreshAll()
+        end,
+    })
+end
+
+-- ลบแถว + แก้เลขอ้างอิง unitRef ของอัปเกรดให้ตรง
+local function removeAction(k)
+    table.remove(recordedActions, k)
+    for _, a in ipairs(recordedActions) do
+        if a.type == "Upgrade" and a.unitRef then
+            if a.unitRef == k then a.unitRef = nil
+            elseif a.unitRef > k then a.unitRef = a.unitRef - 1 end
+        end
+    end
+    macroDirty = true
+end
+
+-- กลุ่มราคาเดียวกัน: Place ชื่อเดียวกัน / อัปเกรดครั้งที่ n ของยูนิตชื่อเดียวกัน
+local function costKeyAt(i)
+    local a = recordedActions[i]
+    if not a then return nil end
+    if a.type == "Place" then return "P|" .. tostring(a.name) end
+    local ref = a.unitRef
+    local pa = ref and recordedActions[ref]
+    if not pa then return nil end
+    local nth = 0
+    for k = 1, i do
+        local x = recordedActions[k]
+        if x.type == "Upgrade" and x.unitRef == ref then nth = nth + 1 end
+    end
+    return "U|" .. tostring(pa.name) .. "|" .. nth
+end
+
+-- แก้ราคาแถว i แล้วปรับแถวอื่นในกลุ่มเดียวกันตาม  คืนจำนวนแถวที่ถูกปรับ
+local function shareCost(i)
+    local a = recordedActions[i]
+    local key = costKeyAt(i)
+    if not a or not key then return 0 end
+    local others = 0
+    for j, b in ipairs(recordedActions) do
+        if j ~= i and costKeyAt(j) == key then
+            b.cost = a.cost
+            b.costExact = true
+            others = others + 1
+        end
+    end
+    return others
+end
+
+-- วาดแถวแอคชันใหม่ทั้งหมด
+ui.refreshEditor = function()
+    local keepPos = ui.editList.CanvasPosition
+    for _, c in ipairs(ui.editList:GetChildren()) do
+        if c:IsA("Frame") then c:Destroy() end
+    end
+    if ui.editSelTable ~= recordedActions then
+        ui.editSel = nil
+        ui.editSelTable = recordedActions
+    end
+    if ui.editSel and not recordedActions[ui.editSel] then ui.editSel = nil end
+
+    if selectedName or #recordedActions > 0 then
+        local warn = 0
+        for i, a in ipairs(recordedActions) do
+            if a.type == "Upgrade" and a.unitRef and a.unitRef > i then warn = warn + 1 end
+        end
+        ui.editInfo.Text = string.format("%s | %d แอคชัน%s", selectedName or "(ยังไม่เซฟ)", #recordedActions,
+            warn > 0 and (" | ⚠ " .. warn .. " อัปเกรดอยู่ก่อนวาง") or "")
+    else
+        ui.editInfo.Text = "ยังไม่ได้โหลดบันทึก"
+    end
+
+    for i, a in ipairs(recordedActions) do
+        local selected = (i == ui.editSel)
+        local f = new("Frame", {
+            Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = selected and PT.Accent or PT.Elem,
+            BorderSizePixel = 0, LayoutOrder = i,
+        }, ui.editList)
+        PEX.Corner(f, 7)
+
+        local desc
+        if a.type == "Place" then
+            desc = string.format("#%d  Place  %s", i, tostring(a.name))
+        else
+            local ref = a.unitRef
+            local refName = ref and recordedActions[ref] and tostring(recordedActions[ref].name) or ""
+            desc = string.format("#%d  Upgrade  %s%s", i,
+                ref and ("→ #" .. ref .. " " .. refName) or "(ไม่มียูนิตอ้างอิง)",
+                (ref and ref > i) and " ⚠" or "")
+        end
+        local pick = new("TextButton", {
+            Size = UDim2.new(0.52, 0, 1, 0), BackgroundTransparency = 1, AutoButtonColor = false,
+            Text = "  " .. desc, TextColor3 = PT.Text, Font = Enum.Font.Gotham, TextSize = 11,
+            TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+        }, f)
+        pick.Activated:Connect(function()
+            ui.editSel = (ui.editSel == i) and nil or i
+            ui.refreshAll()
+        end)
+
+        local function costText()
+            if (a.cost or 0) <= 0 and not a.costExact then return "0 ⚠" end
+            return tostring(math.floor((a.cost or 0) + 0.5)) .. (a.costExact and " ✓" or "")
+        end
+        local box = new("TextBox", {
+            Size = UDim2.new(0.28, 0, 0, 22), Position = UDim2.new(0.54, 0, 0.5, -11),
+            BackgroundColor3 = PT.Card, TextColor3 = PT.Text, Font = Enum.Font.GothamMedium, TextSize = 11,
+            Text = costText(), ClearTextOnFocus = false,
+        }, f)
+        PEX.Corner(box, 5)
+        box.FocusLost:Connect(function()
+            local n = tonumber((box.Text:gsub(",", "")):match("%d+%.?%d*"))
+            if n then
+                a.cost = n
+                a.costExact = true
+                macroDirty = true
+                local others = shareCost(i)
+                if others > 0 then
+                    notify(string.format("ปรับราคายูนิตชื่อเดียวกันตามอีก %d แถว", others), PT.Good)
+                    ui.refreshAll()
+                    return
+                end
+            end
+            box.Text = costText()
+        end)
+
+        local del = new("TextButton", {
+            Size = UDim2.fromOffset(26, 22), Position = UDim2.new(1, -32, 0.5, -11),
+            BackgroundColor3 = PT.Bad, Text = "✕", TextColor3 = Color3.new(1, 1, 1),
+            Font = Enum.Font.GothamBold, TextSize = 11, AutoButtonColor = true,
+        }, f)
+        PEX.Corner(del, 5)
+        del.Activated:Connect(function()
+            if isPlaying or isRecording then return end
+            removeAction(i)
+            if ui.editSel then
+                if ui.editSel == i then ui.editSel = nil
+                elseif ui.editSel > i then ui.editSel = ui.editSel - 1 end
+            end
+            ui.refreshAll()
+        end)
+    end
+    task.defer(function() ui.editList.CanvasPosition = keepPos end)
+end
+
+-- =====================================================================
+--  TAB 4 : Auto  (PlayAgain / ย้ายเซิร์ฟ / AutoSkip)
+-- =====================================================================
+local tAuto = win:AddTab({ Name = "Auto", Category = "Automation", Icon = "repeat", Color = PT.Good })
+
+local sReplay = tAuto:Section({ Title = "Auto PlayAgain", Desc = "เกมจบ (FinalUI เปิด) -> กด PlayAgain", Icon = "repeat", Color = PT.Good })
+cfgToggle(sReplay, "กด PlayAgain อัตโนมัติ", "AUTO_REPLAY", function(v)
+    notify(v and "เปิด Auto PlayAgain" or "ปิด Auto PlayAgain (กดเอง)", v and PT.Good or PT.Warn, nil, "rotate-ccw")
+end)
+cfgToggle(sReplay, "เล่นต่ออัตโนมัติหลังย้ายเซิร์ฟ", "AUTO_RESUME", function(v)
+    if v then ui.queueInfo = setupQueue() end
+    if ui.resumeLabel then ui.resumeLabel.Text = "ย้ายเซิร์ฟ: " .. tostring(ui.queueInfo) end
+end, "PlayAgain แล้วเกมย้ายเซิร์ฟ สคริปต์ต้องรันใหม่เอง (autoexec / SCRIPT_URL / SCRIPT_FILE)")
+ui.resumeLabel = sReplay:Label({ Text = "ย้ายเซิร์ฟ: —", Color = PT.Text })
+ui.numSlider(sReplay, "รอหลังกด PlayAgain (เกมนับถอยหลัง ~5 วิ)", "REPLAY_WAIT", 5, 20, 0.5, " วิ")
+ui.numSlider(sReplay, "หน่วงก่อนเริ่มวาง", "START_DELAY", 0, 30, 0.5, " วิ")
+sReplay:Action({
+    Text = "ทดสอบกด PlayAgain ตอนนี้", Icon = "flask-conical", Color = PT.Blue,
+    Callback = function()
+        if not isGameOver() then notify("ยังไม่อยู่หน้าจบเกม (FinalUI ยังไม่เปิด)", PT.Warn) return end
+        local btn = gameUI("FinalUI", "Content", "PlayAgain")
+        if not btn then notify("ไม่เจอปุ่ม FinalUI.Content.PlayAgain", PT.Bad) return end
+        task.spawn(function()
+            local ok = pcall(pressObj, btn, "PlayAgain", 1)
+            notify(ok and "กดแล้ว" or "กดไม่สำเร็จ", ok and PT.Good or PT.Bad)
+        end)
+    end,
+})
+
+local sSkip = tAuto:Section({ Title = "Auto Skip Wave", Desc = "GameUI.Stats.AutoSkip (UIStroke แดง = ปิด)", Icon = "play", Color = PT.Blue })
+cfgToggle(sSkip, "เปิด Auto Skip ให้อัตโนมัติ", "AUTO_SKIP", function(v)
+    AS.fail, AS.nextAt, AS.seen = 0, 0, 0
+    notify(v and "เปิดออโต้ข้ามเวฟ" or "ปิดออโต้ข้ามเวฟ", v and PT.Good or PT.Warn, nil, "fast-forward")
+end)
+ui.skipLabel = sSkip:Label({ Text = "สถานะ: —", Color = PT.Text })
+
+local sSpeed = tAuto:Section({
+    Title = "Game Speed", Desc = "เลือกความเร็ว แล้วสคริปต์กดให้ (UIShadow สีเขียว = ใช้อยู่)",
+    Icon = "zap", Color = PT.Orange,
+})
+cfgToggle(sSpeed, "ล็อกความเร็วตามที่เลือก", "GAMESPEED_ON", function(v)
+    GS.fail, GS.nextAt, GS.seen = 0, 0, 0
+    notify(v and "เปิดระบบ Game Speed" or "ปิดระบบ Game Speed", v and PT.Good or PT.Warn, nil, "gauge")
+end, "เปิด = ปรับเป็นความเร็วที่เลือกให้อัตโนมัติ | ปิด = ไม่ยุ่งกับความเร็ว")
+ui.gsList = sSpeed:List({ Height = 120 })
+ui.gsSig = nil
+
+ui.refreshSpeedList = function(force)
+    local list = speedList()
+    local act = activeSpeedName()
+    local names = {}
+    for _, it in ipairs(list or {}) do names[#names + 1] = it.name end
+    local sig = table.concat(names, ",") .. "|" .. tostring(act) .. "|" .. CONFIG.GAMESPEED_PICK
+    if not force and sig == ui.gsSig then return end
+    ui.gsSig = sig
+    ui.gsList:Clear()
+    if not list or #list == 0 then
+        ui.gsList:Note("ยังไม่เจอ GameUI.GameSpeeds (ลอบบี้ หรือเกมยังโหลดไม่เสร็จ)")
+        return
+    end
+    for i, it in ipairs(list) do
+        ui.gsList:Add({
+            Text = "x" .. it.name .. (it.name == act and "   ● กำลังใช้อยู่" or ""),
+            Selected = (it.name == CONFIG.GAMESPEED_PICK), Order = i,
+            Callback = function()
+                CONFIG.GAMESPEED_PICK = it.name
+                saveSettings()
+                GS.fail, GS.nextAt, GS.seen = 0, 0, 0
+                notify("เลือกความเร็ว x" .. it.name, PT.Good, nil, "gauge")
+                ui.refreshSpeedList(true)
+            end,
+        })
+    end
+end
+
+-- =====================================================================
+--  TAB 5 : Stats
+-- =====================================================================
+local tStats = win:AddTab({ Name = "Stats", Category = "Info", Icon = "bar-chart-3", Color = PT.Orange })
+local sStats = tStats:Section({ Title = "Session", Desc = "สถิติการเล่นรอบนี้", Icon = "bar-chart-3", Color = PT.Orange })
+ui.statsLabel = sStats:Label({ Text = "", TextSize = 12, Color = PT.Text })
+sStats:Action({
+    Text = "รีเซ็ตสถิติ", Icon = "undo-2", Color = PT.Elem,
+    Callback = function()
+        for k in pairs(stats) do stats[k] = 0 end
+        stats.sessionStart = nil
+    end,
+})
+
+-- =====================================================================
+--  TAB 6 : Log
+-- =====================================================================
+local tLog = win:AddTab({ Name = "Log", Category = "Info", Icon = "layout-list", Color = PT.Cyan })
+local sLog = tLog:Section({ Title = "Log", Desc = "ดูว่า Id ของยูนิตมาจากไหน / remote ที่เข้า-ออก", Icon = "layout-list", Color = PT.Cyan })
+ui.logLabel = sLog:Label({ Text = "(ยังไม่มี log)", TextSize = 11, Color = PT.Text })
+sLog:Actions({
+    {
+        Text = "คัดลอกทั้งหมด", Icon = "copy", Color = PT.Blue,
+        Callback = function()
+            if setclipboard then
+                setclipboard(table.concat(logBuf, "\n"))
+                notify("คัดลอก Log แล้ว (" .. #logBuf .. " บรรทัด)", PT.Good, nil, "copy")
+            else
+                notify("executor ไม่รองรับ setclipboard", PT.Warn)
+            end
+        end,
+    },
+    {
+        Text = "ล้าง", Icon = "eraser", Color = PT.Elem,
+        Callback = function()
+            logBuf = {}
+            logDirty = true
+        end,
+    },
+})
+
+-- =====================================================================
+--  TAB 7 : Settings
+-- =====================================================================
+local tSet = win:AddTab({ Name = "Settings", Category = "System", Icon = "settings", Color = PT.Pink })
+
+local sDet = tSet:Section({ Title = "Detection", Desc = "ตรวจว่าสคริปต์เห็น GUI/Remote ของเกมหรือยัง", Icon = "map-pin", Color = PT.Good })
+ui.detectLabel = sDet:Label({ Text = "—", TextSize = 12, Color = PT.Text })
+
+local sGen = tSet:Section({ Title = "General", Desc = "ตั้งค่าทั่วไป", Icon = "shield-check", Color = PT.Blue })
+cfgToggle(sGen, "ทำงานเฉพาะตอนอยู่ในเกม (ต้องเจอ GamemodeVoting)", "REQUIRE_VOTE_UI", nil,
+    "เปิด = ลอบบี้ไม่ทำอะไร และเริ่มบันทึกได้ตอน GamemodeVoting เปิดอยู่ | ปิดถ้าสคริปต์ตรวจหน้านี้ไม่เจอ")
+cfgToggle(sGen, "ลองยิงตอนเงินใกล้ถึง", "EAGER_ON", nil, "เปิด = เงินใกล้พอก็ลองซื้อเลย | ปิด = รอเงินครบก่อนค่อยซื้อ")
+cfgToggle(sGen, "จด Log remote (ไว้หา Id)", "SNIFFER", nil, "จดเฉพาะช่วงไม่กี่วินาทีหลังวาง/อัปเกรด/โหวต")
+cfgToggle(sGen, "Anti-AFK", "ANTI_AFK")
+
+local sHook = tSet:Section({ Title = "Discord Webhook", Desc = "ส่งแจ้งเตือนเข้า Discord", Icon = "send", Color = PT.Purple, Collapsible = true, Collapsed = true })
+cfgToggle(sHook, "ส่งแจ้งเตือนเข้า Discord", "WEBHOOK_ON")
+sHook:Input({
+    Title = "Webhook URL", Default = CONFIG.WEBHOOK_URL, Placeholder = "https://discord.com/api/webhooks/...",
+    Callback = function(box)
+        CONFIG.WEBHOOK_URL = (box.Text:gsub("^%s+", ""):gsub("%s+$", ""))
+        saveSettings()
+    end,
+})
+sHook:Action({
+    Text = "ส่งข้อความทดสอบ", Icon = "send", Color = PT.Blue,
+    Callback = function()
+        local sent = sendWebhook("ทดสอบ Pex Hub", "เชื่อมต่อ Webhook สำเร็จ", true)
+        notify(sent and "ส่งแล้ว (เช็กใน Discord)" or "ส่งไม่ได้ (ยังไม่ได้ใส่ลิงก์ หรืออุปกรณ์นี้ส่งไม่ได้)", sent and PT.Good or PT.Bad, nil, sent and "send" or "x")
+    end,
+})
+
+local sUi = tSet:Section({ Title = "Interface", Desc = "หน้าต่าง Pex Hub", Icon = "layout-list", Color = PT.Orange })
+do
+    local okK, stopKey = pcall(function()
+        if CONFIG.STOP_KEY ~= "" then return Enum.KeyCode[CONFIG.STOP_KEY] end
+        return nil
+    end)
+    sUi:Keybind({
+        Title = "ปุ่มลัด: หยุดทั้งหมด", Desc = "กดปุ่มนี้เพื่อหยุดบันทึก/เล่นทันที (Backspace = ล้างค่า)",
+        Default = okK and stopKey or nil,
+        Callback = function() stopAll() end,
+        Changed = function(k)
+            CONFIG.STOP_KEY = k and k.Name or ""
+            saveSettings()
+        end,
+    })
+end
+sUi:Action({
+    Text = "รีเซ็ตตำแหน่งหน้าต่าง", Icon = "map-pin", Color = PT.Elem,
+    Callback = function() win:ResetPosition() end,
+})
+if not canFile then
+    sUi:Label({ Text = "อุปกรณ์นี้เซฟ/โหลดไฟล์ไม่ได้ (เล่นได้เฉพาะที่บันทึกไว้ตอนนี้)", Color = PT.Warn })
+end
+
+-- =====================================================================
+--  ลูปเบื้องหลัง
+-- =====================================================================
+-- (1) หยุดบันทึกอัตโนมัติเมื่อเจอหน้าจบเกม
+task.spawn(function()
+    while alive do
+        task.wait(0.5)
+        if isRecording and CONFIG.AUTO_STOP_REC and isGameOver() then
+            finishRecording("เจอหน้าจบเกม จบการบันทึกอัตโนมัติ")
+            ui.refreshAll()
+        end
+    end
+end)
+
+-- (2) ข้อความ Stats / Detection / Log (อัปเดตเฉพาะตอนแท็บนั้นเปิด)
+local function stateOf(obj)
+    if not obj then return "ไม่พบ" end
+    return guiVisible(obj) and "เปิด" or "ปิด"
+end
+
+task.spawn(function()
+    while alive do
+        task.wait(0.5)
+        if tStats.Page.Visible then ui.statsLabel.Text = statsText() end
+        if tSet.Page.Visible then
+            ui.detectLabel.Text = table.concat({
+                "สถานะ: " .. (inGame() and "อยู่ในเกม" or "ลอบบี้ / ยังไม่เจอ GamemodeVoting"),
+                "GamemodeVoting: " .. stateOf(gameUI("GamemodeVoting")),
+                "GameSpeeds: " .. (function()
+                    local l = speedList()
+                    if not l then return "ไม่พบ" end
+                    local a = activeSpeedName()
+                    return string.format("%d ปุ่ม | ใช้อยู่: %s", #l, a and ("x" .. a) or "ไม่รู้")
+                end)(),
+                "FinalUI: " .. stateOf(gameUI("FinalUI")),
+                "PlayAgain: " .. (gameUI("FinalUI", "Content", "PlayAgain") and "พบ" or "ไม่พบ"),
+                "AutoSkip: " .. skipStateText(),
+                "เงิน: " .. (moneyOK() and fmtNum(getMoney()) or "ไม่พบ leaderstats.Money"),
+                (function()
+                    local n = 0
+                    for k, v in pairs(player:GetAttributes()) do
+                        if type(k) == "string" and k:match("^Slot%d+$") and type(v) == "string" then n = n + 1 end
+                    end
+                    return "Slot ยูนิตของผู้เล่น: " .. (n > 0 and (n .. " ช่อง") or "ไม่พบ")
+                end)(),
+                "workspace.Game.Towers: " .. (TD.towersFolder and "พบ" or "ไม่พบ"),
+                string.format("Remote: ModeVote %s | TowerAdd %s | TowerUpgrade %s",
+                    modeVoteRE and "✓" or "✗", towerAddRE and "✓" or "✗", towerUpgradeRE and "✓" or "✗"),
+            }, "\n")
+        end
+        if tAuto.Page.Visible then
+            ui.skipLabel.Text = "สถานะ: " .. skipStateText()
+            pcall(ui.refreshSpeedList)
+        end
+        if tLog.Page.Visible and logDirty then
+            logDirty = false
+            local from = math.max(1, #logBuf - 17)
+            local lines = {}
+            for i = from, #logBuf do
+                local s = logBuf[i]
+                if #s > 110 then s = s:sub(1, 110) .. "…" end
+                lines[#lines + 1] = s
+            end
+            ui.logLabel.Text = #lines > 0 and table.concat(lines, "\n") or "(ยังไม่มี log)"
+        end
+    end
+end)
+
+-- (3) Auto Skip: UIStroke โซนแดง = ปิด -> กดปุ่มให้เปิด
+task.spawn(function()
+    while alive do
+        task.wait(0.25)
+        local zone, btn = skipZone()
+        if zone and btn and guiVisible(btn) and inGame() then
+            local want = CONFIG.AUTO_SKIP and "on" or "red"
+            if zone ~= want then
+                AS.seen = AS.seen + 1
+                if AS.seen >= 2 and os.clock() >= AS.nextAt then
+                    AS.fail = AS.fail + 1
+                    pcall(pressObj, btn, "AutoSkip", AS.fail)
+                    AS.nextAt = os.clock() + (AS.fail >= 6 and 10 or 0.8)
+                end
+            else
+                AS.seen, AS.fail = 0, 0
+            end
+        else
+            AS.seen = 0
+        end
+    end
+end)
+
+-- (4) Game Speed: เช็กทุก 0.4 วิ เผื่อเกมรีเซ็ตความเร็วตอนเริ่มรอบใหม่
+task.spawn(function()
+    while alive do
+        task.wait(0.4)
+        local ok, err = pcall(speedTick)
+        if not ok then log("Game Speed error: " .. tostring(err)) end
+    end
+end)
+
+-- =====================================================================
+--  เริ่มทำงาน
+-- =====================================================================
+ui.queueInfo = setupQueue()
+ui.resumeLabel.Text = "ย้ายเซิร์ฟ: " .. tostring(ui.queueInfo)
+ui.refreshAll()
+setStatus("พร้อมใช้งาน | เริ่มบันทึกตอนหน้าโหวตโหมดเปิด", "ok", "zap")
+
+if not (netFolder and modeVoteRE and towerAddRE and towerUpgradeRE) then
+    notify("ไม่เจอ Remote บางตัว (ดู Settings > Detection)", PT.Bad, 6, "x")
+end
+
+task.spawn(tryResume)
