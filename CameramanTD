@@ -2244,10 +2244,100 @@ local function speedTick()
     end
 end
 
+-- ----- ลดกระตุก (ย้ายของออกจากฉากชั่วคราว ปิดแล้วเอากลับที่เดิม) -----
+--  เปิด: ย้ายของใน Lighting ทั้งหมด + ทุก Part ใน workspace.Game.Paths ที่สีไม่ใช่ (65,66,75) ออกไปเก็บไว้ (Parent = nil)
+--  ปิด: ย้ายกลับ Parent เดิมทั้งหมด (ไม่ได้ลบทิ้งจริง)
+local LAG = { want = false, applied = false, busy = false, moved = {}, KEEP = { 65, 66, 75 }, BATCH = 150 }
+
+local function lagIsKeep(part)
+    local c = part.Color
+    return math.abs(c.R * 255 - LAG.KEEP[1]) < 1.5
+        and math.abs(c.G * 255 - LAG.KEEP[2]) < 1.5
+        and math.abs(c.B * 255 - LAG.KEEP[3]) < 1.5
+end
+
+local function lagPaths()
+    local g = workspace:FindFirstChild("Game")
+    return g and g:FindFirstChild("Paths")
+end
+
+local function lagApply()
+    local n = 0
+    local function stash(inst)
+        LAG.moved[#LAG.moved + 1] = { inst = inst, parent = inst.Parent }
+        pcall(function() inst.Parent = nil end)
+        n = n + 1
+        if n % LAG.BATCH == 0 then task.wait() end
+    end
+
+    -- Lighting: ย้ายของข้างในออกทั้งหมด (Sky / Atmosphere / เอฟเฟกต์ต่างๆ)
+    local lighting = game:GetService("Lighting")
+    for _, ch in ipairs(lighting:GetChildren()) do
+        if not LAG.want then return end
+        stash(ch)
+    end
+
+    -- Paths: เก็บเฉพาะ Part สี (65,66,75)
+    local paths = lagPaths()
+    if not paths then return end
+    local desc = paths:GetDescendants()
+    local protect = {}   -- Part ที่มีลูกสีที่ต้องเก็บอยู่ข้างใน ห้ามย้าย (ไม่งั้นลูกหายไปด้วย)
+    for _, d in ipairs(desc) do
+        if d:IsA("BasePart") and lagIsKeep(d) then
+            local a = d.Parent
+            while a and a ~= paths do
+                protect[a] = true
+                a = a.Parent
+            end
+        end
+    end
+    for _, d in ipairs(desc) do
+        if not LAG.want then return end
+        if d:IsA("BasePart") and not protect[d] and not lagIsKeep(d) and d:IsDescendantOf(paths) then
+            stash(d)
+        end
+    end
+end
+
+local function lagRestore()
+    local list = LAG.moved
+    LAG.moved = {}
+    for i = #list, 1, -1 do   -- ย้อนกลับจากตัวท้าย ให้ลูกกลับเข้าพ่อก่อนพ่อกลับที่เดิม
+        local it = list[i]
+        pcall(function() it.inst.Parent = it.parent end)
+        if i % LAG.BATCH == 0 then task.wait() end
+    end
+end
+
+local function lagWorker()
+    if LAG.busy then return end
+    LAG.busy = true
+    task.spawn(function()
+        while true do
+            if LAG.want and not LAG.applied then
+                LAG.applied = true
+                lagApply()
+            elseif not LAG.want and LAG.applied then
+                lagRestore()
+                LAG.applied = false
+            else
+                break
+            end
+        end
+        LAG.busy = false
+    end)
+end
+
+local function setAntiLag(on)
+    LAG.want = on and true or false
+    lagWorker()
+end
+
 -- ----- ปิดสคริปต์ -----
 local function shutdown()
     if not alive then return end
     alive = false
+    setAntiLag(false)   -- เอาของที่ย้ายไว้กลับที่เดิม
     isPlaying = false
     isRecording = false
     playToken = playToken + 1
@@ -3014,6 +3104,21 @@ cfgToggle(sGen, "ทำงานเฉพาะตอนอยู่ในเก
 cfgToggle(sGen, "ลองยิงตอนเงินใกล้ถึง", "EAGER_ON", nil, "เปิด = เงินใกล้พอก็ลองซื้อเลย | ปิด = รอเงินครบก่อนค่อยซื้อ")
 cfgToggle(sGen, "จด Log remote (ไว้หา Id)", "SNIFFER", nil, "จดเฉพาะช่วงไม่กี่วินาทีหลังวาง/อัปเกรด/โหวต")
 cfgToggle(sGen, "Anti-AFK", "ANTI_AFK")
+
+local sLag = tSet:Section({ Title = "ลดกระตุก", Desc = "ย้ายของที่ไม่จำเป็นออกจากฉากชั่วคราว (ไม่ได้ลบจริง ปิดแล้วเอากลับที่เดิม)", Icon = "gauge", Color = PT.Good })
+sLag:Toggle({
+    Title = "โหมดลดกระตุก",
+    Desc = "เปิด = ย้ายของใน Lighting ทั้งหมด + ของใน workspace.Game.Paths ออก เหลือเฉพาะที่สี (65, 66, 75) | ปิด = เอากลับครบ",
+    Default = false,
+    Callback = function(v)
+        setAntiLag(v)
+        if v and not lagPaths() then
+            notify("ไม่เจอ workspace.Game.Paths (ย้ายเฉพาะ Lighting)", PT.Warn, nil, "alert-triangle")
+        else
+            notify(v and "เปิดโหมดลดกระตุก" or "ปิดโหมดลดกระตุก (คืนของแล้ว)", v and PT.Good or PT.Warn, nil, "gauge")
+        end
+    end,
+})
 
 local sHook = tSet:Section({ Title = "Discord Webhook", Desc = "ส่งแจ้งเตือนเข้า Discord", Icon = "send", Color = PT.Purple, Collapsible = true, Collapsed = true })
 cfgToggle(sHook, "ส่งแจ้งเตือนเข้า Discord", "WEBHOOK_ON")
