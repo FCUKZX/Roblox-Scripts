@@ -166,6 +166,7 @@ do
 end
 
 if CONFIG.WEBHOOK_URL == "" then CONFIG.WEBHOOK_URL = DEFAULTS.WEBHOOK_URL end
+CONFIG.WEBHOOK_ON = true -- เปิดแจ้งเตือนดิสอัตโนมัติทุกครั้งที่รันสคริปต์ (ปิดชั่วคราวได้ในหน้า Settings)
 
 local function saveSettings()
     if not writefile then return end
@@ -408,7 +409,7 @@ do
 -- ---------- รายงานรอบ: ส่งแค่ ชื่อไอดี / Coin รวม / จำนวนรอบ (ลบข้อความเก่าก่อนส่งใหม่) ----------
 local SUFFIX_MULT = { K = 1e3, M = 1e6, B = 1e9, T = 1e12 }
 local REPORT_FILE = "PexSkibidiTD_Report.json"
-local report = { user = player.Name, coins = 0, rounds = 0, msgId = nil }
+local report = { user = player.Name, coins = 0, rounds = 0, secs = 0, lastSecs = 0, lastCoins = 0, msgId = nil }
 do
     pcall(function()
         if isfile and readfile and isfile(REPORT_FILE) then
@@ -416,6 +417,9 @@ do
             if type(d) == "table" and d.user == player.Name then
                 report.coins = tonumber(d.coins) or 0
                 report.rounds = tonumber(d.rounds) or 0
+                report.secs = tonumber(d.secs) or 0
+                report.lastSecs = tonumber(d.lastSecs) or 0
+                report.lastCoins = tonumber(d.lastCoins) or 0
                 report.msgId = type(d.msgId) == "string" and d.msgId or nil
             end
         end
@@ -453,27 +457,78 @@ function RPT.read()
     return nil
 end
 
+-- อ่านเวลาที่เล่นรอบนี้จาก FinalUI.Content.TimeLabel  รองรับ "05:23" / "1:05:23" / "5m 23s" / "1h 5m 23s"
+local function parseTimeText(txt)
+    txt = tostring(txt or ""):gsub("<[^>]+>", ""):lower()
+    local a, b, c = txt:match("(%d+):(%d+):(%d+)")
+    if a then return tonumber(a) * 3600 + tonumber(b) * 60 + tonumber(c) end
+    a, b = txt:match("(%d+):(%d+)")
+    if a then return tonumber(a) * 60 + tonumber(b) end
+    local h, m, sec = txt:match("(%d+)%s*h"), txt:match("(%d+)%s*m"), txt:match("(%d+)%s*s")
+    if h or m or sec then return (tonumber(h) or 0) * 3600 + (tonumber(m) or 0) * 60 + (tonumber(sec) or 0) end
+    return nil
+end
+
+function RPT.readTime()
+    local deadline = os.clock() + 2
+    repeat
+        local ok, node = pcall(function() return playerGui.GameUI.FinalUI.Content.TimeLabel end)
+        if ok and node then
+            local okT, txt = pcall(function() return node.Text end)
+            local n = okT and parseTimeText(txt)
+            if n then return n end
+        end
+        task.wait(0.15)
+    until os.clock() > deadline
+    return nil
+end
+
+-- 5483 -> "1 ชั่วโมง 31 นาที" / 125 -> "2 นาที 5 วินาที"
+local function durText(sec)
+    sec = math.max(0, math.floor(sec or 0))
+    local h, m, x = sec // 3600, (sec % 3600) // 60, sec % 60
+    if h > 0 then return string.format("%d ชั่วโมง %d นาที", h, m) end
+    if m > 0 then return string.format("%d นาที %d วินาที", m, x) end
+    return string.format("%d วินาที", x)
+end
+
 local function webhookBase()
     return (CONFIG.WEBHOOK_URL:gsub("%?.*$", ""))
 end
 
-function RPT.round(roundCoins)
+function RPT.round(roundCoins, roundSecs)
+    roundSecs = roundSecs or 0
     report.rounds = report.rounds + 1
     report.coins = report.coins + (roundCoins or 0)
+    report.secs = report.secs + roundSecs
+    report.lastSecs, report.lastCoins = roundSecs, roundCoins or 0
     saveReport()
     if not CONFIG.WEBHOOK_ON or CONFIG.WEBHOOK_URL == "" or not httpRequest then return end
     local url, oldId = webhookBase(), report.msgId
-    local text = string.format("ได้ Coin %s เล่นทั้งหมด %d รอบ จากรหัสชื่อ %s", fmtNum(report.coins), report.rounds, player.Name)
+    local embed = {
+        title = "📊 สรุปการเล่น | " .. player.Name,
+        color = 8148223,
+        fields = {
+            { name = "👤 รหัส", value = player.Name, inline = true },
+            { name = "🎮 เล่นไปแล้ว", value = report.rounds .. " รอบ", inline = true },
+            { name = "💰 Coin ที่หาได้ (รวม)", value = fmtNum(report.coins), inline = true },
+            { name = "⏱️ เวลารอบล่าสุด", value = durText(report.lastSecs) .. " (+" .. fmtNum(report.lastCoins) .. " Coin)", inline = false },
+            { name = "🕒 เล่นทั้งหมด", value = durText(report.secs), inline = false },
+        },
+        footer = { text = "Pex Hub | อัปเดต " .. os.date("%H:%M:%S") },
+    }
     task.spawn(function()
+        local body = HttpService:JSONEncode({ embeds = { embed } })
+        local headers = { ["Content-Type"] = "application/json" }
+        -- มีข้อความเดิมอยู่ -> แก้ไขข้อความเดิม (ไม่เด้งแจ้งเตือนใหม่ในดิส)
         if oldId then
+            local ok, res = pcall(httpRequest, { Url = url .. "/messages/" .. oldId, Method = "PATCH", Headers = headers, Body = body })
+            local code = ok and type(res) == "table" and (res.StatusCode or res.status_code)
+            if ok and type(res) == "table" and (res.Success == true or code == 200) then return end
+            -- แก้ไม่ได้ (ข้อความถูกลบ/ลิงก์เปลี่ยน) -> ลบของเก่าทิ้งแล้วส่งใหม่
             pcall(httpRequest, { Url = url .. "/messages/" .. oldId, Method = "DELETE" })
         end
-        local ok, res = pcall(httpRequest, {
-            Url = url .. "?wait=true",
-            Method = "POST",
-            Headers = { ["Content-Type"] = "application/json" },
-            Body = HttpService:JSONEncode({ content = text }),
-        })
+        local ok, res = pcall(httpRequest, { Url = url .. "?wait=true", Method = "POST", Headers = headers, Body = body })
         local newId
         if ok and type(res) == "table" and res.Body then
             local okJ, d = pcall(function() return HttpService:JSONDecode(res.Body) end)
@@ -485,7 +540,7 @@ function RPT.round(roundCoins)
 end
 
 function RPT.reset(coinsToo)
-    if coinsToo then report.coins, report.rounds = 0, 0 end
+    if coinsToo then report.coins, report.rounds, report.secs, report.lastSecs, report.lastCoins = 0, 0, 0, 0, 0 end
     report.msgId = nil
     saveReport()
 end
@@ -1887,7 +1942,7 @@ local function runLoops(total, startCompleted, waitForGame)
                     stats.lastRound = dur
                     stats.totalRoundTime = stats.totalRoundTime + dur
                     logf("จบรอบ %s ใช้เวลา %s", label, fmtTime(dur))
-                    RPT.round(RPT.read())
+                    RPT.round(RPT.read(), RPT.readTime() or dur)
                     refreshAll()
                 end
                 end -- inGame()
@@ -2963,7 +3018,7 @@ sHook:Action({
     end,
 })
 sHook:Action({
-    Text = "รีเซ็ตยอด Coin / จำนวนรอบ", Icon = "trash", Color = PT.Bad,
+    Text = "รีเซ็ตยอด Coin / รอบ / เวลา", Icon = "trash", Color = PT.Bad,
     Callback = function()
         RPT.reset(true)
         notify("ล้างยอดสะสมแล้ว", PT.Good, nil, "check")
