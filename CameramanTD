@@ -51,9 +51,9 @@ local function runLobbyMode()
     local httpRequest = (syn and syn.request) or (http and http.request) or http_request or request
         or (fluxus and fluxus.request)
 
-    local alive, running, token = true, false, 0
+    local alive, running = true, false
     local conns = {}
-    local st = { mode = 1, opened = 0, spent = 0, rounds = 0, msgId = nil }
+    local st = { opened = 0, spent = 0, rounds = 0, msgId = nil }
 
     -- โหลดยอดเดิม (ต่อเนื่องแม้รันสคริปต์ใหม่)
     pcall(function()
@@ -96,17 +96,18 @@ local function runLobbyMode()
     end
 
     -- ---------- เงิน ----------
+    -- เงินอ่านจาก PlayerGui.HUD.Currencies.Money.CurrencyFrame.AmountLabel (ข้อความ เช่น "1,250" / "1.2K")
+    local SUF = { K = 1e3, M = 1e6, B = 1e9, T = 1e12 }
     local function getCoins()
-        local ls = lp:FindFirstChild("leaderstats")
-        local obj = ls and ls:FindFirstChild("Coins")
-        if not obj then return nil end
-        local ok, v = pcall(function()
-            if obj:IsA("ValueBase") then return obj.Value end
-            return obj.Text
+        local ok, txt = pcall(function()
+            return pg.HUD.Currencies.Money.CurrencyFrame.AmountLabel.Text
         end)
-        if not ok then return nil end
-        if type(v) == "number" then return v end
-        local n = tonumber((tostring(v):gsub("[^%d%.]", "")))
+        if not ok or type(txt) ~= "string" then return nil end
+        txt = txt:gsub("<[^>]+>", ""):gsub(",", ""):gsub("%s", "")
+        local num, suf = txt:match("(%d+%.?%d*)([KkMmBbTt]?)")
+        local n = tonumber(num)
+        if not n then return nil end
+        if suf ~= "" then n = n * (SUF[suf:upper()] or 1) end
         return n
     end
 
@@ -181,7 +182,6 @@ local function runLobbyMode()
     local function shutdown()
         alive = false
         running = false
-        token = token + 1
         for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
         genv.__PexLobby = nil
     end
@@ -196,31 +196,10 @@ local function runLobbyMode()
     end
 
     local tab = win:AddTab({ Name = "Crate", Category = "Lobby", Icon = "package", Color = PT.Accent })
-    local sel = tab:Section({ Title = "สุ่มกล่อง (Basic Crate)", Desc = "1 กล่อง = 100 Coins | 10 กล่อง = 900 Coins (ลด 10%)", Icon = "gift", Color = PT.Orange })
-    local lblMode = sel:Label({ Text = "แบบที่เลือก: 1 กล่อง (100 Coins / รอบ)", TextSize = 13, Color = PT.Text })
-
-    local function price() return st.mode == 10 and PRICE_TEN or PRICE_ONE end
-    local function modeText()
-        return string.format("แบบที่เลือก: %d กล่อง (%d Coins / รอบ)", st.mode, price())
-    end
-    sel:Action({
-        Text = "เลือก: 1 กล่อง (100 Coins)", Icon = "box", Color = PT.Blue,
-        Callback = function()
-            if running then notify("หยุดก่อนจึงจะเปลี่ยนแบบได้", PT.Warn, "x") return end
-            st.mode = 1
-            lblMode.Text = modeText()
-        end,
-    })
-    sel:Action({
-        Text = "เลือก: 10 กล่อง (900 Coins)", Icon = "boxes", Color = PT.Purple,
-        Callback = function()
-            if running then notify("หยุดก่อนจึงจะเปลี่ยนแบบได้", PT.Warn, "x") return end
-            st.mode = 10
-            lblMode.Text = modeText()
-        end,
-    })
-    local roundsBox = sel:Input({ Title = "จำนวนรอบที่จะสุ่ม", Default = "1", Placeholder = "เช่น 5" })
-    local lblInfo = sel:Label({ Text = "รอเริ่ม", TextSize = 12, Color = PT.Text })
+    local sel = tab:Section({ Title = "สุ่มกล่อง (Basic Crate)", Desc = "กดปุ่มเดียวสุ่มทันที | 1 กล่อง = 100 Coins | 10 กล่อง = 900 Coins (ลด 10%)", Icon = "gift", Color = PT.Orange })
+    local lblCoins = sel:Label({ Text = "Coins: -", TextSize = 13, Color = PT.Text })
+    local roundsBox = sel:Input({ Title = "กำหนดรอบสุ่ม (พิมพ์ตัวเลข)", Default = "1", Placeholder = "เช่น 5 = กดปุ่มแล้วสุ่ม 5 รอบ" })
+    local lblInfo = sel:Label({ Text = "พร้อมสุ่ม", TextSize = 12, Color = PT.Text })
 
     local function getRounds()
         local n = tonumber(roundsBox and roundsBox.Text) or 1
@@ -239,27 +218,23 @@ local function runLobbyMode()
         return pcall(function() return rf:InvokeServer(CRATE_NAME, count) end)
     end
 
-    local function start()
-        if running then return end
-        local total = getRounds()
-        local cost = price()
-        local count = st.mode
+    -- กด 1 ครั้ง = สุ่มทันที (ปกติ 1 รอบ) เช็กเงินก่อนทุกรอบ ไม่พอ = ไม่สุ่ม
+    local function roll(count)
+        if running then notify("กำลังสุ่มอยู่ รอให้เสร็จก่อน", PT.Warn, "hourglass") return end
+        local total, cost = getRounds(), (count == 10 and PRICE_TEN or PRICE_ONE)
         running = true
-        token = token + 1
-        local my = token
-        local function active() return alive and running and token == my end
         task.spawn(function()
             local done, stopMsg, fails = 0, nil, 0
-            while active() and done < total do
+            while alive and done < total do
                 local coins = getCoins()
-                if not coins then stopMsg = "ไม่เจอ leaderstats.Coins" break end
+                if not coins then stopMsg = "อ่านเงินไม่ได้ (HUD.Currencies.Money)" break end
                 if coins < cost then
-                    stopMsg = string.format("เงินไม่พอ (มี %s ต้องใช้ %s) หยุดสุ่ม", fmt(coins), fmt(cost))
+                    stopMsg = string.format("เงินไม่พอ (มี %s ต้องใช้ %s) ไม่สุ่ม", fmt(coins), fmt(cost))
                     break
                 end
-                setInfo(string.format("กำลังสุ่มรอบ %d/%d | Coins: %s", done + 1, total, fmt(coins)))
+                setInfo(string.format("กำลังสุ่ม %d กล่อง รอบ %d/%d", count, done + 1, total))
                 local ok, res = summon(count)
-                -- สำเร็จ = เหรียญลดลง (รอสูงสุด 2.5 วิ) หรือเซิร์ฟเวอร์ตอบค่าจริง
+                -- สำเร็จ = เงินลดลง (รอสูงสุด 2.5 วิ) หรือเซิร์ฟเวอร์ตอบค่าจริง
                 local dropped = false
                 local t0 = os.clock()
                 while os.clock() - t0 < 2.5 do
@@ -274,38 +249,25 @@ local function runLobbyMode()
                     st.opened = st.opened + count
                     st.spent = st.spent + cost
                     saveSt()
-                    sendReport(string.format("กำลังสุ่ม %d/%d รอบ", done, total))
                 else
                     fails = fails + 1
                     if fails >= 3 then
-                        stopMsg = "สุ่มไม่สำเร็จติดกัน 3 ครั้ง หยุด (" .. tostring(res) .. ")"
+                        stopMsg = "สุ่มไม่สำเร็จติดกัน 3 ครั้ง (" .. tostring(res) .. ")"
                         break
                     end
                 end
-                task.wait(0.7)
+                if done < total then task.wait(0.7) end
             end
-            if token == my then
-                running = false
-                local msg = stopMsg or string.format("สุ่มครบ %d รอบแล้ว", done)
-                setInfo(msg .. " | Coins: " .. fmt(getCoins() or 0))
-                notify(msg, stopMsg and PT.Warn or PT.Good, stopMsg and "x" or "trophy")
-                sendReport(msg)
-            end
+            running = false
+            local msg = stopMsg or string.format("สุ่มเสร็จ %d รอบ (%d กล่อง/รอบ)", done, count)
+            setInfo(msg)
+            notify(msg, stopMsg and PT.Warn or PT.Good, stopMsg and "x" or "trophy")
+            if done > 0 then sendReport(msg) end
         end)
     end
 
-    sel:Action({ Text = "เริ่มสุ่ม", Icon = "play", Color = PT.Good, Callback = start })
-    sel:Action({
-        Text = "หยุด", Icon = "square", Color = PT.Bad,
-        Callback = function()
-            if running then
-                running = false
-                token = token + 1
-                setInfo("หยุดแล้ว")
-                sendReport("หยุดโดยผู้ใช้")
-            end
-        end,
-    })
+    sel:Action({ Text = "สุ่ม 1 กล่อง (100 Coins)", Icon = "box", Color = PT.Blue, Callback = function() roll(1) end })
+    sel:Action({ Text = "สุ่ม 10 กล่อง (900 Coins)", Icon = "boxes", Color = PT.Purple, Callback = function() roll(10) end })
     sel:Action({
         Text = "รีเซ็ตยอดสถิติ", Icon = "trash", Color = PT.Elem,
         Callback = function()
@@ -317,24 +279,24 @@ local function runLobbyMode()
 
     task.spawn(function()
         while alive do
-            if not running then
-                local c = getCoins()
-                lblMode.Text = modeText() .. (c and (" | Coins: " .. fmt(c)) or "")
-            end
-            task.wait(1.5)
+            local c = getCoins()
+            local r = getRounds()
+            lblCoins.Text = string.format("Coins: %s | รอบที่ตั้ง: %d | 1 กล่อง = %s Coins | 10 กล่อง = %s Coins",
+                c and fmt(c) or "-", r, fmt(r * PRICE_ONE), fmt(r * PRICE_TEN))
+            task.wait(0.5)
         end
     end)
-    notify("โหมดลอบบี้: เลือกแบบกล่อง ใส่จำนวนรอบ แล้วกดเริ่มสุ่ม", PT.Good, "package")
+    notify("โหมดลอบบี้: กดปุ่มสุ่มได้เลย", PT.Good, "package")
 end
 
 -- =====================================================================
 --  ด่านแรกสุด: ไม่เจอ PlayerGui.GameUI.GamemodeVoting "จริงๆ" = สคริปต์ไม่ทำงานอะไรเลย
 --  (ไม่โหลด UI / ไม่ hook / ไม่สร้างลูปใดๆ) -- อยู่ลอบบี้ก็จบตรงนี้
---  รอได้สูงสุด GATE_WAIT วินาที เผื่อ GUI ของเกมยังโหลดไม่เสร็จ (เช่นหลังย้ายเซิร์ฟ)
+--  รอได้สูงสุด GATE_WAIT วินาที (ลอบบี้จะเปิดหน้าต่างหลังรอนี้) เผื่อ GUI ของเกมยังโหลดไม่เสร็จ (เช่นหลังย้ายเซิร์ฟ)
 --  ถ้าปิด "ทำงานเฉพาะตอนอยู่ในเกม" (REQUIRE_VOTE_UI) ในหน้า Settings ไว้ ก็จะข้ามด่านนี้
 -- =====================================================================
 do
-    local GATE_WAIT = 20
+    local GATE_WAIT = 5
     local needGate = true
     pcall(function()
         if isfile and readfile and isfile("PexSkibidiTD_Settings.json") then
