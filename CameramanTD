@@ -26,6 +26,308 @@ local SCRIPT_FILE = ""
 if not game:IsLoaded() then game.Loaded:Wait() end
 
 -- =====================================================================
+--  โหมดลอบบี้: ถูกเรียกแทนสคริปต์มาโคร เมื่อไม่เจอ GameUI.GamemodeVoting (อยู่หน้าลอบบี้)
+--  สุ่มกล่อง Basic Crate: เลือก 1 กล่อง (100 Coins) หรือ 10 กล่อง (900 Coins) + กำหนดจำนวนรอบ
+--  เช็กเงินก่อนสุ่มทุกรอบ ถ้าเงินไม่พอจะหยุดทันที  ตำแหน่งเงิน: LocalPlayer.leaderstats.Coins
+--  ส่งสรุปเข้า Discord (แก้ไขข้อความเดิม ไม่เด้งซ้ำ) ใช้ลิงก์เดียวกับโหมดในเกม
+-- =====================================================================
+local function runLobbyMode()
+    local Players = game:GetService("Players")
+    local RS = game:GetService("ReplicatedStorage")
+    local HttpService = game:GetService("HttpService")
+    local VirtualUser = game:GetService("VirtualUser")
+    local lp = Players.LocalPlayer
+    local pg = lp:WaitForChild("PlayerGui")
+
+    local CRATE_NAME = "Basic Crate"
+    local PRICE_ONE, PRICE_TEN = 100, 900
+    local DEFAULT_URL = "https://discord.com/api/webhooks/1559951960298496121/_xGby0oKhcg9oypwtca8VqnXWf1_eQ8UGqrZA4wYmpYgSMuyJrHHvrU4leHP8nOmkG20"
+    local SETTINGS = "PexSkibidiTD_Settings.json"
+    local LOBBY_FILE = "PexSkibidiTD_Lobby.json"
+
+    local genv = (getgenv and getgenv()) or _G
+    if type(genv.__PexLobby) == "function" then pcall(genv.__PexLobby) end
+
+    local httpRequest = (syn and syn.request) or (http and http.request) or http_request or request
+        or (fluxus and fluxus.request)
+
+    local alive, running, token = true, false, 0
+    local conns = {}
+    local st = { mode = 1, opened = 0, spent = 0, rounds = 0, msgId = nil }
+
+    -- โหลดยอดเดิม (ต่อเนื่องแม้รันสคริปต์ใหม่)
+    pcall(function()
+        if isfile and readfile and isfile(LOBBY_FILE) then
+            local d = HttpService:JSONDecode(readfile(LOBBY_FILE))
+            if type(d) == "table" and d.user == lp.Name then
+                st.opened = tonumber(d.opened) or 0
+                st.spent = tonumber(d.spent) or 0
+                st.rounds = tonumber(d.rounds) or 0
+                st.msgId = type(d.msgId) == "string" and d.msgId or nil
+            end
+        end
+    end)
+    local function saveSt()
+        if not writefile then return end
+        pcall(function()
+            writefile(LOBBY_FILE, HttpService:JSONEncode({
+                user = lp.Name, opened = st.opened, spent = st.spent, rounds = st.rounds, msgId = st.msgId,
+            }))
+        end)
+    end
+
+    local webhookUrl = DEFAULT_URL
+    pcall(function()
+        if isfile and readfile and isfile(SETTINGS) then
+            local d = HttpService:JSONDecode(readfile(SETTINGS))
+            if type(d) == "table" and type(d.WEBHOOK_URL) == "string" and d.WEBHOOK_URL ~= "" then
+                webhookUrl = d.WEBHOOK_URL
+            end
+        end
+    end)
+    local function baseUrl() return (webhookUrl:gsub("%?.*$", "")) end
+
+    local function fmt(n)
+        local txt = string.format("%.0f", tonumber(n) or 0)
+        local sign, digits = txt:match("^(-?)(%d+)$")
+        if not digits then return txt end
+        digits = digits:reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
+        return sign .. digits
+    end
+
+    -- ---------- เงิน ----------
+    local function getCoins()
+        local ls = lp:FindFirstChild("leaderstats")
+        local obj = ls and ls:FindFirstChild("Coins")
+        if not obj then return nil end
+        local ok, v = pcall(function()
+            if obj:IsA("ValueBase") then return obj.Value end
+            return obj.Text
+        end)
+        if not ok then return nil end
+        if type(v) == "number" then return v end
+        local n = tonumber((tostring(v):gsub("[^%d%.]", "")))
+        return n
+    end
+
+    -- ---------- Discord ----------
+    local function sendReport(note)
+        if not httpRequest or webhookUrl == "" then return end
+        local coins = getCoins()
+        local embed = {
+            title = "🎁 สรุปการสุ่มกล่อง | " .. lp.Name,
+            color = 15844367,
+            fields = {
+                { name = "👤 รหัส", value = lp.Name, inline = true },
+                { name = "📦 เปิดไปแล้ว", value = fmt(st.opened) .. " กล่อง (" .. st.rounds .. " รอบ)", inline = true },
+                { name = "💸 ใช้ Coins ไป", value = fmt(st.spent), inline = true },
+                { name = "💰 Coins คงเหลือ", value = coins and fmt(coins) or "-", inline = true },
+                { name = "📝 สถานะ", value = note or "-", inline = false },
+            },
+            footer = { text = "Pex Hub Lobby | อัปเดต " .. os.date("%H:%M:%S") },
+        }
+        local url, oldId = baseUrl(), st.msgId
+        task.spawn(function()
+            local body = HttpService:JSONEncode({ embeds = { embed } })
+            local headers = { ["Content-Type"] = "application/json" }
+            if oldId then
+                local ok, res = pcall(httpRequest, { Url = url .. "/messages/" .. oldId, Method = "PATCH", Headers = headers, Body = body })
+                local code = ok and type(res) == "table" and (res.StatusCode or res.status_code)
+                if ok and type(res) == "table" and (res.Success == true or code == 200) then return end
+                pcall(httpRequest, { Url = url .. "/messages/" .. oldId, Method = "DELETE" })
+            end
+            local ok, res = pcall(httpRequest, { Url = url .. "?wait=true", Method = "POST", Headers = headers, Body = body })
+            local newId
+            if ok and type(res) == "table" and res.Body then
+                local okJ, d = pcall(function() return HttpService:JSONDecode(res.Body) end)
+                if okJ and type(d) == "table" and d.id then newId = tostring(d.id) end
+            end
+            st.msgId = newId
+            saveSt()
+        end)
+    end
+
+    -- ---------- Anti-AFK ----------
+    conns[#conns + 1] = lp.Idled:Connect(function()
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.new())
+        end)
+    end)
+
+    -- ---------- โหลด PexUI ----------
+    local PEX_URL = "https://raw.githubusercontent.com/FCUKZX/Roblox-Scripts/refs/heads/main/PexUI.lua"
+    local PEX
+    do
+        local src
+        local okGet, res = pcall(function() return game:HttpGet(PEX_URL) end)
+        if okGet and type(res) == "string" and #res > 0 then src = res end
+        if not src and httpRequest then
+            local ok2, r = pcall(httpRequest, { Url = PEX_URL, Method = "GET" })
+            if ok2 and r and type(r.Body) == "string" and #r.Body > 0 then src = r.Body end
+        end
+        local fn = src and loadstring(src)
+        local okRun, lib = false, nil
+        if fn then okRun, lib = pcall(fn) end
+        if okRun and type(lib) == "table" and type(lib.CreateWindow) == "function" then PEX = lib end
+    end
+    if not PEX then
+        warn("[PexTD] โหลด PexUI ไม่ได้ (โหมดลอบบี้)")
+        for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
+        return
+    end
+    local PT = PEX.Theme
+
+    local function shutdown()
+        alive = false
+        running = false
+        token = token + 1
+        for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
+        genv.__PexLobby = nil
+    end
+    genv.__PexLobby = shutdown
+
+    local win = PEX:CreateWindow({
+        Title = "Pex Hub", Subtitle = "Lobby", Icon = "package", Name = "PexHubLobby",
+        OnClose = shutdown,
+    })
+    local function notify(text, color, icon)
+        pcall(function() win:Notify({ Text = tostring(text), Color = color, Duration = 3, Icon = icon }) end)
+    end
+
+    local tab = win:AddTab({ Name = "Crate", Category = "Lobby", Icon = "package", Color = PT.Accent })
+    local sel = tab:Section({ Title = "สุ่มกล่อง (Basic Crate)", Desc = "1 กล่อง = 100 Coins | 10 กล่อง = 900 Coins (ลด 10%)", Icon = "gift", Color = PT.Orange })
+    local lblMode = sel:Label({ Text = "แบบที่เลือก: 1 กล่อง (100 Coins / รอบ)", TextSize = 13, Color = PT.Text })
+
+    local function price() return st.mode == 10 and PRICE_TEN or PRICE_ONE end
+    local function modeText()
+        return string.format("แบบที่เลือก: %d กล่อง (%d Coins / รอบ)", st.mode, price())
+    end
+    sel:Action({
+        Text = "เลือก: 1 กล่อง (100 Coins)", Icon = "box", Color = PT.Blue,
+        Callback = function()
+            if running then notify("หยุดก่อนจึงจะเปลี่ยนแบบได้", PT.Warn, "x") return end
+            st.mode = 1
+            lblMode.Text = modeText()
+        end,
+    })
+    sel:Action({
+        Text = "เลือก: 10 กล่อง (900 Coins)", Icon = "boxes", Color = PT.Purple,
+        Callback = function()
+            if running then notify("หยุดก่อนจึงจะเปลี่ยนแบบได้", PT.Warn, "x") return end
+            st.mode = 10
+            lblMode.Text = modeText()
+        end,
+    })
+    local roundsBox = sel:Input({ Title = "จำนวนรอบที่จะสุ่ม", Default = "1", Placeholder = "เช่น 5" })
+    local lblInfo = sel:Label({ Text = "รอเริ่ม", TextSize = 12, Color = PT.Text })
+
+    local function getRounds()
+        local n = tonumber(roundsBox and roundsBox.Text) or 1
+        return math.clamp(math.floor(n), 1, 9999)
+    end
+
+    local function setInfo(t) lblInfo.Text = t end
+
+    local function summon(count)
+        local rf = RS:FindFirstChild("ModuleLoader")
+        rf = rf and rf:FindFirstChild("Shared")
+        rf = rf and rf:FindFirstChild("Network")
+        rf = rf and rf:FindFirstChild("RemoteFunction")
+        rf = rf and rf:FindFirstChild("SummonTowers")
+        if not rf then return false, "ไม่เจอ RemoteFunction.SummonTowers" end
+        return pcall(function() return rf:InvokeServer(CRATE_NAME, count) end)
+    end
+
+    local function start()
+        if running then return end
+        local total = getRounds()
+        local cost = price()
+        local count = st.mode
+        running = true
+        token = token + 1
+        local my = token
+        local function active() return alive and running and token == my end
+        task.spawn(function()
+            local done, stopMsg, fails = 0, nil, 0
+            while active() and done < total do
+                local coins = getCoins()
+                if not coins then stopMsg = "ไม่เจอ leaderstats.Coins" break end
+                if coins < cost then
+                    stopMsg = string.format("เงินไม่พอ (มี %s ต้องใช้ %s) หยุดสุ่ม", fmt(coins), fmt(cost))
+                    break
+                end
+                setInfo(string.format("กำลังสุ่มรอบ %d/%d | Coins: %s", done + 1, total, fmt(coins)))
+                local ok, res = summon(count)
+                -- สำเร็จ = เหรียญลดลง (รอสูงสุด 2.5 วิ) หรือเซิร์ฟเวอร์ตอบค่าจริง
+                local dropped = false
+                local t0 = os.clock()
+                while os.clock() - t0 < 2.5 do
+                    local now = getCoins()
+                    if now and now <= coins - cost * 0.5 then dropped = true break end
+                    task.wait(0.1)
+                end
+                if ok and (dropped or (res ~= nil and res ~= false)) then
+                    fails = 0
+                    done = done + 1
+                    st.rounds = st.rounds + 1
+                    st.opened = st.opened + count
+                    st.spent = st.spent + cost
+                    saveSt()
+                    sendReport(string.format("กำลังสุ่ม %d/%d รอบ", done, total))
+                else
+                    fails = fails + 1
+                    if fails >= 3 then
+                        stopMsg = "สุ่มไม่สำเร็จติดกัน 3 ครั้ง หยุด (" .. tostring(res) .. ")"
+                        break
+                    end
+                end
+                task.wait(0.7)
+            end
+            if token == my then
+                running = false
+                local msg = stopMsg or string.format("สุ่มครบ %d รอบแล้ว", done)
+                setInfo(msg .. " | Coins: " .. fmt(getCoins() or 0))
+                notify(msg, stopMsg and PT.Warn or PT.Good, stopMsg and "x" or "trophy")
+                sendReport(msg)
+            end
+        end)
+    end
+
+    sel:Action({ Text = "เริ่มสุ่ม", Icon = "play", Color = PT.Good, Callback = start })
+    sel:Action({
+        Text = "หยุด", Icon = "square", Color = PT.Bad,
+        Callback = function()
+            if running then
+                running = false
+                token = token + 1
+                setInfo("หยุดแล้ว")
+                sendReport("หยุดโดยผู้ใช้")
+            end
+        end,
+    })
+    sel:Action({
+        Text = "รีเซ็ตยอดสถิติ", Icon = "trash", Color = PT.Elem,
+        Callback = function()
+            st.opened, st.spent, st.rounds, st.msgId = 0, 0, 0, nil
+            saveSt()
+            notify("ล้างยอดแล้ว", PT.Good, "check")
+        end,
+    })
+
+    task.spawn(function()
+        while alive do
+            if not running then
+                local c = getCoins()
+                lblMode.Text = modeText() .. (c and (" | Coins: " .. fmt(c)) or "")
+            end
+            task.wait(1.5)
+        end
+    end)
+    notify("โหมดลอบบี้: เลือกแบบกล่อง ใส่จำนวนรอบ แล้วกดเริ่มสุ่ม", PT.Good, "package")
+end
+
+-- =====================================================================
 --  ด่านแรกสุด: ไม่เจอ PlayerGui.GameUI.GamemodeVoting "จริงๆ" = สคริปต์ไม่ทำงานอะไรเลย
 --  (ไม่โหลด UI / ไม่ hook / ไม่สร้างลูปใดๆ) -- อยู่ลอบบี้ก็จบตรงนี้
 --  รอได้สูงสุด GATE_WAIT วินาที เผื่อ GUI ของเกมยังโหลดไม่เสร็จ (เช่นหลังย้ายเซิร์ฟ)
@@ -54,7 +356,8 @@ do
             task.wait(0.25)
         end
         if not found then
-            warn("[PexTD] ไม่เจอ GameUI.GamemodeVoting (ลอบบี้?) สคริปต์ไม่ทำงาน")
+            warn("[PexTD] ไม่เจอ GameUI.GamemodeVoting -> เข้าโหมดลอบบี้ (สุ่มกล่อง)")
+            runLobbyMode()
             return
         end
     end
