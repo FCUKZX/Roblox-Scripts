@@ -3,7 +3,6 @@
 --  ถูกเรียกจาก CameramanTD.lua อัตโนมัติ เมื่อไม่เจอ UI ในเกมและ PlaceId ตรงกับลอบบี้
 --  ใส่จำนวนกล่อง -> กดสุ่ม | ทุก 10 กล่อง = 900 Coins, เศษกล่องละ 100 Coins
 --  สุ่มทีละ 10 กล่อง จนเหลือเศษหลักหน่วยแล้วสุ่มทีละ 1 กล่อง จนครบจำนวน
---  ตำแหน่งเงิน: PlayerGui.HUD.Currencies.Money.CurrencyFrame.AmountLabel
 -- =====================================================================
 if not game:IsLoaded() then game.Loaded:Wait() end
 
@@ -74,7 +73,7 @@ do
     if okRun and type(lib) == "table" and type(lib.CreateWindow) == "function" then PEX = lib end
 end
 if not PEX then
-    warn("[PexLobby] โหลด PexUI ไม่ได้")
+    warn("[PexLobby] โหลดหน้าต่างไม่สำเร็จ")
     for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
     return
 end
@@ -122,14 +121,14 @@ local function summon(count)
     rf = rf and rf:FindFirstChild("Network")
     rf = rf and rf:FindFirstChild("RemoteFunction")
     rf = rf and rf:FindFirstChild("SummonTowers")
-    if not rf then return false, "ไม่เจอ RemoteFunction.SummonTowers" end
+    if not rf then return false, "ระบบสุ่มใช้ไม่ได้ในตอนนี้" end
     return pcall(function() return rf:InvokeServer(CRATE_NAME, count) end)
 end
 
 -- สุ่ม 1 ครั้ง (count = 10 หรือ 1) คืนค่า true ถ้าสำเร็จ
 local function summonOnce(count, cost)
     local coins = getCoins()
-    if not coins then return false, "อ่านเงินไม่ได้ (HUD.Currencies.Money)", true end
+    if not coins then return false, "อ่านเงินไม่ได้", true end
     if coins < cost then
         return false, string.format("เงินไม่พอ (มี %s ต้องใช้ %s)", fmt(coins), fmt(cost)), true
     end
@@ -215,3 +214,4 @@ task.spawn(function()
         task.wait(0.5)
     end
 end)
+notify("โหมดลอบบี้: กดปุ่มสุ่มได้เลย", PT.Good, "package")
