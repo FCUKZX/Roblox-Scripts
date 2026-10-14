@@ -27,8 +27,8 @@ if not game:IsLoaded() then game.Loaded:Wait() end
 
 -- =====================================================================
 --  โหมดลอบบี้: ถูกเรียกแทนสคริปต์มาโคร เมื่อไม่เจอ GameUI.GamemodeVoting (อยู่หน้าลอบบี้)
---  สุ่มกล่อง Basic Crate: เลือก 1 กล่อง (100 Coins) หรือ 10 กล่อง (900 Coins) + กำหนดจำนวนรอบ
---  เช็กเงินก่อนสุ่มทุกรอบ ถ้าเงินไม่พอจะหยุดทันที  ตำแหน่งเงิน: LocalPlayer.leaderstats.Coins
+--  สุ่มกล่อง Basic Crate: ใส่จำนวนกล่อง + ปุ่มสุ่ม (ทุก 10 กล่อง = 900 Coins เศษกล่องละ 100)
+--  คำนวณเงินก่อนสุ่ม ถ้าไม่พอจะไม่สุ่ม  ตำแหน่งเงิน: LocalPlayer.leaderstats.Coins
 --  ส่งสรุปเข้า Discord (แก้ไขข้อความเดิม ไม่เด้งซ้ำ) ใช้ลิงก์เดียวกับโหมดในเกม
 -- =====================================================================
 local function runLobbyMode()
@@ -196,14 +196,21 @@ local function runLobbyMode()
     end
 
     local tab = win:AddTab({ Name = "Crate", Category = "Lobby", Icon = "package", Color = PT.Accent })
-    local sel = tab:Section({ Title = "สุ่มกล่อง (Basic Crate)", Desc = "กดปุ่มเดียวสุ่มทันที | 1 กล่อง = 100 Coins | 10 กล่อง = 900 Coins (ลด 10%)", Icon = "gift", Color = PT.Orange })
+    local sel = tab:Section({ Title = "สุ่มกล่อง (Basic Crate)", Desc = "ใส่จำนวนกล่อง แล้วกดสุ่ม | 1 กล่อง = 100 Coins | ครบทุก 10 กล่อง คิดชุดละ 900 Coins (ลด 10%)", Icon = "gift", Color = PT.Orange })
     local lblCoins = sel:Label({ Text = "Coins: -", TextSize = 13, Color = PT.Text })
-    local roundsBox = sel:Input({ Title = "กำหนดรอบสุ่ม (พิมพ์ตัวเลข)", Default = "1", Placeholder = "เช่น 5 = กดปุ่มแล้วสุ่ม 5 รอบ" })
+    local countBox = sel:Input({ Title = "จำนวนที่จะสุ่ม (กล่อง)", Default = "10", Placeholder = "เช่น 10, 50, 7" })
+    local lblCalc = sel:Label({ Text = "-", TextSize = 12, Color = PT.Text })
     local lblInfo = sel:Label({ Text = "พร้อมสุ่ม", TextSize = 12, Color = PT.Text })
 
-    local function getRounds()
-        local n = tonumber(roundsBox and roundsBox.Text) or 1
+    local function getCount()
+        local n = tonumber(countBox and countBox.Text) or 1
         return math.clamp(math.floor(n), 1, 9999)
+    end
+
+    -- คำนวณราคา: ทุก 10 กล่อง = 900 / เศษที่เหลือกล่องละ 100
+    local function calcCost(n)
+        local packs, single = math.floor(n / 10), n % 10
+        return packs * PRICE_TEN + single * PRICE_ONE, packs, single
     end
 
     local function setInfo(t) lblInfo.Text = t end
@@ -218,57 +225,80 @@ local function runLobbyMode()
         return pcall(function() return rf:InvokeServer(CRATE_NAME, count) end)
     end
 
-    -- กด 1 ครั้ง = สุ่มทันที (ปกติ 1 รอบ) เช็กเงินก่อนทุกรอบ ไม่พอ = ไม่สุ่ม
-    local function roll(count)
+    -- สุ่ม 1 ครั้ง (count = 1 หรือ 10) คืนค่า true ถ้าสำเร็จ
+    local function summonOnce(count, cost)
+        local coins = getCoins()
+        if not coins then return false, "อ่านเงินไม่ได้ (HUD.Currencies.Money)", true end
+        if coins < cost then
+            return false, string.format("เงินไม่พอ (มี %s ต้องใช้ %s)", fmt(coins), fmt(cost)), true
+        end
+        local ok, res = summon(count)
+        local replied = ok and res ~= nil and res ~= false
+        local dropped = false
+        local t0 = os.clock()
+        -- เซิร์ฟเวอร์ตอบแล้ว = ไปต่อทันที / ไม่ตอบ = รอดูเงินลดสูงสุด 2.5 วิ
+        while ok and not replied and os.clock() - t0 < 2.5 do
+            local now = getCoins()
+            if now and now <= coins - cost * 0.5 then dropped = true break end
+            task.wait(0.1)
+        end
+        if ok and (dropped or replied) then return true end
+        return false, tostring(res), false
+    end
+
+    local function roll()
         if running then notify("กำลังสุ่มอยู่ รอให้เสร็จก่อน", PT.Warn, "hourglass") return end
-        local total, cost = getRounds(), (count == 10 and PRICE_TEN or PRICE_ONE)
+        local n = getCount()
+        local cost, packs, single = calcCost(n)
+        local coins = getCoins()
+        if not coins then notify("อ่านเงินไม่ได้", PT.Warn, "x") return end
+        if coins < cost then
+            local msg = string.format("เงินไม่พอ สุ่ม %d กล่องต้องใช้ %s (มี %s ขาดอีก %s)", n, fmt(cost), fmt(coins), fmt(cost - coins))
+            setInfo(msg)
+            notify(msg, PT.Warn, "x")
+            return
+        end
+
         running = true
         task.spawn(function()
-            local done, stopMsg, fails = 0, nil, 0
-            while alive and done < total do
-                local coins = getCoins()
-                if not coins then stopMsg = "อ่านเงินไม่ได้ (HUD.Currencies.Money)" break end
-                if coins < cost then
-                    stopMsg = string.format("เงินไม่พอ (มี %s ต้องใช้ %s) ไม่สุ่ม", fmt(coins), fmt(cost))
-                    break
-                end
-                setInfo(string.format("กำลังสุ่ม %d กล่อง รอบ %d/%d", count, done + 1, total))
-                local ok, res = summon(count)
-                -- สำเร็จ = เงินลดลง (รอสูงสุด 2.5 วิ) หรือเซิร์ฟเวอร์ตอบค่าจริง
-                local dropped = false
-                local t0 = os.clock()
-                local replied = ok and res ~= nil and res ~= false
-                -- เซิร์ฟเวอร์ตอบแล้ว = ไปรอบต่อไปทันที (ไม่หน่วง) / ไม่ตอบ = รอดูเงินลดสูงสุด 2.5 วิ
-                while not replied and os.clock() - t0 < 2.5 do
-                    local now = getCoins()
-                    if now and now <= coins - cost * 0.5 then dropped = true break end
-                    task.wait(0.1)
-                end
-                if ok and (dropped or (res ~= nil and res ~= false)) then
+            local opened, spent, stopMsg, fails = 0, 0, nil, 0
+            -- แบ่งเป็นชุด 10 กล่อง (900) ก่อน แล้วค่อยสุ่มเศษทีละ 1 กล่อง (100)
+            local steps = {}
+            for _ = 1, packs do steps[#steps + 1] = { 10, PRICE_TEN } end
+            for _ = 1, single do steps[#steps + 1] = { 1, PRICE_ONE } end
+
+            local i = 1
+            while alive and i <= #steps do
+                local count, price = steps[i][1], steps[i][2]
+                setInfo(string.format("กำลังสุ่ม... %d/%d กล่อง", opened, n))
+                local ok, err, fatal = summonOnce(count, price)
+                if ok then
                     fails = 0
-                    done = done + 1
+                    i = i + 1
+                    opened = opened + count
+                    spent = spent + price
                     st.rounds = st.rounds + 1
                     st.opened = st.opened + count
-                    st.spent = st.spent + cost
+                    st.spent = st.spent + price
                     saveSt()
                 else
                     fails = fails + 1
-                    if fails >= 3 then
-                        stopMsg = "สุ่มไม่สำเร็จติดกัน 3 ครั้ง (" .. tostring(res) .. ")"
+                    if fatal or fails >= 3 then
+                        stopMsg = fatal and err or ("สุ่มไม่สำเร็จติดกัน 3 ครั้ง (" .. err .. ")")
                         break
                     end
                 end
             end
             running = false
-            local msg = stopMsg or string.format("สุ่มเสร็จ %d รอบ (%d กล่อง/รอบ)", done, count)
+            local msg = stopMsg and string.format("หยุด: %s | สุ่มได้ %d/%d กล่อง", stopMsg, opened, n)
+                or string.format("สุ่มเสร็จ %d กล่อง (ใช้ %s Coins)", opened, fmt(spent))
             setInfo(msg)
             notify(msg, stopMsg and PT.Warn or PT.Good, stopMsg and "x" or "trophy")
-            if done > 0 then sendReport(msg) end
+            if opened > 0 then sendReport(msg) end
         end)
     end
 
-    sel:Action({ Text = "สุ่ม 1 กล่อง (100 Coins)", Icon = "box", Color = PT.Blue, Callback = function() roll(1) end })
-    sel:Action({ Text = "สุ่ม 10 กล่อง (900 Coins)", Icon = "boxes", Color = PT.Purple, Callback = function() roll(10) end })
+    sel:Action({ Text = "🎲 สุ่มเลย", Icon = "boxes", Color = PT.Purple, Callback = roll })
     sel:Action({
         Text = "รีเซ็ตยอดสถิติ", Icon = "trash", Color = PT.Elem,
         Callback = function()
@@ -281,9 +311,13 @@ local function runLobbyMode()
     task.spawn(function()
         while alive do
             local c = getCoins()
-            local r = getRounds()
-            lblCoins.Text = string.format("Coins: %s | รอบที่ตั้ง: %d | 1 กล่อง = %s Coins | 10 กล่อง = %s Coins",
-                c and fmt(c) or "-", r, fmt(r * PRICE_ONE), fmt(r * PRICE_TEN))
+            local n = getCount()
+            local cost, packs, single = calcCost(n)
+            lblCoins.Text = "Coins: " .. (c and fmt(c) or "-")
+            local saved = n * PRICE_ONE - cost
+            local status = (c == nil and "") or (c >= cost and "✅ เงินพอ" or ("❌ ขาดอีก " .. fmt(cost - c)))
+            lblCalc.Text = string.format("สุ่ม %d กล่อง = %d ชุด x%s + %d กล่อง x%s | รวม %s Coins (ประหยัด %s) %s",
+                n, packs, fmt(PRICE_TEN), single, fmt(PRICE_ONE), fmt(cost), fmt(saved), status)
             task.wait(0.5)
         end
     end)
