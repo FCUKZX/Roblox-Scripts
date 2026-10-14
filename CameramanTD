@@ -136,8 +136,8 @@ local DEFAULTS = {
     -- [ระบบ / อื่นๆ]
     SNIFFER = true,         -- จด remote ที่เข้า/ออกช่วงหลังวาง/อัปเกรด ลงแท็บ Log (ไว้หา Id)
     ANTI_AFK = true,
-    WEBHOOK_ON = false,
-    WEBHOOK_URL = "",
+    WEBHOOK_ON = true,
+    WEBHOOK_URL = "https://discord.com/api/webhooks/1559951960298496121/_xGby0oKhcg9oypwtca8VqnXWf1_eQ8UGqrZA4wYmpYgSMuyJrHHvrU4leHP8nOmkG20", -- ลิงก์ตั้งต้น (ปุ่มรีเซ็ตในหน้า Settings กลับมาใช้ค่านี้)
     STOP_KEY = "",          -- ชื่อ KeyCode ของปุ่มลัด "หยุดทั้งหมด" (ว่าง = ไม่ใช้)
     AUTO_SKIP = true,       -- สถานะที่ต้องการของ AutoSkip (เปิด = สคริปต์กดให้เป็นสีไม่แดง)
     GAMESPEED_ON = false,   -- เปิด = สคริปต์กดปรับ GameSpeed ให้เป็นตัวที่เลือก
@@ -164,6 +164,8 @@ do
         end
     end
 end
+
+if CONFIG.WEBHOOK_URL == "" then CONFIG.WEBHOOK_URL = DEFAULTS.WEBHOOK_URL end
 
 local function saveSettings()
     if not writefile then return end
@@ -399,6 +401,94 @@ local function sendWebhook(title, desc, force)
         })
     end)
     return true
+end
+
+local RPT = {}
+do
+-- ---------- รายงานรอบ: ส่งแค่ ชื่อไอดี / Coin รวม / จำนวนรอบ (ลบข้อความเก่าก่อนส่งใหม่) ----------
+local SUFFIX_MULT = { K = 1e3, M = 1e6, B = 1e9, T = 1e12 }
+local REPORT_FILE = "PexSkibidiTD_Report.json"
+local report = { user = player.Name, coins = 0, rounds = 0, msgId = nil }
+do
+    pcall(function()
+        if isfile and readfile and isfile(REPORT_FILE) then
+            local d = HttpService:JSONDecode(readfile(REPORT_FILE))
+            if type(d) == "table" and d.user == player.Name then
+                report.coins = tonumber(d.coins) or 0
+                report.rounds = tonumber(d.rounds) or 0
+                report.msgId = type(d.msgId) == "string" and d.msgId or nil
+            end
+        end
+    end)
+end
+
+local function saveReport()
+    if not writefile then return end
+    pcall(function() writefile(REPORT_FILE, HttpService:JSONEncode(report)) end)
+end
+
+-- อ่านเหรียญที่ได้รอบนี้จาก FinalUI.Content.Stats.FrameCoins_Clone.Template.CoinAmount
+local function parseCoinText(txt)
+    txt = tostring(txt or ""):gsub("<[^>]+>", ""):gsub(",", ""):gsub("%s", "")
+    local num, suf = txt:match("(%d+%.?%d*)([KkMmBbTt]?)")
+    local n = tonumber(num)
+    if not n then return nil end
+    if suf ~= "" then n = n * (SUFFIX_MULT[suf:upper()] or 1) end
+    return n
+end
+
+function RPT.read()
+    local deadline = os.clock() + 3
+    repeat
+        local ok, node = pcall(function()
+            return playerGui.GameUI.FinalUI.Content.Stats.FrameCoins_Clone.Template.CoinAmount
+        end)
+        if ok and node then
+            local okT, txt = pcall(function() return node.Text end)
+            local n = okT and parseCoinText(txt)
+            if n then return n end
+        end
+        task.wait(0.15)
+    until os.clock() > deadline
+    return nil
+end
+
+local function webhookBase()
+    return (CONFIG.WEBHOOK_URL:gsub("%?.*$", ""))
+end
+
+function RPT.round(roundCoins)
+    report.rounds = report.rounds + 1
+    report.coins = report.coins + (roundCoins or 0)
+    saveReport()
+    if not CONFIG.WEBHOOK_ON or CONFIG.WEBHOOK_URL == "" or not httpRequest then return end
+    local url, oldId = webhookBase(), report.msgId
+    local text = string.format("ได้ Coin %s เล่นทั้งหมด %d รอบ จากรหัสชื่อ %s", fmtNum(report.coins), report.rounds, player.Name)
+    task.spawn(function()
+        if oldId then
+            pcall(httpRequest, { Url = url .. "/messages/" .. oldId, Method = "DELETE" })
+        end
+        local ok, res = pcall(httpRequest, {
+            Url = url .. "?wait=true",
+            Method = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = HttpService:JSONEncode({ content = text }),
+        })
+        local newId
+        if ok and type(res) == "table" and res.Body then
+            local okJ, d = pcall(function() return HttpService:JSONDecode(res.Body) end)
+            if okJ and type(d) == "table" and d.id then newId = tostring(d.id) end
+        end
+        report.msgId = newId
+        saveReport()
+    end)
+end
+
+function RPT.reset(coinsToo)
+    if coinsToo then report.coins, report.rounds = 0, 0 end
+    report.msgId = nil
+    saveReport()
+end
 end
 
 -- ========== Anti-AFK ==========
@@ -1797,7 +1887,7 @@ local function runLoops(total, startCompleted, waitForGame)
                     stats.lastRound = dur
                     stats.totalRoundTime = stats.totalRoundTime + dur
                     logf("จบรอบ %s ใช้เวลา %s", label, fmtTime(dur))
-                    sendWebhook("จบรอบ " .. label, statsText())
+                    RPT.round(RPT.read())
                     refreshAll()
                 end
                 end -- inGame()
@@ -2855,11 +2945,28 @@ cfgToggle(sGen, "Anti-AFK", "ANTI_AFK")
 
 local sHook = tSet:Section({ Title = "Discord Webhook", Desc = "ส่งแจ้งเตือนเข้า Discord", Icon = "send", Color = PT.Purple, Collapsible = true, Collapsed = true })
 cfgToggle(sHook, "ส่งแจ้งเตือนเข้า Discord", "WEBHOOK_ON")
-sHook:Input({
+ui.urlBox = sHook:Input({
     Title = "Webhook URL", Default = CONFIG.WEBHOOK_URL, Placeholder = "https://discord.com/api/webhooks/...",
     Callback = function(box)
         CONFIG.WEBHOOK_URL = (box.Text:gsub("^%s+", ""):gsub("%s+$", ""))
         saveSettings()
+    end,
+})
+sHook:Action({
+    Text = "รีเซ็ตลิงก์ (กลับเป็นลิงก์เดิม)", Icon = "rotate-ccw", Color = PT.Orange,
+    Callback = function()
+        CONFIG.WEBHOOK_URL = DEFAULTS.WEBHOOK_URL
+        RPT.reset(false)
+        saveSettings()
+        if ui.urlBox then ui.urlBox.Text = DEFAULTS.WEBHOOK_URL end
+        notify("กลับมาใช้ลิงก์เดิมแล้ว", PT.Good, nil, "check")
+    end,
+})
+sHook:Action({
+    Text = "รีเซ็ตยอด Coin / จำนวนรอบ", Icon = "trash", Color = PT.Bad,
+    Callback = function()
+        RPT.reset(true)
+        notify("ล้างยอดสะสมแล้ว", PT.Good, nil, "check")
     end,
 })
 sHook:Action({
