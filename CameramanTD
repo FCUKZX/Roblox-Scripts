@@ -237,7 +237,9 @@ local function runLobbyMode()
                 -- สำเร็จ = เงินลดลง (รอสูงสุด 2.5 วิ) หรือเซิร์ฟเวอร์ตอบค่าจริง
                 local dropped = false
                 local t0 = os.clock()
-                while os.clock() - t0 < 2.5 do
+                local replied = ok and res ~= nil and res ~= false
+                -- เซิร์ฟเวอร์ตอบแล้ว = ไปรอบต่อไปทันที (ไม่หน่วง) / ไม่ตอบ = รอดูเงินลดสูงสุด 2.5 วิ
+                while not replied and os.clock() - t0 < 2.5 do
                     local now = getCoins()
                     if now and now <= coins - cost * 0.5 then dropped = true break end
                     task.wait(0.1)
@@ -256,7 +258,6 @@ local function runLobbyMode()
                         break
                     end
                 end
-                if done < total then task.wait(0.7) end
             end
             running = false
             local msg = stopMsg or string.format("สุ่มเสร็จ %d รอบ (%d กล่อง/รอบ)", done, count)
