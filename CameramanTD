@@ -196,7 +196,7 @@ local function runLobbyMode()
     end
 
     local tab = win:AddTab({ Name = "Crate", Category = "Lobby", Icon = "package", Color = PT.Accent })
-    local sel = tab:Section({ Title = "สุ่มกล่อง (Basic Crate)", Desc = "ใส่จำนวนกล่อง แล้วกดสุ่ม (สุ่มรวดเดียว) | 1 กล่อง = 100 Coins | ทุก 10 กล่อง คิดชุดละ 900 (ลด 10%)", Icon = "gift", Color = PT.Orange })
+    local sel = tab:Section({ Title = "สุ่มกล่อง (Basic Crate)", Desc = "ใส่จำนวนกล่อง แล้วกดสุ่ม (ทีละ 10 เศษทีละ 1) | 1 กล่อง = 100 Coins | ทุก 10 กล่อง คิดชุดละ 900 (ลด 10%)", Icon = "gift", Color = PT.Orange })
     local lblCoins = sel:Label({ Text = "Coins: -", TextSize = 13, Color = PT.Text })
     local countBox = sel:Input({ Title = "จำนวนที่จะสุ่ม (กล่อง)", Default = "10", Placeholder = "เช่น 10, 50, 7" })
     local lblCalc = sel:Label({ Text = "-", TextSize = 12, Color = PT.Text })
@@ -225,7 +225,7 @@ local function runLobbyMode()
         return pcall(function() return rf:InvokeServer(CRATE_NAME, count) end)
     end
 
-    -- ยิงสุ่มครั้งเดียวตามจำนวน count คืนค่า true ถ้าสำเร็จ
+    -- ยิงสุ่ม 1 ครั้ง (count = 10 หรือ 1) คืนค่า true ถ้าสำเร็จ
     local function summonOnce(count, cost)
         local coins = getCoins()
         if not coins then return false, "อ่านเงินไม่ได้ (HUD.Currencies.Money)", true end
@@ -261,26 +261,51 @@ local function runLobbyMode()
 
         running = true
         task.spawn(function()
-            -- ยิง remote ครั้งเดียว ส่งจำนวนที่ตั้งไว้ไปตรงๆ (เช่น 50 = InvokeServer("Basic Crate", 50))
-            setInfo(string.format("กำลังสุ่ม %d กล่อง...", n))
-            local ok, err = summonOnce(n, cost)
-            running = false
-            local msg
-            if ok then
-                st.rounds = st.rounds + 1
-                st.opened = st.opened + n
-                st.spent = st.spent + cost
-                saveSt()
-                msg = string.format("สุ่มเสร็จ %d กล่อง (ใช้ %s Coins)", n, fmt(cost))
-            else
-                msg = "สุ่มไม่สำเร็จ: " .. tostring(err)
+            -- สุ่มทีละ 10 กล่อง (900) จนเหลือเศษ แล้วสุ่มทีละ 1 กล่อง (100) จนครบจำนวน
+            local opened, spent, stopMsg, fails = 0, 0, nil, 0
+            while alive and opened < n do
+                local count = (n - opened >= 10) and 10 or 1
+                local price = (count == 10) and PRICE_TEN or PRICE_ONE
+                setInfo(string.format("กำลังสุ่ม... %d/%d กล่อง", opened, n))
+                local ok, err, fatal = summonOnce(count, price)
+                if ok then
+                    fails = 0
+                    opened = opened + count
+                    spent = spent + price
+                    st.rounds = st.rounds + 1
+                    st.opened = st.opened + count
+                    st.spent = st.spent + price
+                    saveSt()
+                else
+                    fails = fails + 1
+                    if fatal or fails >= 3 then
+                        stopMsg = fatal and err or ("สุ่มไม่สำเร็จติดกัน 3 ครั้ง (" .. tostring(err) .. ")")
+                        break
+                    end
+                end
             end
+            running = false
+            local msg = stopMsg and string.format("หยุด: %s | สุ่มได้ %d/%d กล่อง", stopMsg, opened, n)
+                or string.format("สุ่มเสร็จ %d กล่อง (ใช้ %s Coins)", opened, fmt(spent))
             setInfo(msg)
-            notify(msg, ok and PT.Good or PT.Warn, ok and "trophy" or "x")
-            if ok then sendReport(msg) end
+            notify(msg, stopMsg and PT.Warn or PT.Good, stopMsg and "x" or "trophy")
+            if opened > 0 then sendReport(msg) end
         end)
     end
 
+    -- ใส่จำนวนให้พอดีกับเงินทั้งหมด (ชุด 10 = 900 ก่อน แล้วเศษกล่องละ 100)
+    local function fitMax()
+        local coins = getCoins()
+        if not coins then notify("อ่านเงินไม่ได้", PT.Warn, "x") return end
+        local packs = math.floor(coins / PRICE_TEN)
+        local single = math.floor((coins - packs * PRICE_TEN) / PRICE_ONE)
+        local n = packs * 10 + single
+        if n < 1 then notify("เงินไม่พอสุ่มแม้แต่ 1 กล่อง", PT.Warn, "x") return end
+        countBox.Text = tostring(n)
+        notify(string.format("ตั้งจำนวน %d กล่อง (ใช้ %s Coins)", n, fmt((calcCost(n)))), PT.Good, "check")
+    end
+
+    sel:Action({ Text = "💰 ใส่จำนวนพอดีกับเงินทั้งหมด", Icon = "coins", Color = PT.Blue, Callback = fitMax })
     sel:Action({ Text = "🎲 สุ่มเลย", Icon = "boxes", Color = PT.Purple, Callback = roll })
     sel:Action({
         Text = "รีเซ็ตยอดสถิติ", Icon = "trash", Color = PT.Elem,
