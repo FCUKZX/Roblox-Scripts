@@ -60,17 +60,17 @@ do
         end
         if not found then
             if game.PlaceId == LOBBY_PLACE_ID then
-                warn("[PexTD] ไม่เจอ GameUI.GamemodeVoting และเป็นแมพลอบบี้ -> โหลดสคริปต์ลอบบี้จาก GitHub")
+                warn("[PexTD] โหมดลอบบี้")
                 local okGet, src = pcall(function() return game:HttpGet(LOBBY_URL) end)
                 local fn = okGet and type(src) == "string" and loadstring(src)
                 if fn then
                     local okRun, err = pcall(fn)
-                    if not okRun then warn("[PexTD] สคริปต์ลอบบี้ error: " .. tostring(err)) end
+                    if not okRun then warn("[PexTD] สคริปต์ลอบบี้ทำงานไม่สำเร็จ") end
                 else
-                    warn("[PexTD] โหลดสคริปต์ลอบบี้ไม่ได้ (เช็ก LOBBY_URL)")
+                    warn("[PexTD] โหลดสคริปต์ลอบบี้ไม่ได้")
                 end
             else
-                warn("[PexTD] ไม่เจอ GameUI.GamemodeVoting และไม่ใช่แมพลอบบี้ -> ไม่ทำงาน")
+                warn("[PexTD] ไม่ได้อยู่ในเกม ไม่ทำงาน")
             end
             return
         end
@@ -154,17 +154,18 @@ local DEFAULTS = {
     SNIFFER = true,         -- จด remote ที่เข้า/ออกช่วงหลังวาง/อัปเกรด ลงแท็บ Log (ไว้หา Id)
     ANTI_AFK = true,
     WEBHOOK_ON = true,
-    WEBHOOK_URL = "https://discord.com/api/webhooks/1559951960298496121/_xGby0oKhcg9oypwtca8VqnXWf1_eQ8UGqrZA4wYmpYgSMuyJrHHvrU4leHP8nOmkG20", -- ลิงก์ตั้งต้น (ปุ่มรีเซ็ตในหน้า Settings กลับมาใช้ค่านี้)
+    WEBHOOK_URL = "",       -- ใส่เองในหน้า Settings (ไม่ฝังลิงก์ไว้ในสคริปต์)
     STOP_KEY = "",          -- ชื่อ KeyCode ของปุ่มลัด "หยุดทั้งหมด" (ว่าง = ไม่ใช้)
     AUTO_SKIP = true,       -- สถานะที่ต้องการของ AutoSkip (เปิด = สคริปต์กดให้เป็นสีไม่แดง)
     GAMESPEED_ON = false,   -- เปิด = สคริปต์กดปรับ GameSpeed ให้เป็นตัวที่เลือก
+    ANTI_LAG = false,       -- โหมดลดกระตุก (จำค่าไว้ เปิดเองตอนเข้าเกม)
     GAMESPEED_PICK = "",    -- ชื่อปุ่มความเร็วที่เลือก (ตรงกับชื่อใน GameUI.GameSpeeds เช่น "1.5")
 }
 -- มีแค่ค่าเหล่านี้ที่เซฟ/โหลดจากไฟล์ (ค่าอื่นล็อกตาม DEFAULTS เสมอ)
 local USER_KEYS = {
     "EAGER_ON", "START_DELAY", "AUTO_REPLAY", "REPLAY_WAIT", "AUTO_RESUME", "REQUIRE_VOTE_UI", "SNIFFER",
     "ANTI_AFK", "WEBHOOK_ON", "WEBHOOK_URL", "STOP_KEY", "AUTO_SKIP", "GAMESPEED_ON", "GAMESPEED_PICK",
-    "WAVE_GATE",
+    "WAVE_GATE", "ANTI_LAG",
 }
 local CONFIG = {}
 for k, v in pairs(DEFAULTS) do CONFIG[k] = v end
@@ -182,7 +183,6 @@ do
     end
 end
 
-if CONFIG.WEBHOOK_URL == "" then CONFIG.WEBHOOK_URL = DEFAULTS.WEBHOOK_URL end
 CONFIG.WEBHOOK_ON = true -- เปิดแจ้งเตือนดิสอัตโนมัติทุกครั้งที่รันสคริปต์ (ปิดชั่วคราวได้ในหน้า Settings)
 
 local function saveSettings()
@@ -902,9 +902,9 @@ task.spawn(function()
     local f = g and g:WaitForChild("Towers", 30)
     if f and alive then
         hookTowersFolder(f)
-        log("ผูก workspace.Game.Towers แล้ว")
+        log("ผูกระบบตรวจยูนิตแล้ว")
     elseif alive then
-        log("⚠️ ไม่เจอ workspace.Game.Towers (จะรอใหม่เมื่อเกมโหลด)")
+        log("⚠️ ยังตรวจยูนิตไม่ได้ (จะรอใหม่เมื่อเกมโหลด)")
     end
 end)
 
@@ -1678,7 +1678,7 @@ local function waitForWave(action, active, label, i, total)
             if now - nilSince > 3 then
                 if not TD.waveWarned then
                     TD.waveWarned = true
-                    log("⚠️ อ่านเวฟจาก GameUI.Stats.Wave ไม่ได้ ข้ามการรอเวฟ (ลองปุ่ม 'ทดสอบอ่านเวฟ' ในแท็บ Editor)")
+                    log("⚠️ อ่านเวฟไม่ได้ ข้ามการรอเวฟ (ลองปุ่ม 'ทดสอบอ่านเวฟ' ในแท็บ Editor)")
                 end
                 return "ok"
             end
@@ -1889,7 +1889,7 @@ local function runLoops(total, startCompleted, waitForGame)
         return
     end
     if not moneyOK() then
-        notify("ไม่พบเงิน (leaderstats.Money) จะเล่นแบบไม่รอเงิน", nil, 5, "coins")
+        notify("อ่านเงินไม่ได้ จะเล่นแบบไม่รอเงิน", nil, 5, "coins")
     end
 
     local forever = (total == math.huge)
@@ -2194,7 +2194,7 @@ local function hookNotifications()
     track(acts.DescendantAdded:Connect(function(d)
         if alive then hookNotifLabel(d) end
     end))
-    log("ผูก GameUI.Notifications.Actions แล้ว (ดักข้อความเปลี่ยนความเร็ว)")
+    log("ผูกระบบตรวจความเร็วแล้ว")
 end
 
 local function notifConfirms(pick)
@@ -2235,10 +2235,9 @@ local function speedTick()
         GS.fail = GS.fail + 1
         local okp, fired, clicked, btn = pcall(pressSpeed, frame)
         if okp then
-            logf("GameSpeed: กด x%s | connection=%s เมาส์=%s | %s (ครั้งที่ %d)",
-                CONFIG.GAMESPEED_PICK, tostring(fired), tostring(clicked), btn:GetFullName(), GS.fail)
+            logf("GameSpeed: กด x%s (ครั้งที่ %d)", CONFIG.GAMESPEED_PICK, GS.fail)
         else
-            logf("GameSpeed error: %s", tostring(fired))
+            log("GameSpeed: กดไม่สำเร็จ")
         end
         GS.nextAt = os.clock() + (GS.fail >= 6 and 10 or 1)
     end
@@ -2377,7 +2376,7 @@ end
 local PEX, pexErr = loadPexUI()
 if not PEX then
     shutdown()
-    warn("[PexTD] " .. tostring(pexErr))
+    warn("[PexTD] โหลดหน้าต่างไม่สำเร็จ")
     return
 end
 
@@ -2612,13 +2611,13 @@ cfgToggle(sEdit, "รอเวฟตามที่กำหนดตอนเ�
         v and PT.Good or PT.Warn, nil, "waves")
 end, "ช่อง \"เวฟ\" ของแต่ละแถว: ใส่เลขเวฟที่ต้องการ (ว่าง/0 = ไม่รอเวฟ)")
 sEdit:Action({
-    Text = "ทดสอบอ่านเวฟ (GameUI.Stats.Wave)", Icon = "flask-conical", Color = PT.Blue,
+    Text = "ทดสอบอ่านเวฟ", Icon = "flask-conical", Color = PT.Blue,
     Callback = function()
         local n, raw = getWave()
         if n then
             notify(string.format("อ่านเวฟได้ %d  (ข้อความ: %s)", n, tostring(raw)), PT.Good, 4, "check")
         else
-            notify("อ่านเวฟไม่ได้ (ไม่เจอ GameUI.Stats.Wave หรือไม่มีตัวเลข)", PT.Bad, 4, "x")
+            notify("อ่านเวฟไม่ได้", PT.Bad, 4, "x")
         end
     end,
 })
@@ -2995,7 +2994,7 @@ sReplay:Action({
     Callback = function()
         if not isGameOver() then notify("ยังไม่อยู่หน้าจบเกม (FinalUI ยังไม่เปิด)", PT.Warn) return end
         local btn = gameUI("FinalUI", "Content", "PlayAgain")
-        if not btn then notify("ไม่เจอปุ่ม FinalUI.Content.PlayAgain", PT.Bad) return end
+        if not btn then notify("ยังกด PlayAgain ไม่ได้", PT.Bad) return end
         task.spawn(function()
             local ok = pcall(pressObj, btn, "PlayAgain", 1)
             notify(ok and "กดแล้ว" or "กดไม่สำเร็จ", ok and PT.Good or PT.Bad)
@@ -3003,7 +3002,7 @@ sReplay:Action({
     end,
 })
 
-local sSkip = tAuto:Section({ Title = "Auto Skip Wave", Desc = "GameUI.Stats.AutoSkip (UIStroke แดง = ปิด)", Icon = "play", Color = PT.Blue })
+local sSkip = tAuto:Section({ Title = "Auto Skip Wave", Desc = "ให้สคริปต์เปิด Auto Skip ให้อัตโนมัติ", Icon = "play", Color = PT.Blue })
 cfgToggle(sSkip, "เปิด Auto Skip ให้อัตโนมัติ", "AUTO_SKIP", function(v)
     AS.fail, AS.nextAt, AS.seen = 0, 0, 0
     notify(v and "เปิดออโต้ข้ามเวฟ" or "ปิดออโต้ข้ามเวฟ", v and PT.Good or PT.Warn, nil, "fast-forward")
@@ -3099,26 +3098,24 @@ local sDet = tSet:Section({ Title = "Detection", Desc = "ตรวจว่า�
 ui.detectLabel = sDet:Label({ Text = "—", TextSize = 12, Color = PT.Text })
 
 local sGen = tSet:Section({ Title = "General", Desc = "ตั้งค่าทั่วไป", Icon = "shield-check", Color = PT.Blue })
-cfgToggle(sGen, "ทำงานเฉพาะตอนอยู่ในเกม (ต้องเจอ GamemodeVoting)", "REQUIRE_VOTE_UI", nil,
-    "เปิด = ลอบบี้ไม่ทำอะไร และเริ่มบันทึกได้ตอน GamemodeVoting เปิดอยู่ | ปิดถ้าสคริปต์ตรวจหน้านี้ไม่เจอ")
+cfgToggle(sGen, "ทำงานเฉพาะตอนอยู่ในเกม", "REQUIRE_VOTE_UI", nil,
+    "เปิด = ลอบบี้ไม่ทำอะไร และเริ่มบันทึกได้เฉพาะตอนอยู่ในเกม | ปิดถ้าสคริปต์ตรวจไม่เจอว่าอยู่ในเกม")
 cfgToggle(sGen, "ลองยิงตอนเงินใกล้ถึง", "EAGER_ON", nil, "เปิด = เงินใกล้พอก็ลองซื้อเลย | ปิด = รอเงินครบก่อนค่อยซื้อ")
 cfgToggle(sGen, "จด Log remote (ไว้หา Id)", "SNIFFER", nil, "จดเฉพาะช่วงไม่กี่วินาทีหลังวาง/อัปเกรด/โหวต")
 cfgToggle(sGen, "Anti-AFK", "ANTI_AFK")
 
 local sLag = tSet:Section({ Title = "ลดกระตุก", Desc = "ย้ายของที่ไม่จำเป็นออกจากฉากชั่วคราว (ไม่ได้ลบจริง ปิดแล้วเอากลับที่เดิม)", Icon = "gauge", Color = PT.Good })
-sLag:Toggle({
-    Title = "โหมดลดกระตุก",
-    Desc = "เปิด = ย้ายของใน Lighting ทั้งหมด + ของใน workspace.Game.Paths ออก เหลือเฉพาะที่สี (65, 66, 75) | ปิด = เอากลับครบ",
-    Default = false,
-    Callback = function(v)
-        setAntiLag(v)
-        if v and not lagPaths() then
-            notify("ไม่เจอ workspace.Game.Paths (ย้ายเฉพาะ Lighting)", PT.Warn, nil, "alert-triangle")
-        else
-            notify(v and "เปิดโหมดลดกระตุก" or "ปิดโหมดลดกระตุก (คืนของแล้ว)", v and PT.Good or PT.Warn, nil, "gauge")
-        end
-    end,
-})
+cfgToggle(sLag, "โหมดลดกระตุก", "ANTI_LAG", function(v)
+    setAntiLag(v)
+    notify(v and "เปิดโหมดลดกระตุก" or "ปิดโหมดลดกระตุก (คืนของแล้ว)", v and PT.Good or PT.Warn, nil, "gauge")
+end, "เปิด = ย้ายเอฟเฟกต์ฉากและของที่ไม่จำเป็นออกให้เกมเบาลง | ปิด = เอากลับครบ | จำค่าไว้ เปิดเองตอนรันสคริปต์")
+if CONFIG.ANTI_LAG then
+    task.spawn(function()
+        local t0 = os.clock()
+        while alive and not lagPaths() and os.clock() - t0 < 15 do task.wait(0.5) end
+        if alive and CONFIG.ANTI_LAG then setAntiLag(true) end
+    end)
+end
 
 local sHook = tSet:Section({ Title = "Discord Webhook", Desc = "ส่งแจ้งเตือนเข้า Discord", Icon = "send", Color = PT.Purple, Collapsible = true, Collapsed = true })
 cfgToggle(sHook, "ส่งแจ้งเตือนเข้า Discord", "WEBHOOK_ON")
@@ -3130,13 +3127,13 @@ ui.urlBox = sHook:Input({
     end,
 })
 sHook:Action({
-    Text = "รีเซ็ตลิงก์ (กลับเป็นลิงก์เดิม)", Icon = "rotate-ccw", Color = PT.Orange,
+    Text = "ล้างลิงก์ Webhook", Icon = "rotate-ccw", Color = PT.Orange,
     Callback = function()
-        CONFIG.WEBHOOK_URL = DEFAULTS.WEBHOOK_URL
+        CONFIG.WEBHOOK_URL = ""
         RPT.reset(false)
         saveSettings()
-        if ui.urlBox then ui.urlBox.Text = DEFAULTS.WEBHOOK_URL end
-        notify("กลับมาใช้ลิงก์เดิมแล้ว", PT.Good, nil, "check")
+        if ui.urlBox then ui.urlBox.Text = "" end
+        notify("ล้างลิงก์แล้ว", PT.Good, nil, "check")
     end,
 })
 sHook:Action({
@@ -3203,29 +3200,20 @@ task.spawn(function()
         task.wait(0.5)
         if tStats.Page.Visible then ui.statsLabel.Text = statsText() end
         if tSet.Page.Visible then
+            local function mark(ok) return ok and "✓" or "✗" end
+            local spd = speedList()
+            local slots = 0
+            for k, v in pairs(player:GetAttributes()) do
+                if type(k) == "string" and k:match("^Slot%d+$") and type(v) == "string" then slots = slots + 1 end
+            end
             ui.detectLabel.Text = table.concat({
-                "สถานะ: " .. (inGame() and "อยู่ในเกม" or "ลอบบี้ / ยังไม่เจอ GamemodeVoting"),
-                "GamemodeVoting: " .. stateOf(gameUI("GamemodeVoting")),
-                "GameSpeeds: " .. (function()
-                    local l = speedList()
-                    if not l then return "ไม่พบ" end
-                    local a = activeSpeedName()
-                    return string.format("%d ปุ่ม | ใช้อยู่: %s", #l, a and ("x" .. a) or "ไม่รู้")
-                end)(),
-                "FinalUI: " .. stateOf(gameUI("FinalUI")),
-                "PlayAgain: " .. (gameUI("FinalUI", "Content", "PlayAgain") and "พบ" or "ไม่พบ"),
-                "AutoSkip: " .. skipStateText(),
-                "เงิน: " .. (moneyOK() and fmtNum(getMoney()) or "ไม่พบ leaderstats.Money"),
-                (function()
-                    local n = 0
-                    for k, v in pairs(player:GetAttributes()) do
-                        if type(k) == "string" and k:match("^Slot%d+$") and type(v) == "string" then n = n + 1 end
-                    end
-                    return "Slot ยูนิตของผู้เล่น: " .. (n > 0 and (n .. " ช่อง") or "ไม่พบ")
-                end)(),
-                "workspace.Game.Towers: " .. (TD.towersFolder and "พบ" or "ไม่พบ"),
-                string.format("Remote: ModeVote %s | TowerAdd %s | TowerUpgrade %s",
-                    modeVoteRE and "✓" or "✗", towerAddRE and "✓" or "✗", towerUpgradeRE and "✓" or "✗"),
+                "สถานะ: " .. (inGame() and "อยู่ในเกม" or "ลอบบี้ / ยังไม่อยู่ในเกม"),
+                "หน้าโหวต/จบเกม: " .. mark(gameUI("GamemodeVoting") or gameUI("FinalUI")),
+                "ความเร็วเกม: " .. mark(spd),
+                "เงิน: " .. (moneyOK() and fmtNum(getMoney()) or "✗"),
+                "ยูนิตของผู้เล่น: " .. mark(slots > 0),
+                "ตรวจยูนิตในฉาก: " .. mark(TD.towersFolder),
+                "ระบบสั่งงาน: " .. mark(modeVoteRE and towerAddRE and towerUpgradeRE),
             }, "\n")
         end
         if tAuto.Page.Visible then
@@ -3287,7 +3275,7 @@ ui.refreshAll()
 setStatus("พร้อมใช้งาน | เริ่มบันทึกตอนหน้าโหวตโหมดเปิด", "ok", "zap")
 
 if not (netFolder and modeVoteRE and towerAddRE and towerUpgradeRE) then
-    notify("ไม่เจอ Remote บางตัว (ดู Settings > Detection)", PT.Bad, 6, "x")
+    notify("ระบบบางส่วนยังไม่พร้อม (ดู Settings > Detection)", PT.Bad, 6, "x")
 end
 
 task.spawn(tryResume)
