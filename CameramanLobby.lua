@@ -91,8 +91,8 @@ local win = PEX:CreateWindow({
     Title = "Pex Hub", Subtitle = "Lobby", Icon = "package", Name = "PexHubLobby",
     OnClose = shutdown,
 })
-local function notify(text, color, icon)
-    pcall(function() win:Notify({ Text = tostring(text), Color = color, Duration = 3, Icon = icon }) end)
+local function notify(text, color, icon, dur)
+    pcall(function() win:Notify({ Text = tostring(text), Color = color, Duration = dur or 3, Icon = icon }) end)
 end
 
 local tab = win:AddTab({ Name = "Crate", Category = "Lobby", Icon = "package", Color = PT.Accent })
@@ -114,6 +114,88 @@ local function calcCost(n)
 end
 
 local function setInfo(t) lblInfo.Text = t end
+
+-- ---------- ระดับความหายาก (อ่านจาก SummonBoardUI) + แจ้งเตือนเมื่อสุ่มได้ ----------
+local ALERT_SOUND = "rbxasset://sounds/electronicpingshort.wav"   -- เปลี่ยนเป็นเสียงอื่นได้ เช่น "rbxassetid://เลขไอดี"
+local SoundService = game:GetService("SoundService")
+
+local RARITY = { order = {}, byName = {}, lastScan = 0 }   -- byName[ชื่อยูนิต(ตัวเล็ก)] = ระดับ
+local selected = {}        -- ระดับที่เลือกให้แจ้งเตือน
+local notifyOn = true
+local syncToggles          -- ประกาศไว้ก่อน (สร้างปุ่มเลือกระดับ)
+
+local function cleanText(t)
+    local x = tostring(t or ""):gsub("<[^>]+>", "")
+    x = x:gsub("^%s+", ""):gsub("%s+$", "")
+    return x:lower()
+end
+
+-- ชื่อโฟลเดอร์ระดับ เช่น Units1.Epic.UnitFrame.UnitName -> ระดับ = "Epic"
+local function scanRarity()
+    RARITY.lastScan = os.clock()
+    local list = pg:FindFirstChild("SummonBoardUI")
+    list = list and list:FindFirstChild("SummonHolder")
+    list = list and list:FindFirstChild("MainFrame")
+    list = list and list:FindFirstChild("UnitList")
+    if not list then return false end
+    local known = {}
+    for _, r in ipairs(RARITY.order) do known[r] = true end
+    for _, d in ipairs(list:GetDescendants()) do
+        if d.Name == "UnitName" and (d:IsA("TextLabel") or d:IsA("TextButton")) then
+            local a = d
+            while a.Parent and a.Parent ~= list and not a.Parent.Name:match("^Units%d*$") do a = a.Parent end
+            if a.Parent and a.Parent.Name:match("^Units%d*$") then
+                local r = a.Name
+                RARITY.byName[cleanText(d.Text)] = r
+                if not known[r] then known[r] = true RARITY.order[#RARITY.order + 1] = r end
+            end
+        end
+    end
+    return #RARITY.order > 0
+end
+
+local function playAlert()
+    task.spawn(function()
+        pcall(function()
+            local snd = Instance.new("Sound")
+            snd.SoundId = ALERT_SOUND
+            snd.Volume = 2
+            snd.Parent = SoundService
+            for _ = 1, 3 do snd:Play() task.wait(0.4) end
+            task.wait(1.5)
+            snd:Destroy()
+        end)
+    end)
+end
+
+-- ตรวจผลสุ่ม: ชื่อยูนิตตรงกับ UnitName ที่ระดับไหน ถ้าเป็นระดับที่เลือกไว้ -> แจ้งเตือน + เสียง
+local function handleResults(res)
+    if not notifyOn or next(selected) == nil or type(res) ~= "table" then return end
+    local list = res
+    if res.Name == nil and type(res[1]) == "table" and res[1].Name == nil and type(res[1][1]) == "table" then list = res[1] end
+    local hits, order = {}, {}
+    for _, e in ipairs(list) do
+        local nm = type(e) == "table" and e.Name
+        if type(nm) == "string" then
+            local key = cleanText(nm)
+            local r = RARITY.byName[key]
+            if not r and os.clock() - RARITY.lastScan > 5 then
+                scanRarity()
+                if syncToggles then pcall(syncToggles) end
+                r = RARITY.byName[key]
+            end
+            if r and selected[r] then
+                if not hits[r] then hits[r] = {} order[#order + 1] = r end
+                table.insert(hits[r], nm)
+            end
+        end
+    end
+    if #order == 0 then return end
+    for _, r in ipairs(order) do
+        notify("🎉 สุ่มได้ระดับ " .. r .. ": " .. table.concat(hits[r], ", "), PT.Good, "trophy", 6)
+    end
+    playAlert()
+end
 
 local function summon(count)
     local rf = RS:FindFirstChild("ModuleLoader")
@@ -142,7 +224,7 @@ local function summonOnce(count, cost)
         if now and now <= coins - cost * 0.5 then dropped = true break end
         task.wait(0.1)
     end
-    if ok and (dropped or replied) then return true end
+    if ok and (dropped or replied) then return true, nil, false, res end
     return false, tostring(res), false
 end
 
@@ -167,11 +249,12 @@ local function roll()
             local count = (n - opened >= 10) and 10 or 1
             local price = (count == 10) and PRICE_TEN or PRICE_ONE
             setInfo(string.format("กำลังสุ่ม... %d/%d กล่อง", opened, n))
-            local ok, err, fatal = summonOnce(count, price)
+            local ok, err, fatal, res = summonOnce(count, price)
             if ok then
                 fails = 0
                 opened = opened + count
                 spent = spent + price
+                handleResults(res)
             else
                 fails = fails + 1
                 if fatal or fails >= 3 then
@@ -200,8 +283,118 @@ local function fitMax()
     notify(string.format("ตั้งจำนวน %d กล่อง (ใช้ %s Coins)", n, fmt((calcCost(n)))), PT.Good, "check")
 end
 
-sel:Action({ Text = "ใส่จำนวนพอดีกับเงินทั้งหมด", Icon = "coins", Color = PT.Blue, Callback = fitMax })
-sel:Action({ Text = "สุ่มเลย", Icon = "boxes", Color = PT.Purple, Callback = roll })
+sel:Action({ Text = "💰 ใส่จำนวนพอดีกับเงินทั้งหมด", Icon = "coins", Color = PT.Blue, Callback = fitMax })
+sel:Action({ Text = "🎲 สุ่มเลย", Icon = "boxes", Color = PT.Purple, Callback = roll })
+
+-- ---------- สุ่มต่อเนื่องจนกว่า Coin จะหมด ----------
+local autoOn, autoRunning = false, false
+local autoTog
+
+local function flipAutoOff()
+    autoOn = false
+    if autoTog then
+        for _, fn in ipairs({ "Set", "SetValue", "SetState" }) do
+            local ok = pcall(function()
+                if type(autoTog[fn]) == "function" then autoTog[fn](autoTog, false) else error("x") end
+            end)
+            if ok then break end
+        end
+    end
+end
+
+local function startAuto()
+    if autoRunning then return end   -- ลูปเดิมยังทำงานอยู่ และจะทำต่อเพราะ autoOn เป็น true แล้ว
+    if running then
+        notify("กำลังสุ่มอยู่ รอให้เสร็จก่อน", PT.Warn, "hourglass")
+        flipAutoOff()
+        return
+    end
+    autoRunning, running = true, true
+    task.spawn(function()
+        local opened, spent, stopMsg, fails = 0, 0, nil, 0
+        while alive and autoOn do
+            local coins = getCoins()
+            if not coins then stopMsg = "อ่านเงินไม่ได้" break end
+            local count, price
+            if coins >= PRICE_TEN then count, price = 10, PRICE_TEN
+            elseif coins >= PRICE_ONE then count, price = 1, PRICE_ONE
+            else stopMsg = "Coin หมดแล้ว" break end
+            setInfo(string.format("สุ่มต่อเนื่อง... สุ่มแล้ว %d กล่อง", opened))
+            local ok, err, fatal, res = summonOnce(count, price)
+            if ok then
+                fails = 0
+                opened = opened + count
+                spent = spent + price
+                handleResults(res)
+            else
+                fails = fails + 1
+                if fatal or fails >= 3 then
+                    stopMsg = fatal and err or ("สุ่มไม่สำเร็จติดกัน 3 ครั้ง (" .. tostring(err) .. ")")
+                    break
+                end
+                task.wait(0.3)
+            end
+        end
+        local byUser = alive and not stopMsg   -- ผู้ใช้ปิดปุ่มเอง
+        autoRunning, running = false, false
+        if stopMsg then flipAutoOff() end
+        local msg = string.format("สุ่มต่อเนื่อง%s | สุ่มได้ %d กล่อง (ใช้ %s Coins)",
+            stopMsg and (" หยุด: " .. stopMsg) or (byUser and " หยุดแล้ว" or " จบ"), opened, fmt(spent))
+        setInfo(msg)
+        notify(msg, stopMsg == "Coin หมดแล้ว" and PT.Good or PT.Warn, stopMsg == "Coin หมดแล้ว" and "trophy" or "x", 5)
+    end)
+end
+
+autoTog = sel:Toggle({
+    Title = "สุ่มต่อเนื่องจนกว่า Coin จะหมด",
+    Desc = "เปิด = สุ่มทีละ 10 (เศษทีละ 1) ไปเรื่อยๆ จน Coin ไม่พอ | ปิดเมื่อไหร่ก็หยุดทันที",
+    Default = false,
+    Callback = function(v)
+        autoOn = v and true or false
+        if autoOn then startAuto() end
+    end,
+})
+
+-- ---------- แจ้งเตือนเมื่อสุ่มได้ระดับที่เลือก ----------
+local sNotif = tab:Section({ Title = "แจ้งเตือนเมื่อสุ่มได้", Desc = "เลือกระดับที่ต้องการ ถ้าสุ่มได้ยูนิตระดับนั้นจะมีแจ้งเตือน + เสียง", Icon = "bell", Color = PT.Purple })
+local lblRar = sNotif:Label({ Text = "กำลังหาระดับ...", TextSize = 12, Color = PT.Text })
+sNotif:Toggle({
+    Title = "เปิดแจ้งเตือน (มีเสียง)",
+    Default = true,
+    Callback = function(v) notifyOn = v and true or false end,
+})
+local created = {}
+syncToggles = function()
+    for _, r in ipairs(RARITY.order) do
+        if not created[r] then
+            created[r] = true
+            sNotif:Toggle({
+                Title = "ระดับ " .. r,
+                Default = false,
+                Callback = function(v) selected[r] = v and true or nil end,
+            })
+        end
+    end
+    lblRar.Text = (#RARITY.order > 0) and ("พบ " .. #RARITY.order .. " ระดับ: " .. table.concat(RARITY.order, ", "))
+        or "ยังไม่พบระดับ (เปิดหน้า Summon ในเกมหนึ่งครั้ง แล้วกดสแกนใหม่)"
+end
+sNotif:Action({
+    Text = "สแกนระดับใหม่", Icon = "refresh-cw", Color = PT.Blue,
+    Callback = function()
+        scanRarity()
+        syncToggles()
+        notify(#RARITY.order > 0 and ("พบ " .. #RARITY.order .. " ระดับ") or "ยังไม่พบระดับ", #RARITY.order > 0 and PT.Good or PT.Warn, "refresh-cw")
+    end,
+})
+task.spawn(function()
+    local t0 = os.clock()
+    repeat
+        scanRarity()
+        if #RARITY.order > 0 then break end
+        task.wait(1)
+    until not alive or os.clock() - t0 > 20
+    if alive then syncToggles() end
+end)
 
 task.spawn(function()
     while alive do
