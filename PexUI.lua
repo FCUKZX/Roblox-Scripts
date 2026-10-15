@@ -41,7 +41,10 @@ UI.LucideMirrors = {
 UI.CustomIcons = {}
 UI.UiScale = 1 -- ขนาดตัวหน้าต่าง (1 = ขนาดจริง คมที่สุด)
 UI.ForceMobile = nil -- true/false = บังคับโหมดมือถือ/คอม, nil = ตรวจเอง
-UI.DragHoldTime = 1 -- กดค้างที่หัวหน้าต่างกี่วินาทีถึงจะลากได้ (0 = ลากได้ทันที)
+UI.DragHoldTime = 0 -- กดค้างที่หัวหน้าต่างกี่วินาทีถึงจะลากได้ (0 = ลากได้ทันที ไม่ต้องกดค้าง)
+UI.DragReturn = true -- ปล่อยหัวหน้าต่างแล้วค่อยๆ เด้งกลับที่เดิม (false = อยู่ตรงที่ปล่อย)
+UI.SliderHoldTime = 0.5 -- ต้องกดค้างที่หลอด Slider กี่วินาทีถึงจะลากได้ (0 = ลากได้ทันที)
+UI.IntroBubble = true -- ตอนเปิดสคริปต์: ผุดเป็นวงกลมแล้วขยายออกแบบเดียวกับตอนกดขยาย (false = แอนิเมชันเก่า)
 
 UI.Theme = {
     Bg = Color3.fromRGB(16, 16, 24),
@@ -453,37 +456,61 @@ UI.Ripple = ripple
 -- ล็อกการลากทั้งระบบ: ลากได้ทีละอย่างเท่านั้น (กันนิ้วลากผ่านตัวอื่นแล้วลากพร้อมกัน)
 UI._dragLock = nil
 
-local function bindDrag(win, hit, page, onAlpha, onState)
-    local dragging, active = false, nil
+-- hold (วินาที): ต้องกดค้างที่หลอดครบเวลาก่อนถึงจะลากได้ (0/nil = ลากได้ทันที)
+-- ถ้านิ้วขยับก่อนครบเวลา = ยกเลิก ปล่อยให้เลื่อนหน้าตามปกติ
+local function bindDrag(win, hit, page, onAlpha, onState, hold)
+    hold = hold or 0
+    local dragging, active, armed, token, startPos = false, nil, false, 0, nil
     local function alphaOf(input)
         return clamp((input.Position.X - hit.AbsolutePosition.X) / math.max(1, hit.AbsoluteSize.X), 0, 1)
+    end
+    local function arm()
+        armed = true
+        if page then page.ScrollingEnabled = false end
+        if onState then onState(true) end
+        onAlpha(alphaOf(active))
     end
     hit.InputBegan:Connect(function(input)
         if not isPress(input) then return end
         if UI._dragLock then return end
         UI._dragLock = input
-        dragging, active = true, input
-        if page then page.ScrollingEnabled = false end
-        if onState then onState(true) end
-        onAlpha(alphaOf(input))
+        dragging, active, armed = true, input, false
+        startPos = input.Position
+        token = token + 1
+        local my = token
+        if hold <= 0 then
+            arm()
+        else
+            task.delay(hold, function()
+                if dragging and token == my and not armed then arm() end
+            end)
+        end
         local c
         c = input.Changed:Connect(function()
             if input.UserInputState == Enum.UserInputState.End then
                 c:Disconnect()
                 if UI._dragLock == input then UI._dragLock = nil end
-                dragging = false
+                token = token + 1
+                local wasArmed = armed
+                dragging, armed = false, false
                 if page then page.ScrollingEnabled = true end
-                if onState then onState(false) end
+                if wasArmed and onState then onState(false) end
             end
         end)
     end)
     win:_conn(UserInputService.InputChanged:Connect(function(input)
         if not dragging then return end
         local t = input.UserInputType
-        if (t == Enum.UserInputType.MouseMovement and active.UserInputType ~= Enum.UserInputType.Touch)
-            or (t == Enum.UserInputType.Touch and input == active) then
-            onAlpha(alphaOf(input))
+        local ok = (t == Enum.UserInputType.MouseMovement and active.UserInputType ~= Enum.UserInputType.Touch)
+            or (t == Enum.UserInputType.Touch and input == active)
+        if not ok then return end
+        if not armed then
+            -- ขยับก่อนครบเวลา = ไม่ใช่การกดค้าง -> ยกเลิกรอบนี้ (ปล่อยให้เลื่อนหน้า)
+            local d = input.Position - startPos
+            if math.abs(d.X) + math.abs(d.Y) > 12 then token = token + 1 end
+            return
         end
+        onAlpha(alphaOf(input))
     end))
 end
 
@@ -794,23 +821,89 @@ function Section:Action(o)
 end
 
 -- รายการเลื่อนได้ (ไฟล์บันทึก / แถวแอคชัน / Log ฯลฯ)
+-- มีหัวรายการ แตะเพื่อพับ/กางได้ (ถ้าข้อมูลเยอะ)  o.Title = ชื่อหัว, o.Collapsed = เริ่มแบบพับ, o.Collapsible = false = ไม่มีหัว
 function Section:List(o)
     o = o or {}
     local order = nextSlot(self)
+    local height = o.Height or 150
+    local collapsible = o.Collapsible ~= false
+    local open = not o.Collapsed
+    local wrap = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = order }, self.Card)
+    vlist(wrap, 0)
+    local head, titleLbl, cntLbl, chev
+    if collapsible then
+        head = new("TextButton", {
+            Size = UDim2.new(1, 0, 0, 38), BackgroundTransparency = 1, BorderSizePixel = 0, AutoButtonColor = false,
+            Text = "", ClipsDescendants = true, LayoutOrder = 1,
+        }, wrap)
+        head.InputBegan:Connect(function(input)
+            if isPress(input) then
+                local rx, ry = pressRatio(head, input)
+                ripple(head, rx, ry, WHITE, 0.9)
+            end
+        end)
+        titleLbl = label(head, {
+            Text = o.Title or "รายการ", Font = F_BOLD, TextSize = 13, Position = UDim2.fromOffset(14, 0),
+            Size = UDim2.new(1, -120, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd,
+        })
+        cntLbl = label(head, {
+            Text = "", Font = F_MED, TextSize = 12, TextColor3 = T.Muted, AnchorPoint = Vector2.new(1, 0.5),
+            Position = UDim2.new(1, -38, 0.5, 0), Size = UDim2.fromOffset(70, 20), TextXAlignment = Enum.TextXAlignment.Right,
+        })
+        chev = iconLabel(head, "chevron-down", 14, T.Muted, "v", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -14, 0.5, 0) })
+        chev.Rotation = open and 180 or 0
+    end
     local holder = new("Frame", {
-        Size = UDim2.new(1, 0, 0, (o.Height or 150) + 20), BackgroundTransparency = 1, LayoutOrder = order,
-    }, self.Card)
-    pad(holder, 10)
+        Size = UDim2.new(1, 0, 0, open and (height + 20) or 0), BackgroundTransparency = 1, ClipsDescendants = true,
+        LayoutOrder = 2, Visible = open,
+    }, wrap)
+    local inner = new("Frame", { Size = UDim2.new(1, 0, 0, height + 20), BackgroundTransparency = 1 }, holder)
+    pad(inner, 10)
     local sf = new("ScrollingFrame", {
         Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Inset, BorderSizePixel = 0, ScrollBarThickness = 3,
         ScrollBarImageColor3 = T.Muted, CanvasSize = UDim2.new(), AutomaticCanvasSize = AY,
         ScrollingDirection = Enum.ScrollingDirection.Y, ElasticBehavior = Enum.ElasticBehavior.Always,
-    }, holder)
+    }, inner)
     corner(sf, 9)
     stroke(sf, T.Line, 1, 0)
     pad(sf, 6, 6, 8, 6)
     vlist(sf, 4)
-    local list = { Frame = sf, Holder = holder }
+    local list = { Frame = sf, Holder = holder, Wrap = wrap }
+
+    local function recount()
+        if not cntLbl then return end
+        local n = 0
+        for _, c in ipairs(sf:GetChildren()) do
+            if c:IsA("TextButton") then n = n + 1 end
+        end
+        cntLbl.Text = n > 0 and (n .. " รายการ") or ""
+    end
+    sf.ChildAdded:Connect(function() task.defer(recount) end)
+    sf.ChildRemoved:Connect(function() task.defer(recount) end)
+
+    function list:IsOpen() return open end
+    function list:Set(v)
+        v = v and true or false
+        if v == open then return end
+        open = v
+        if chev then tween(chev, { Rotation = open and 180 or 0 }, 0.35, Enum.EasingStyle.Quint) end
+        if open then
+            holder.Visible = true
+            tween(holder, { Size = UDim2.new(1, 0, 0, height + 20) }, 0.4, Enum.EasingStyle.Quint)
+        else
+            tween(holder, { Size = UDim2.new(1, 0, 0, 0) }, 0.3, Enum.EasingStyle.Quint)
+            task.delay(0.32, function()
+                if not open then holder.Visible = false end
+            end)
+        end
+    end
+    function list:Open() self:Set(true) end
+    function list:Close() self:Set(false) end
+    function list:Toggle() self:Set(not open) end
+    function list:SetTitle(t) if titleLbl then titleLbl.Text = tostring(t) end end
+
+    if head then head.Activated:Connect(function() list:Toggle() end) end
+
     function list:Clear()
         for _, c in ipairs(sf:GetChildren()) do
             if c:IsA("GuiObject") then c:Destroy() end
@@ -962,7 +1055,7 @@ function Section:Slider(o)
         apply(min + a * (max - min))
     end, function(down)
         tween(ks, { Scale = down and 1.28 or 1 }, 0.25, Enum.EasingStyle.Back)
-    end)
+    end, UI.SliderHoldTime)
     box.Focused:Connect(function() box.Text = tostring(value) end)
     box.FocusLost:Connect(function()
         local n = tonumber(box.Text:match("-?%d+%.?%d*"))
@@ -1046,6 +1139,7 @@ function Section:Dropdown(o)
             for _, op in ipairs(options) do
                 if selected[op] then t[#t + 1] = tostring(op) end
             end
+            if #t > 2 then return t[1] .. ", " .. t[2] .. " +" .. (#t - 2) end   -- เลือกเยอะ: สรุปสั้นๆ ไม่ให้ล้นช่อง
             return #t > 0 and table.concat(t, ", ") or (o.Placeholder or "None")
         end
         return value ~= nil and tostring(value) or (o.Placeholder or "Select")
@@ -1060,7 +1154,7 @@ function Section:Dropdown(o)
     end
     local function panelHeight()
         local content = #options * 33 - 3 + 10
-        local view = math.min(math.max(content, 20), 180)
+        local view = math.min(math.max(content, 20), o.MaxHeight or 180)
         scroll.Size = UDim2.new(1, -24, 0, view)
         return view + 12
     end
@@ -1113,6 +1207,11 @@ function Section:Dropdown(o)
     row.Activated:Connect(function() setOpen(not pc.IsOpen()) end)
 
     local obj = { Row = wrap }
+    -- กดหัว Dropdown เพื่อเปิด/ปิดได้เสมอ + สั่งจากโค้ดได้
+    function obj.IsOpen() return pc.IsOpen() end
+    function obj.Open() setOpen(true) end
+    function obj.Close() setOpen(false) end
+    function obj.Toggle() setOpen(not pc.IsOpen()) end
     function obj.Get() return multi and list() or value end
     function obj.Set(v, silent)
         if multi then
@@ -2218,9 +2317,13 @@ function UI:CreateWindow(opts)
     local winDrag = {
         Start = function()
             if self._winTween then self._winTween:Cancel() end
-            sx, sy = self.OX, self.OY
+            -- เริ่มจากตำแหน่งที่เห็นจริงตอนนี้ (กรณีจับตอนกำลังเด้งกลับ)
+            local p = win.Position
+            sx, sy = math.floor(p.X.Offset + 0.5), math.floor(p.Y.Offset + 0.5)
+            self.OX, self.OY = sx, sy
             curX, curY, tgtX, tgtY = sx, sy, sx, sy
             dragOn = true
+            tween(self._edgeStroke, { Color = T.Accent }, 0.15) -- ขอบเรืองสีหลักตอนลาก
         end,
         Move = function(dx, dy)
             if self.State ~= "open" then return end
@@ -2244,7 +2347,12 @@ function UI:CreateWindow(opts)
         End = function(moved)
             dragOn = false
             tween(self._edgeStroke, { Color = T.Line }, 0.25)
-            if moved and self.State == "open" then
+            if self.State ~= "open" then return end
+            if UI.DragReturn then
+                -- ปล่อยแล้วค่อยๆ เด้งกลับที่เดิม (กลางจอ)
+                self.OX, self.OY = 0, 0
+                self:_tweenWin({ Position = UDim2.new(0.5, 0, 0.5, 0) }, 0.6, Enum.EasingStyle.Quint)
+            elseif moved then
                 self.OX, self.OY = math.floor(tgtX + 0.5), math.floor(tgtY + 0.5)
                 self:_tweenWin({ Position = UDim2.new(0.5, self.OX, 0.5, self.OY) }, 0.22, Enum.EasingStyle.Quint)
             end
@@ -2306,6 +2414,32 @@ function UI:CreateWindow(opts)
     self.SidebarCollapsed = false
     self:Relayout(false)
     local m = self.M
+    if UI.IntroBubble ~= false then
+        -- ผุดเป็นวงกลมก่อน แล้วขยายเป็นหน้าต่างด้วยแอนิเมชันเดียวกับตอนกดขยาย (Restore)
+        local B = self.BubbleSize
+        self.State = "bubble"
+        self._veil.Visible = false
+        self._veil.BackgroundTransparency = 1
+        self._holder.Visible = true
+        self._hit.Visible = true
+        self:_clipOn()
+        self.Canvas.Visible = false
+        win.BackgroundColor3 = T.Accent
+        self._corner.CornerRadius = UDim.new(0, B / 2)
+        self._coverCorner.CornerRadius = UDim.new(0, B / 2)
+        self._clipCorner.CornerRadius = UDim.new(0, B / 2)
+        self._edgeCorner.CornerRadius = UDim.new(0, B / 2 - 1)
+        self._edgeStroke.Transparency = 1
+        self._sweep.Value = 1
+        self._bubbleIcon.ImageTransparency = 0
+        win.Position = self:_bubblePos()
+        win.Size = UDim2.fromOffset(0, 0)
+        self:_tweenWin({ Size = UDim2.fromOffset(B, B) }, 0.3, Enum.EasingStyle.Back)
+        task.delay(0.38, function()
+            if not self._destroyed and self.State == "bubble" and not UI._dragLock then self:Restore() end
+        end)
+        return self
+    end
     win.Size = UDim2.fromOffset(m.W * 0.9, m.H * 0.9)
     self:_tweenWin({ Size = UDim2.fromOffset(m.W, m.H) }, 0.6, Enum.EasingStyle.Back)
     tween(self._veil, { BackgroundTransparency = 1 }, 0.4, Enum.EasingStyle.Sine)
