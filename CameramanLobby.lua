@@ -122,7 +122,7 @@ local SoundService = game:GetService("SoundService")
 local RARITY = { order = {}, byName = {}, lastScan = 0 }   -- byName[ชื่อยูนิต(ตัวเล็ก)] = ระดับ
 local selected = {}        -- ระดับที่เลือกให้แจ้งเตือน
 local notifyOn = true
-local syncToggles          -- ประกาศไว้ก่อน (สร้างปุ่มเลือกระดับ)
+local syncToggles          -- ประกาศไว้ก่อน (อัปเดตรายการระดับใน Dropdown)
 
 local function cleanText(t)
     local x = tostring(t or ""):gsub("<[^>]+>", "")
@@ -363,17 +363,26 @@ sNotif:Toggle({
     Default = true,
     Callback = function(v) notifyOn = v and true or false end,
 })
-local created = {}
+-- เลือกระดับแบบ Dropdown (เลือกได้หลายระดับ) กดหัวเพื่อเปิด/ปิดรายการ
+local rarDrop = sNotif:Dropdown({
+    Title = "ระดับที่ต้องการแจ้งเตือน",
+    Desc = "เลือกได้หลายระดับ",
+    Options = {},
+    Multi = true,
+    Default = {},
+    Placeholder = "ยังไม่พบระดับ",
+    Callback = function(list)
+        selected = {}
+        for _, r in ipairs(list or {}) do selected[r] = true end
+    end,
+})
+local shownN = -1
 syncToggles = function()
-    for _, r in ipairs(RARITY.order) do
-        if not created[r] then
-            created[r] = true
-            sNotif:Toggle({
-                Title = "ระดับ " .. r,
-                Default = false,
-                Callback = function(v) selected[r] = v and true or nil end,
-            })
-        end
+    if #RARITY.order ~= shownN then
+        shownN = #RARITY.order
+        local opts = {}
+        for i, r in ipairs(RARITY.order) do opts[i] = r end
+        rarDrop.Refresh(opts, true)   -- เก็บระดับที่เลือกไว้เดิม
     end
     lblRar.Text = (#RARITY.order > 0) and ("พบ " .. #RARITY.order .. " ระดับ: " .. table.concat(RARITY.order, ", "))
         or "ยังไม่พบระดับ (เปิดหน้า Summon ในเกมหนึ่งครั้ง แล้วกดสแกนใหม่)"
@@ -407,4 +416,3 @@ task.spawn(function()
         task.wait(0.5)
     end
 end)
-notify("โหมดลอบบี้: กดปุ่มสุ่มได้เลย", PT.Good, "package")
