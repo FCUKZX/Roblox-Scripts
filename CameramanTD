@@ -2511,7 +2511,7 @@ end
 -- =====================================================================
 local tSaves = win:AddTab({ Name = "Saves", Category = "Macro", Icon = "save", Color = PT.Blue })
 local sSaves = tSaves:Section({ Title = "Saved macros", Desc = "แตะชื่อเพื่อโหลดมาเล่น/แก้ไข", Icon = "folder-open", Color = PT.Blue })
-ui.saveList = sSaves:List({ Height = 170 })
+ui.saveList = sSaves:List({ Height = 170, Title = "ไฟล์บันทึก" })
 
 ui.doDelete = function(name)
     local ok = canFile and pcall(delfile, pathOf(name))
@@ -2623,7 +2623,7 @@ sEdit:Action({
 })
 
 local sRows = tEdit:Section({ Title = "แอคชันที่บันทึก", Desc = "แตะแถวเพื่อเลือก", Icon = "layout-list", Color = PT.Cyan })
-ui.editListObj = sRows:List({ Height = 200 })
+ui.editListObj = sRows:List({ Height = 200, Title = "แอคชัน" })
 ui.editList = ui.editListObj.Frame
 sRows:Actions({
     {
@@ -3017,7 +3017,7 @@ cfgToggle(sSpeed, "ล็อกความเร็วตามที่เล�
     GS.fail, GS.nextAt, GS.seen = 0, 0, 0
     notify(v and "เปิดระบบ Game Speed" or "ปิดระบบ Game Speed", v and PT.Good or PT.Warn, nil, "gauge")
 end, "เปิด = ปรับเป็นความเร็วที่เลือกให้อัตโนมัติ | ปิด = ไม่ยุ่งกับความเร็ว")
-ui.gsList = sSpeed:List({ Height = 120 })
+ui.gsList = sSpeed:List({ Height = 120, Title = "ความเร็วเกม" })
 ui.gsSig = nil
 
 ui.refreshSpeedList = function(force)
