@@ -2255,7 +2255,7 @@ end
 
 -- ----- GameSpeed: GameUI.GameSpeeds["1" / "1.5" / "2" ...].TroopFrame.Background.UIShadow -----
 -- UIShadow สี (8, 138, 12) = ตัวที่กำลังใช้อยู่
-local GS = { fail = 0, nextAt = 0, seen = 0, quietUntil = 0 }
+local GS = { fail = 0, nextAt = 0, seen = 0, screenUp = false }
 local GS_TARGET = { 8, 138, 12 }
 
 -- รายการปุ่มความเร็วที่มีในเกม เรียงจากน้อยไปมาก  { {n=1.5, name="1.5", obj=...}, ... }
@@ -2382,19 +2382,11 @@ local function speedTick()
     end
     pcall(hookNotifications)
 
-    -- รอบใหม่ / เกมจบ: ความเร็วถูกรีเซ็ต -> ลืมข้อความยืนยันเก่า
-    -- ช่วงนี้ขั้นเช็กข้อความ (ขั้นที่ 2) ยังไม่มีข้อมูลใหม่ และสีก็ถูกรีเซ็ต -> ห้ามกดเด็ดขาด
-    -- (เดิมล้างข้อความแล้วไปเช็กสีต่อ เลยเห็นว่า "ไม่ตรง" แล้วกดรัว) พักไว้อีก 3 วิหลังหน้าจอปิดค่อยเช็กสองขั้นตามปกติ
-    if isGameOver() or votingOpen() then
-        GS.notif = nil
-        GS.seen, GS.fail = 0, 0
-        GS.quietUntil = os.clock() + 3
-        return
-    end
-    if os.clock() < GS.quietUntil then
-        GS.seen = 0
-        return
-    end
+    -- รอบใหม่ / เกมจบ: ความเร็วถูกรีเซ็ต -> ลืมข้อความยืนยันเก่า "ครั้งเดียวตอนเพิ่งเข้าหน้านั้น"
+    -- (เดิมล้างทุกรอบ ทำให้กดแล้วข้อความแจ้งเตือนถูกลบก่อนได้เช็ก เหลือเช็กแค่สี -> กดซ้ำรัว)
+    local screen = isGameOver() or votingOpen()
+    if screen and not GS.screenUp then GS.notif = nil end
+    GS.screenUp = screen
 
     local root = gameUI("GameSpeeds")
     local frame = root and root:FindFirstChild(CONFIG.GAMESPEED_PICK)
