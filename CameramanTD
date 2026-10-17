@@ -186,12 +186,14 @@ local DEFAULTS = {
     GAMESPEED_ON = false,   -- เปิด = สคริปต์กดปรับ GameSpeed ให้เป็นตัวที่เลือก
     ANTI_LAG = false,       -- โหมดลดกระตุก (จำค่าไว้ เปิดเองตอนเข้าเกม)
     GAMESPEED_PICK = "",    -- ชื่อปุ่มความเร็วที่เลือก (ตรงกับชื่อใน GameUI.GameSpeeds เช่น "1.5")
+    PLACE_ACCURACY = 95,    -- ความแม่นตำแหน่งตอนวาง (%) ปรับได้ 90-100 (100 = ตรงเป๊ะ / ต่ำกว่า 90 ไม่ได้)
+    SAFE_CLICK = true,      -- มือถือ: ไม่จำลองเมาส์ตอนตัวละครกำลังเดิน (กันเดินไม่ได้หลังสคริปต์กดปุ่ม)
 }
 -- มีแค่ค่าเหล่านี้ที่เซฟ/โหลดจากไฟล์ (ค่าอื่นล็อกตาม DEFAULTS เสมอ)
 local USER_KEYS = {
     "EAGER_ON", "START_DELAY", "AUTO_REPLAY", "REPLAY_WAIT", "AUTO_RESUME", "REQUIRE_VOTE_UI", "SNIFFER",
     "ANTI_AFK", "WEBHOOK_ON", "WEBHOOK_URL", "STOP_KEY", "AUTO_SKIP", "GAMESPEED_ON", "GAMESPEED_PICK",
-    "WAVE_GATE", "ANTI_LAG",
+    "WAVE_GATE", "ANTI_LAG", "PLACE_ACCURACY", "SAFE_CLICK",
 }
 local CONFIG = {}
 for k, v in pairs(DEFAULTS) do CONFIG[k] = v end
@@ -210,6 +212,12 @@ do
 end
 
 CONFIG.WEBHOOK_ON = true -- เปิดแจ้งเตือนดิสอัตโนมัติทุกครั้งที่รันสคริปต์ (ปิดชั่วคราวได้ในหน้า Settings)
+
+-- ความแม่นตำแหน่งวาง: ต่ำสุด 90% เสมอ (กันแก้ไฟล์เซฟให้ต่ำกว่านี้)
+--   ระยะเลื่อนสูงสุด (สตั๊ด) = (100 - ความแม่น) / 100 * STUDS
+--   เช่น 95% = เลื่อนไม่เกิน 0.5 สตั๊ด / 90% = ไม่เกิน 1 สตั๊ด  (อยากให้เลื่อนมากขึ้น เพิ่มเลข STUDS)
+local PLACE = { MIN = 90, STUDS = 10, rng = Random.new() }
+CONFIG.PLACE_ACCURACY = math.clamp(tonumber(CONFIG.PLACE_ACCURACY) or DEFAULTS.PLACE_ACCURACY, PLACE.MIN, 100)
 if not OWN.is then CONFIG.SNIFFER = false end -- ผู้เล่นทั่วไปไม่จด Log remote
 
 local function saveSettings()
@@ -799,9 +807,29 @@ local function clickable(obj)
     return obj
 end
 
--- วิธี 1: สั่ง connection ของปุ่มโดยตรง
+-- true = มือถือล้วน (ไม่มีคีย์บอร์ด) และตัวละครกำลังเดินอยู่
+-- เมาส์จำลอง (VirtualInputManager) ตอนที่นิ้วกำลังคุมจอยเดิน ทำให้จอยหลุด/เดินไม่ได้ -> ตอนนั้นห้ามใช้
+local function mouseWouldBreakMove()
+    local okT, touch = pcall(function()
+        local uis = game:GetService("UserInputService")
+        return uis.TouchEnabled and not uis.KeyboardEnabled
+    end)
+    if not (okT and touch) then return false end
+    local ch = player.Character
+    local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+    return hum ~= nil and hum.MoveDirection.Magnitude > 0.05
+end
+
+-- วิธี 1: สั่ง connection ของปุ่มโดยตรง (ไม่แตะระบบอินพุต เดินได้ปกติ)
 local function clickButton(btn)
-    if not (getconnections and btn) then return false end
+    if not btn then return false end
+    if not getconnections then
+        -- executor มือถือหลายตัวไม่มี getconnections -> ลอง firesignal แทน (ยังไม่ต้องจำลองเมาส์)
+        if not firesignal then return false end
+        local okf = pcall(function() firesignal(btn.MouseButton1Click) end)
+        pcall(function() firesignal(btn.Activated) end)
+        return okf
+    end
     local fired = false
     for _, sigName in ipairs({ "MouseButton1Click", "Activated", "MouseButton1Down" }) do
         local ok, list = pcall(function() return getconnections(btn[sigName]) end)
@@ -819,6 +847,8 @@ end
 -- วิธี 2: จำลองเมาส์คลิกตรงกลางปุ่ม
 local function mouseClick(btn)
     if not (VirtualInputManager and btn) then return false end
+    -- มือถือ: กำลังเดินอยู่ ห้ามจำลองเมาส์ (จะทำให้เดินไม่ได้) -> คืน false ให้ผู้เรียกไปลองใหม่รอบหน้า
+    if CONFIG.SAFE_CLICK and mouseWouldBreakMove() then return false end
     local ok = pcall(function()
         local pos, size = btn.AbsolutePosition, btn.AbsoluteSize
         -- ScreenGui ที่ IgnoreGuiInset = true พิกัดเป็นพิกัดจอจริงอยู่แล้ว ห้ามบวก inset (ไม่งั้นคลิกเลื่อนลงไปโดนปุ่มข้างเคียง)
@@ -1580,7 +1610,7 @@ local function runWithRetry(spec)
 
         local t0 = os.clock()
         lastFireT = t0
-        local okCall, success, extra = pcall(spec.attempt, t0)
+        local okCall, success, extra = pcall(spec.attempt, t0, attempts, probing)
         if not okCall then
             logf("%s: error %s", spec.label, tostring(success))
             success, extra = false, nil
@@ -1675,6 +1705,17 @@ local function resolveUnitId(name, active)
     return nil
 end
 
+-- สุ่มเลื่อนตำแหน่ง X/Z ตอนวาง (ไม่แก้ค่าที่บันทึกไว้ ทุกรอบสุ่มใหม่)
+--   scale 1 = เต็มระยะตามที่ตั้ง | 0.5 = ครึ่งหนึ่ง | 0 = ตรงเป๊ะ
+function PLACE.offset(scale)
+    local acc = math.clamp(tonumber(CONFIG.PLACE_ACCURACY) or DEFAULTS.PLACE_ACCURACY, PLACE.MIN, 100)
+    local maxR = (100 - acc) / 100 * PLACE.STUDS * (scale or 1)
+    if maxR <= 0 then return 0, 0 end
+    local r = maxR * (0.4 + 0.6 * PLACE.rng:NextNumber())   -- เลื่อนอย่างน้อย 40% ของระยะสูงสุด ไม่เกินระยะสูงสุด
+    local th = PLACE.rng:NextNumber() * math.pi * 2
+    return math.cos(th) * r, math.sin(th) * r
+end
+
 local function playPlace(action, i, total, active, label)
     local cost, _, unknown = costInfo(action)
     local minDrop = math.max(1, (action.cost or 0) * 0.5)
@@ -1697,14 +1738,29 @@ local function playPlace(action, i, total, active, label)
         label = string.format("%s | #%d/%d วาง %s", label, i, total, tostring(action.name)),
         cost = cost, unknown = unknown, maxAttempts = CONFIG.PLACE_RETRIES,
         statKey = "placed", active = active,
-        attempt = function(t0)
+        attempt = function(t0, n, probing)
             firstT = firstT or t0
             TD.scanUntil = os.clock() + 8
             TD.sniffUntil = os.clock() + 6
             action.unitId = slotUnitId(action.name) or action.unitId   -- เผื่อ Slot เปลี่ยนระหว่างรอเงิน
+
+            -- เลื่อนตำแหน่ง X/Z นิดหน่อย  วางไม่ติดซ้ำๆ (ครั้งที่ 3 ขึ้นไป) = ลดระยะเลื่อนลง แล้วกลับมาตรงเป๊ะ
+            local scale = 1
+            if not probing then
+                n = n or 1
+                if n >= 4 then scale = 0 elseif n == 3 then scale = 0.5 end
+            end
+            local dx, dz = PLACE.offset(scale)
+            local cf, pos = action.cframe, action.pos
+            if dx ~= 0 or dz ~= 0 then
+                local off = Vector3.new(dx, 0, dz)
+                if typeof(cf) == "CFrame" then cf = cf + off end
+                if typeof(pos) == "Vector3" then pos = pos + off end
+                logf("วาง %s เลื่อน X%+.2f Z%+.2f", tostring(action.name), dx, dz)
+            end
             local ok, err = fire(towerAddRE, {
-                UnitId = action.unitId, CFrame = action.cframe,
-                Name = action.name, Pos = action.pos,
+                UnitId = action.unitId, CFrame = cf,
+                Name = action.name, Pos = pos,
             })
             if not ok then
                 logf("ยิง TowerAdd ไม่ได้: %s", tostring(err))
@@ -2312,13 +2368,21 @@ local function speedButtonOf(frame)
     return frame:FindFirstChildWhichIsA("GuiButton", true) or frame
 end
 
--- กดทั้ง 2 วิธีพร้อมกัน: สั่ง connection ของปุ่ม + จำลองเมาส์คลิกกลางปุ่ม
-local function pressSpeed(frame)
+-- กดทีละวิธี (เดิมกดทั้ง 2 วิธีพร้อมกันทุกครั้ง -> เมาส์จำลองทำให้เดินไม่ได้บนมือถือ)
+--   ครั้งคี่ = สั่ง connection / firesignal ของปุ่ม (ไม่แตะอินพุต)
+--   ครั้งคู่ = จำลองเมาส์คลิกกลางปุ่ม (มือถือ: ข้ามเองถ้ากำลังเดินอยู่ แล้วใช้วิธีแรกแทน)
+local function pressSpeed(frame, attempt)
+    attempt = attempt or 1
     local btn = speedButtonOf(frame)
-    local fired = clickButton(btn)
-    local clicked = false
-    if btn.AbsoluteSize.X > 0 and btn.AbsoluteSize.Y > 0 then
-        clicked = mouseClick(btn)
+    local fired, clicked = false, false
+    if attempt % 2 == 1 then
+        fired = clickButton(btn)
+    end
+    if not fired then
+        if btn.AbsoluteSize.X > 0 and btn.AbsoluteSize.Y > 0 then
+            clicked = mouseClick(btn)
+        end
+        if not clicked then fired = clickButton(btn) end
     end
     return fired, clicked, btn
 end
@@ -2407,13 +2471,13 @@ local function speedTick()
     GS.seen = GS.seen + 1
     if GS.seen >= 2 and os.clock() >= GS.nextAt then
         GS.fail = GS.fail + 1
-        local okp = pcall(pressSpeed, frame)
+        local okp = pcall(pressSpeed, frame, GS.fail)
         if okp then
             logf("GameSpeed: กด x%s (ครั้งที่ %d)", CONFIG.GAMESPEED_PICK, GS.fail)
         else
             log("GameSpeed: กดไม่สำเร็จ")
         end
-        GS.nextAt = os.clock() + (GS.fail >= 6 and 10 or 1)
+        GS.nextAt = os.clock() + (GS.fail >= 6 and 15 or 1.5)   -- กดไม่ติดหลายรอบ = พักนานขึ้น ไม่รัวกดรบกวนการเดิน
     end
 end
 
@@ -2663,6 +2727,29 @@ sPlay:Actions({
     { Text = "เล่นวนตลอด", Icon = "infinity", Color = PT.Blue, Callback = function() runLoops(math.huge) end },
 })
 sPlay:Action({ Text = "หยุดทั้งหมด", Icon = "square", Color = PT.Elem, Callback = function() stopAll() end })
+
+do
+local sPlace = tMacro:Section({
+    Title = "ตำแหน่งวางยูนิต", Desc = "สุ่มขยับ X/Z นิดหน่อยทุกครั้งที่วาง (ไม่วางตรงเป๊ะ) | แม่นต่ำสุด 90%",
+    Icon = "map-pin", Color = PT.Cyan,
+})
+local function placeAccText(v)
+    v = math.clamp(tonumber(v) or 100, PLACE.MIN, 100)
+    local r = (100 - v) / 100 * PLACE.STUDS
+    if r <= 0 then return "แม่น 100% = วางตรงเป๊ะ (ไม่เลื่อน)" end
+    return string.format("แม่น %d%% = เลื่อน X/Z ไม่เกิน ~%.2f สตั๊ด", math.floor(v + 0.5), r)
+end
+ui.placeAccLabel = sPlace:Label({ Text = placeAccText(CONFIG.PLACE_ACCURACY), Color = PT.Text })
+sPlace:Slider({
+    Title = "ความแม่นตำแหน่ง", Min = PLACE.MIN, Max = 100, Step = 1, Suffix = "%",
+    Default = CONFIG.PLACE_ACCURACY,
+    Callback = function(v)
+        CONFIG.PLACE_ACCURACY = math.clamp(tonumber(v) or 100, PLACE.MIN, 100)
+        if ui.placeAccLabel then ui.placeAccLabel.Text = placeAccText(CONFIG.PLACE_ACCURACY) end
+        ui.saveSoon()
+    end,
+})
+end
 
 ui.setRecordUI = function(on)
     ui.recordBtn:SetText(on and "หยุดบันทึก" or "เริ่มบันทึก")
@@ -3181,6 +3268,8 @@ local sSpeed = tAuto:Section({
 cfgToggle(sSpeed, "ล็อกความเร็วตามที่เลือก", "GAMESPEED_ON", function(v)
     GS.fail, GS.nextAt, GS.seen = 0, 0, 0
 end, "เปิด = ปรับเป็นความเร็วที่เลือกให้อัตโนมัติ | ปิด = ไม่ยุ่งกับความเร็ว")
+cfgToggle(sSpeed, "กันเดินไม่ได้ (มือถือ)", "SAFE_CLICK", nil,
+    "เปิด = ตอนตัวละครกำลังเดิน สคริปต์จะไม่จำลองเมาส์กดปุ่ม (ใช้วิธีกดตรงแทน) | ปิด = ทำเหมือนเดิม")
 ui.gsList = sSpeed:List({ Height = 120, Title = "ความเร็วเกม" })
 ui.gsSig = nil
 
