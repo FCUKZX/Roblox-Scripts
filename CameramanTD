@@ -854,6 +854,8 @@ local TD = {
     cands = {},        -- { id, t, src, inst?, name?, pos?, bare? }
     used = {},         -- Id ที่จับคู่แล้วในรอบนี้
     upg = {},          -- [Id] = { t, level, price }  จาก TowerUpgrade.OnClientEvent
+    adds = {},         -- รายการ TowerAdd.OnClientEvent { t, id, name, pos, price }  (ราคาวาง)
+    upgEvents = {},    -- รายการ TowerUpgrade.OnClientEvent { t, id, level, price }  (ราคาอัปเกรด)
     scanUntil = 0,     -- ก่อนเวลานี้ ถึงจะสแกน event หา GUID
     sniffUntil = 0,    -- ก่อนเวลานี้ ถึงจะจด event ลง Log
     rate = {},
@@ -964,6 +966,32 @@ local function onRemoteEvent(rem, ...)
                 level = tonumber(p.Level),
                 price = st and tonumber(st.Price) or nil,
             }
+        end
+    end
+
+    if name == "TowerUpgrade" then
+        local p = args[1]
+        if type(p) == "table" and p.Id ~= nil then
+            local st = type(p.Stats) == "table" and p.Stats or nil
+            TD.upgEvents[#TD.upgEvents + 1] = {
+                t = now, id = tostring(p.Id), level = tonumber(p.Level),
+                price = st and tonumber(st.Price) or nil,
+            }
+            while #TD.upgEvents > 60 do table.remove(TD.upgEvents, 1) end
+        end
+    elseif name == "TowerAdd" then
+        local p = args[1]
+        if type(p) == "table" and p.Id ~= nil then
+            local owner = tonumber(p.OwnerUserId)
+            local mine = owner == nil or owner == player.UserId
+            local st = type(p.Stats) == "table" and p.Stats or nil
+            local price = st and tonumber(st.Price) or nil
+            if mine and price then
+                local pos = typeof(p.Pos) == "Vector3" and p.Pos
+                    or (typeof(p.CFrame) == "CFrame" and p.CFrame.Position) or nil
+                TD.adds[#TD.adds + 1] = { t = now, id = tostring(p.Id), name = p.Name, pos = pos, price = price }
+                while #TD.adds > 60 do table.remove(TD.adds, 1) end
+            end
         end
     end
 
@@ -1084,6 +1112,36 @@ local function measureCost(t0, t1)
     return tot
 end
 
+-- ราคาวางจาก TowerAdd.OnClientEvent (Stats.Price) : จับคู่ด้วย Id / ชื่อ+ตำแหน่ง ตัวแรกที่เกิดหลัง tc
+function TD.addPrice(action, tc)
+    local best
+    for _, e in ipairs(TD.adds) do
+        if not e.claimed and e.t >= tc - 0.3 then
+            if action.tid and e.id == action.tid then best = e break end
+            local ok = true
+            if e.name and action.name and not nameMatch(e.name, action.name) then ok = false end
+            if ok and typeof(e.pos) == "Vector3" and typeof(action.pos) == "Vector3" then
+                local d = Vector3.new(e.pos.X - action.pos.X, 0, e.pos.Z - action.pos.Z).Magnitude
+                if d > 5 then ok = false end
+            end
+            if ok and (not best or e.t < best.t) then best = e end
+        end
+    end
+    if best then best.claimed = true end
+    return best
+end
+
+-- ราคาอัปเกรดจาก TowerUpgrade.OnClientEvent (Stats.Price) : Id เดียวกัน ตัวแรกที่เกิดหลัง tc
+function TD.upgPrice(tid, tc)
+    for _, e in ipairs(TD.upgEvents) do
+        if not e.claimed and e.id == tostring(tid) and e.t >= tc - 0.1 then
+            e.claimed = true
+            return e
+        end
+    end
+    return nil
+end
+
 local function scheduleMeasure(action, tc)
     rec.measures = rec.measures + 1
     task.spawn(function()
@@ -1094,18 +1152,33 @@ local function scheduleMeasure(action, tc)
         if nxt and nxt < t1 then t1 = nxt end
 
         local cost = 0
-        if moneyOK() then cost = measureCost(tc, t1) end
+        if moneyOK() then cost = measureCost(tc, t1) end   -- ราคาสำรอง (เงินที่ลดลง)
 
-        if action.type == "Upgrade" then
-            local u = TD.upg[action.tid]
-            if u and u.t >= tc - 0.1 then
-                action.level = u.level
-                if cost <= 0 and u.price then
-                    cost = u.price
-                elseif u.price and math.abs(cost - u.price) <= 1 then
-                    action.costExact = true
-                end
+        -- ราคาจริงจากเกม (Stats.Price ใน event) ชนะราคาที่วัดจากเงินเสมอ
+        local ev
+        local deadline = os.clock() + 1.5
+        repeat
+            if action.type == "Place" then
+                ev = TD.addPrice(action, tc)
+            elseif action.type == "Upgrade" then
+                ev = TD.upgPrice(action.tid, tc)
             end
+            if ev or os.clock() > deadline then break end
+            task.wait(0.1)
+        until false
+
+        if ev and ev.price and ev.price > 0 then
+            if action.type == "Upgrade" then action.level = ev.level end
+            if cost > 0 and math.abs(cost - ev.price) > 1 then
+                logf("ราคา %s: เกมบอก %s (เงินลด %s) ใช้ของเกม",
+                    action.type == "Place" and ("วาง " .. tostring(action.name)) or "อัปเกรด",
+                    fmtNum(ev.price), fmtNum(cost))
+            end
+            cost = ev.price
+            action.costExact = true
+        else
+            logf("⚠️ ไม่ได้รับราคาจาก event ของ %s ใช้ราคาที่วัดจากเงิน (%s)",
+                action.type, fmtNum(cost))
         end
         action.cost = cost
         rec.measures = rec.measures - 1
