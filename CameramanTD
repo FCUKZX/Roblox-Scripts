@@ -1290,11 +1290,6 @@ function TD.waveField(w)
     return nil
 end
 
-function TD.waveTag(w)
-    w = TD.waveField(w)
-    return w and (" (เวฟ " .. w .. ")") or ""
-end
-
 -- seq = ลำดับที่จองไว้ตอนดัก FireServer (ก่อน defer) / wave = เวฟตอนนั้น
 local function recordPlace(p, tc, seq, wave)
     if type(p) ~= "table" then return end
@@ -2255,7 +2250,7 @@ end
 
 -- ----- GameSpeed: GameUI.GameSpeeds["1" / "1.5" / "2" ...].TroopFrame.Background.UIShadow -----
 -- UIShadow สี (8, 138, 12) = ตัวที่กำลังใช้อยู่
-local GS = { fail = 0, nextAt = 0, seen = 0, screenUp = false }
+local GS = { fail = 0, nextAt = 0, seen = 0 }
 local GS_TARGET = { 8, 138, 12 }
 
 -- รายการปุ่มความเร็วที่มีในเกม เรียงจากน้อยไปมาก  { {n=1.5, name="1.5", obj=...}, ... }
@@ -2382,11 +2377,13 @@ local function speedTick()
     end
     pcall(hookNotifications)
 
-    -- รอบใหม่ / เกมจบ: ความเร็วถูกรีเซ็ต -> ลืมข้อความยืนยันเก่า "ครั้งเดียวตอนเพิ่งเข้าหน้านั้น"
-    -- (เดิมล้างทุกรอบ ทำให้กดแล้วข้อความแจ้งเตือนถูกลบก่อนได้เช็ก เหลือเช็กแค่สี -> กดซ้ำรัว)
-    local screen = isGameOver() or votingOpen()
-    if screen and not GS.screenUp then GS.notif = nil end
-    GS.screenUp = screen
+    -- มี UI หน้าเลือกโหมด / หน้าจบเกม อยู่ = ไม่ทำงานเลย (ไม่เช็ก ไม่กด)
+    -- ความเร็วถูกรีเซ็ตช่วงนี้ เลยลืมข้อความยืนยันเก่าทิ้ง แล้วรอจน UI หายค่อยเริ่มเช็กใหม่
+    if isGameOver() or votingOpen() then
+        GS.notif = nil
+        GS.seen, GS.fail = 0, 0
+        return
+    end
 
     local root = gameUI("GameSpeeds")
     local frame = root and root:FindFirstChild(CONFIG.GAMESPEED_PICK)
@@ -2410,7 +2407,7 @@ local function speedTick()
     GS.seen = GS.seen + 1
     if GS.seen >= 2 and os.clock() >= GS.nextAt then
         GS.fail = GS.fail + 1
-        local okp, fired, clicked, btn = pcall(pressSpeed, frame)
+        local okp = pcall(pressSpeed, frame)
         if okp then
             logf("GameSpeed: กด x%s (ครั้งที่ %d)", CONFIG.GAMESPEED_PICK, GS.fail)
         else
