@@ -983,11 +983,10 @@ local function onRemoteEvent(rem, ...)
     elseif name == "TowerAdd" then
         local p = args[1]
         if type(p) == "table" and p.Id ~= nil then
-            local owner = tonumber(p.OwnerUserId)
-            local mine = owner == nil or owner == player.UserId
             local st = type(p.Stats) == "table" and p.Stats or nil
             local price = st and tonumber(st.Price) or nil
-            if mine and price then
+            if price then
+                TD.addSeen = (TD.addSeen or 0) + 1
                 TD.adds[#TD.adds + 1] = { t = now, id = tostring(p.Id), unitId = p.UnitId, price = price }
                 while #TD.adds > 60 do table.remove(TD.adds, 1) end
                 if TD.resolvePrices then TD.resolvePrices() end
@@ -1124,14 +1123,14 @@ function TD.resolvePrices()
         local a, e = w.action, nil
         if a.type == "Place" then
             for _, x in ipairs(TD.adds) do
-                if not x.claimed and x.t >= w.tc - 0.3 and (x.unitId == nil or a.unitId == nil or x.unitId == a.unitId) then
+                if not x.claimed and x.t >= w.tc - 2 and (x.unitId == nil or a.unitId == nil or x.unitId == a.unitId) then
                     e = x
                     break
                 end
             end
         else
             for _, x in ipairs(TD.upgEvents) do
-                if not x.claimed and x.id == a.tid and x.t >= w.tc - 0.1 then
+                if not x.claimed and x.id == a.tid and x.t >= w.tc - 2 then
                     e = x
                     break
                 end
@@ -1176,6 +1175,13 @@ local function scheduleMeasure(action, tc)
                 end
             end
             action.cost = cost
+            local wait2 = os.clock() + 2
+            while not action.costExact and os.clock() < wait2 do task.wait(0.1) end
+            if not action.costExact then
+                local what = action.type == "Place" and "วาง" or "อัปเกรด"
+                local seen = action.type == "Place" and (TD.addSeen or 0) or #TD.upgEvents
+                setStatus(string.format("จับราคา%s ไม่ได้ (event ที่เคยได้รับ %d ตัว)", what, seen), "warn", "x")
+            end
         end
         rec.measures = rec.measures - 1
         refreshAll()
