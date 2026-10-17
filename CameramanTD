@@ -2729,19 +2729,25 @@ sPlay:Actions({
 sPlay:Action({ Text = "หยุดทั้งหมด", Icon = "square", Color = PT.Elem, Callback = function() stopAll() end })
 
 do
-local sPlace = tMacro:Section({
-    Title = "ตำแหน่งวางยูนิต", Desc = "สุ่มขยับ X/Z นิดหน่อยทุกครั้งที่วาง (ไม่วางตรงเป๊ะ) | แม่นต่ำสุด 90%",
-    Icon = "map-pin", Color = PT.Cyan,
+Local sPlace = tMacro:Section({
+    Title = "สุ่มตำแหน่งป้องกันการตรวจจับ", 
+    Desc = "สุ่มเบี่ยงเบนพิกัด X/Z เล็กน้อยขณะวาง เพื่อป้องกันระบบตรวจจับ | ความแม่นยำขั้นต่ำ 90%",
+    Icon = "map-pin", 
+    Color = PT.Cyan,
 })
 local function placeAccText(v)
     v = math.clamp(tonumber(v) or 100, PLACE.MIN, 100)
     local r = (100 - v) / 100 * PLACE.STUDS
-    if r <= 0 then return "แม่น 100% = วางตรงเป๊ะ (ไม่เลื่อน)" end
-    return string.format("แม่น %d%% = เลื่อน X/Z ไม่เกิน ~%.2f สตั๊ด", math.floor(v + 0.5), r)
+    if r <= 0 then return "วางตำแหน่งตรงตามปกติ" end
+    return string.format("ความแม่นยำ %d%% (ค่าความคลาดเคลื่อนไม่เกิน ~%.2f Studs)", math.floor(v + 0.5), r)
 end
 ui.placeAccLabel = sPlace:Label({ Text = placeAccText(CONFIG.PLACE_ACCURACY), Color = PT.Text })
 sPlace:Slider({
-    Title = "ความแม่นตำแหน่ง", Min = PLACE.MIN, Max = 100, Step = 1, Suffix = "%",
+    Title = "ความแม่นยำในการวางตำแหน่ง", 
+    Min = PLACE.MIN, 
+    Max = 100, 
+    Step = 1, 
+    Suffix = "%",
     Default = CONFIG.PLACE_ACCURACY,
     Callback = function(v)
         CONFIG.PLACE_ACCURACY = math.clamp(tonumber(v) or 100, PLACE.MIN, 100)
@@ -3364,7 +3370,7 @@ cfgToggle(sGen, "Anti-AFK", "ANTI_AFK")
 local sLag = tSet:Section({ Title = "ลดกระตุก", Desc = "ย้ายของที่ไม่จำเป็นออกจากฉากชั่วคราว (ไม่ได้ลบจริง ปิดแล้วเอากลับที่เดิม)", Icon = "gauge", Color = PT.Good })
 cfgToggle(sLag, "โหมดลดกระตุก", "ANTI_LAG", function(v)
     setAntiLag(v)
-end, "เปิด = ย้ายเอฟเฟกต์ฉากและของที่ไม่จำเป็นออกให้เกมเบาลง | ปิด = เอากลับครบ | จำค่าไว้ เปิดเองตอนรันสคริปต์")
+end)
 if CONFIG.ANTI_LAG then
     task.spawn(function()
         local t0 = os.clock()
