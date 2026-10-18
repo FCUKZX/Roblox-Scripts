@@ -150,7 +150,7 @@ local DEFAULTS = {
     CFG_VERSION = 1,
 
     -- [เล่นมาโคร] ความเร็ว / การลองซ้ำ
-    EAGER_ON = true,        -- เปิด = เงินใกล้ถึงก็ลองซื้อเลย | ปิด = รอเงินครบก่อนเท่านั้น
+    EAGER_ON = false,        -- เปิด = เงินใกล้ถึงก็ลองซื้อเลย | ปิด = รอเงินครบก่อนเท่านั้น
     EAGER_PERCENT = 90,     -- เงินถึงกี่ % ของราคา แล้วเริ่ม "ลองยิงเลย"
     PROBE_INTERVAL = 0.7,   -- ระหว่างรอเงิน ลองยิงซ้ำทุกกี่วินาที
     START_DELAY = 2,        -- วินาทีรอหลังหน้าโหวตโหมดปิด ก่อนเริ่มวางยูนิต
@@ -185,6 +185,7 @@ local DEFAULTS = {
     AUTO_SKIP = true,       -- สถานะที่ต้องการของ AutoSkip (เปิด = สคริปต์กดให้เป็นสีไม่แดง)
     GAMESPEED_ON = false,   -- เปิด = สคริปต์กดปรับ GameSpeed ให้เป็นตัวที่เลือก
     ANTI_LAG = false,       -- โหมดลดกระตุก (จำค่าไว้ เปิดเองตอนเข้าเกม)
+    GAME_NOTIF = true,      -- แจ้งเตือนของเกม (GameUI.Notifications): เปิด = แสดงตามปกติ | ปิด = ซ่อน (จำค่าไว้)
     GAMESPEED_PICK = "",    -- ชื่อปุ่มความเร็วที่เลือก (ตรงกับชื่อใน GameUI.GameSpeeds เช่น "1.5")
     PLACE_ACCURACY = 95,    -- ความแม่นตำแหน่งตอนวาง (%) ปรับได้ 90-100 (100 = ตรงเป๊ะ / ต่ำกว่า 90 ไม่ได้)
     SAFE_CLICK = true,      -- มือถือ: ไม่จำลองเมาส์ตอนตัวละครกำลังเดิน (กันเดินไม่ได้หลังสคริปต์กดปุ่ม)
@@ -193,7 +194,7 @@ local DEFAULTS = {
 local USER_KEYS = {
     "EAGER_ON", "START_DELAY", "AUTO_REPLAY", "REPLAY_WAIT", "AUTO_RESUME", "REQUIRE_VOTE_UI", "SNIFFER",
     "ANTI_AFK", "WEBHOOK_ON", "WEBHOOK_URL", "STOP_KEY", "AUTO_SKIP", "GAMESPEED_ON", "GAMESPEED_PICK",
-    "WAVE_GATE", "ANTI_LAG", "PLACE_ACCURACY", "SAFE_CLICK",
+    "WAVE_GATE", "ANTI_LAG", "PLACE_ACCURACY", "SAFE_CLICK", "GAME_NOTIF",
 }
 local CONFIG = {}
 for k, v in pairs(DEFAULTS) do CONFIG[k] = v end
@@ -2570,11 +2571,69 @@ local function setAntiLag(on)
     lagWorker()
 end
 
+-- ----- แจ้งเตือนของเกม (PlayerGui.GameUI.Notifications) -----
+--  CONFIG.GAME_NOTIF = true  -> เปิด: เกมแสดงแจ้งเตือนตามปกติ
+--  CONFIG.GAME_NOTIF = false -> ปิด: ซ่อน (Visible/Enabled = false) และคอยกันไม่ให้เกมเปิดกลับเอง
+--  แค่ซ่อน ไม่ได้ลบ ข้อความข้างในยังอัปเดตอยู่ ระบบตรวจ Game Speed (อ่านจาก Notifications.Actions) จึงยังทำงานปกติ
+--  (เก็บไว้ในตาราง LAG.notif เพื่อไม่ให้ตัวแปร local ระดับบนสุดเกินขีดจำกัดของ Lua)
+LAG.notif = { node = nil, conn = nil, hidden = false }
+
+function LAG.notifProp(node)
+    if node:IsA("GuiObject") then return "Visible" end
+    if node:IsA("LayerCollector") then return "Enabled" end
+    return nil
+end
+
+function LAG.notifSet(node, v)
+    local prop = LAG.notifProp(node)
+    if prop then
+        if node[prop] ~= v then pcall(function() node[prop] = v end) end
+    else   -- ไม่ใช่ GUI (เช่น Folder): สลับที่ลูกที่เป็น GuiObject แทน
+        for _, ch in ipairs(node:GetChildren()) do
+            if ch:IsA("GuiObject") and ch.Visible ~= v then pcall(function() ch.Visible = v end) end
+        end
+    end
+end
+
+-- เรียกซ้ำได้ (ลูปเบื้องหลังเรียกทุก 0.5 วิ เผื่อเกมสร้าง GameUI ใหม่)
+function LAG.notifApply()
+    local N = LAG.notif
+    local node = gameUI("Notifications")
+    if not node then return end
+    if CONFIG.GAME_NOTIF then
+        if N.hidden then   -- เพิ่งสลับกลับมาเปิด: คืนค่าครั้งเดียว แล้วปล่อยให้เกมจัดการเอง
+            N.hidden = false
+            LAG.notifSet(node, true)
+        end
+        return
+    end
+    N.hidden = true
+    LAG.notifSet(node, false)
+    local prop = LAG.notifProp(node)
+    if prop and N.node ~= node then   -- ดักตอนเกมสั่งเปิดกลับ -> ซ่อนใหม่ทันที
+        if N.conn then pcall(function() N.conn:Disconnect() end) end
+        N.node = node
+        N.conn = track(node:GetPropertyChangedSignal(prop):Connect(function()
+            if alive and not CONFIG.GAME_NOTIF then LAG.notifSet(node, false) end
+        end))
+    end
+end
+
+-- ตอนปิดสคริปต์: ถ้าเราซ่อนไว้ คืนให้เกมแสดงตามเดิม (ค่าที่ตั้งไว้ยังถูกจำไว้ในไฟล์ตั้งค่า)
+function LAG.notifRestore()
+    local N = LAG.notif
+    if not N.hidden then return end
+    N.hidden = false
+    local node = gameUI("Notifications")
+    if node then LAG.notifSet(node, true) end
+end
+
 -- ----- ปิดสคริปต์ -----
 local function shutdown()
     if not alive then return end
     alive = false
     setAntiLag(false)   -- เอาของที่ย้ายไว้กลับที่เดิม
+    pcall(LAG.notifRestore)   -- คืนแจ้งเตือนของเกมที่ซ่อนไว้
     isPlaying = false
     isRecording = false
     playToken = playToken + 1
@@ -3241,11 +3300,6 @@ local tAuto = win:AddTab({ Name = "Auto", Category = "Automation", Icon = "repea
 
 local sReplay = tAuto:Section({ Title = "Auto PlayAgain", Desc = "เมื่อเกมจบ กด PlayAgain ให้อัตโนมัติ", Icon = "repeat", Color = PT.Good })
 cfgToggle(sReplay, "กด PlayAgain อัตโนมัติ", "AUTO_REPLAY")
-cfgToggle(sReplay, "เล่นต่ออัตโนมัติหลังย้ายเซิร์ฟ", "AUTO_RESUME", function(v)
-    if v then ui.queueInfo = setupQueue() end
-    if ui.resumeLabel then ui.resumeLabel.Text = "ย้ายเซิร์ฟ: " .. tostring(ui.queueInfo) end
-end, "PlayAgain แล้วเกมย้ายเซิร์ฟ สคริปต์ต้องรันใหม่เอง (ต้องวางสคริปต์ใน autoexec)")
-ui.resumeLabel = sReplay:Label({ Text = "ย้ายเซิร์ฟ: —", Color = PT.Text })
 ui.numSlider(sReplay, "รอหลังกด PlayAgain (เกมนับถอยหลัง ~5 วิ)", "REPLAY_WAIT", 5, 20, 0.5, " วิ")
 ui.numSlider(sReplay, "หน่วงก่อนเริ่มวาง", "START_DELAY", 0, 30, 0.5, " วิ")
 sReplay:Action({
@@ -3261,6 +3315,15 @@ sReplay:Action({
     end,
 })
 
+do
+local sResume = tAuto:Section({ Title = "Auto Resume", Desc = "เล่นต่อเองหลังเกมย้ายเซิร์ฟ", Icon = "refresh-cw", Color = PT.Purple })
+cfgToggle(sResume, "เล่นต่ออัตโนมัติหลังย้ายเซิร์ฟ", "AUTO_RESUME", function(v)
+    if v then ui.queueInfo = setupQueue() end
+    if ui.resumeLabel then ui.resumeLabel.Text = "ย้ายเซิร์ฟ: " .. tostring(ui.queueInfo) end
+end, "PlayAgain แล้วเกมย้ายเซิร์ฟ สคริปต์ต้องรันใหม่เอง (ต้องวางสคริปต์ใน autoexec)")
+ui.resumeLabel = sResume:Label({ Text = "ย้ายเซิร์ฟ: —", Color = PT.Text })
+end
+
 local sSkip = tAuto:Section({ Title = "Auto Skip Wave", Desc = "ให้สคริปต์เปิด Auto Skip ให้อัตโนมัติ", Icon = "play", Color = PT.Blue })
 cfgToggle(sSkip, "เปิด Auto Skip ให้อัตโนมัติ", "AUTO_SKIP", function(v)
     AS.fail, AS.nextAt, AS.seen = 0, 0, 0
@@ -3274,8 +3337,6 @@ local sSpeed = tAuto:Section({
 cfgToggle(sSpeed, "ล็อกความเร็วตามที่เลือก", "GAMESPEED_ON", function(v)
     GS.fail, GS.nextAt, GS.seen = 0, 0, 0
 end, "เปิด = ปรับเป็นความเร็วที่เลือกให้อัตโนมัติ | ปิด = ไม่ยุ่งกับความเร็ว")
-cfgToggle(sSpeed, "กันเดินไม่ได้ (มือถือ)", "SAFE_CLICK", nil,
-    "เปิด = ตอนตัวละครกำลังเดิน สคริปต์จะไม่จำลองเมาส์กดปุ่ม (ใช้วิธีกดตรงแทน) | ปิด = ทำเหมือนเดิม")
 ui.gsList = sSpeed:List({ Height = 120, Title = "ความเร็วเกม" })
 ui.gsSig = nil
 
@@ -3360,12 +3421,35 @@ if OWN.is then   -- Detection: เฉพาะ owner
     ui.detectLabel = sDet:Label({ Text = "—", TextSize = 12, Color = PT.Text })
 end
 
-local sGen = tSet:Section({ Title = "General", Desc = "ตั้งค่าทั่วไป", Icon = "shield-check", Color = PT.Blue })
+-- กลุ่ม 1: การทำงานของสคริปต์
+local sGen = tSet:Section({ Title = "การทำงานของสคริปต์", Desc = "เงื่อนไขตอนเริ่มทำงาน / ตอนเล่นมาโคร", Icon = "settings", Color = PT.Blue })
 cfgToggle(sGen, "ทำงานเฉพาะตอนอยู่ในเกม", "REQUIRE_VOTE_UI", nil,
     "เปิด = ลอบบี้ไม่ทำอะไร และเริ่มบันทึกได้เฉพาะตอนอยู่ในเกม | ปิดถ้าสคริปต์ตรวจไม่เจอว่าอยู่ในเกม")
 cfgToggle(sGen, "ลองยิงตอนเงินใกล้ถึง", "EAGER_ON", nil, "เปิด = เงินใกล้พอก็ลองซื้อเลย | ปิด = รอเงินครบก่อนค่อยซื้อ")
-if OWN.is then cfgToggle(sGen, "จด Log remote (ไว้หา Id)", "SNIFFER", nil, "จดเฉพาะช่วงไม่กี่วินาทีหลังวาง/อัปเกรด/โหวต") end
-cfgToggle(sGen, "Anti-AFK", "ANTI_AFK")
+
+-- กลุ่ม 2: แจ้งเตือนของเกม (PlayerGui.GameUI.Notifications)
+do
+local sNotif = tSet:Section({ Title = "แจ้งเตือนของเกม", Desc = "เปิด/ปิดแจ้งเตือนที่เกมแสดงบนหน้าจอ (GameUI.Notifications)", Icon = "layout-list", Color = PT.Cyan })
+cfgToggle(sNotif, "แสดงแจ้งเตือนของเกม", "GAME_NOTIF", function(v)
+    LAG.notifApply()
+    if not gameUI("Notifications") then
+        notify("ยังไม่พบแจ้งเตือนของเกม (จะมีผลเมื่อเกมโหลด GUI เสร็จ)", PT.Warn)
+    end
+end, "เปิด = แสดงตามปกติ | ปิด = ซ่อนแจ้งเตือนทั้งหมด (แค่ซ่อน ไม่ได้ลบ และระบบตรวจ Game Speed ยังทำงานปกติ)")
+end
+
+-- กลุ่ม 3: Anti-AFK
+do
+local sAfk = tSet:Section({ Title = "Anti-AFK", Desc = "กันถูกเตะเมื่อไม่ได้ขยับ", Icon = "shield-check", Color = PT.Good })
+cfgToggle(sAfk, "เปิด Anti-AFK", "ANTI_AFK")
+end
+
+-- กลุ่ม 4: การกดปุ่มของสคริปต์ (ย้ายมาจากแท็บ Auto > Game Speed)
+do
+local sClick = tSet:Section({ Title = "การกดปุ่ม (มือถือ)", Desc = "วิธีที่สคริปต์กดปุ่มในเกม", Icon = "play", Color = PT.Orange })
+cfgToggle(sClick, "กันเดินไม่ได้ (มือถือ)", "SAFE_CLICK", nil,
+    "เปิด = ตอนตัวละครกำลังเดิน สคริปต์จะไม่จำลองเมาส์กดปุ่ม (ใช้วิธีกดตรงแทน) | ปิด = ทำเหมือนเดิม")
+end
 
 local sLag = tSet:Section({ Title = "ลดกระตุก", Desc = "ย้ายของที่ไม่จำเป็นออกจากฉากชั่วคราว (ไม่ได้ลบจริง ปิดแล้วเอากลับที่เดิม)", Icon = "gauge", Color = PT.Good })
 cfgToggle(sLag, "โหมดลดกระตุก", "ANTI_LAG", function(v)
@@ -3411,6 +3495,11 @@ sHook:Action({
         notify(sent and "ส่งแล้ว (เช็กใน Discord)" or "ส่งไม่ได้ (ยังไม่ได้ใส่ลิงก์ หรืออุปกรณ์นี้ส่งไม่ได้)", sent and PT.Good or PT.Bad, nil, sent and "send" or "x")
     end,
 })
+
+if OWN.is then   -- Developer: เฉพาะ owner
+    local sDev = tSet:Section({ Title = "Developer", Desc = "เครื่องมือสำหรับหา Id / ดีบัก", Icon = "flask-conical", Color = PT.Purple })
+    cfgToggle(sDev, "จด Log remote (ไว้หา Id)", "SNIFFER", nil, "จดเฉพาะช่วงไม่กี่วินาทีหลังวาง/อัปเกรด/โหวต")
+end
 
 local sUi = tSet:Section({ Title = "Interface", Desc = "หน้าต่าง Pex Hub", Icon = "layout-list", Color = PT.Orange })
 do
@@ -3468,6 +3557,7 @@ task.spawn(function()
                 "ความเร็วเกม: " .. mark(spd),
                 "เงิน: " .. (moneyOK() and fmtNum(getMoney()) or "✗"),
                 "ยูนิตของผู้เล่น: " .. mark(slots > 0),
+                "แจ้งเตือนของเกม: " .. mark(gameUI("Notifications")),
                 "ตรวจยูนิตในฉาก: " .. mark(TD.towersFolder),
                 "ระบบสั่งงาน: " .. mark(modeVoteRE and towerAddRE and towerUpgradeRE),
             }, "\n")
@@ -3519,6 +3609,14 @@ task.spawn(function()
         task.wait(0.4)
         local ok, err = pcall(speedTick)
         if not ok then log("Game Speed error: " .. tostring(err)) end
+    end
+end)
+
+-- (5) แจ้งเตือนของเกม: ผูกใหม่ถ้าเกมสร้าง GameUI ใหม่ / กันเกมเปิดกลับเอง (ทำงานเฉพาะตอนสั่งปิด)
+task.spawn(function()
+    while alive do
+        pcall(LAG.notifApply)
+        task.wait(0.5)
     end
 end)
 
