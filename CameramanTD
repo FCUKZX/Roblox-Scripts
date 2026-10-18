@@ -11,7 +11,9 @@
 -- ก่อนวางยูนิต: หา Id จาก Players.<เรา> Attributes (SlotN = ชื่อ, SlotNId = Id) ที่ชื่อตรงกับที่บันทึกไว้
 -- RightShift = ซ่อน/แสดงหน้าต่าง
 -- ไม่แน่ใจว่า Id ของยูนิตมาจากไหน -> สคริปต์ดักหาเอง (event ที่เซิร์ฟเวอร์ส่งกลับ + ของที่โผล่ใน Workspace)
---   แท็บ Log / Settings > Detection / การจด Log มีเฉพาะบัญชีชื่อ owdkkek (OWN.name) คนอื่นไม่เห็นและไม่มีการจดเลย
+--   ส่วนที่ซ่อน (เห็นเฉพาะบัญชีที่อยู่ในรายชื่อ OWNER_NAMES คนอื่นไม่เห็น UI และไม่มีการจดเลย):
+--     แท็บ Log / Settings > Detection / Developer / สวิตช์ "ทำงานเฉพาะตอนอยู่ในเกม" / สวิตช์ "กันเดินไม่ได้"
+--   คนนอกรายชื่อ: สคริปต์ใช้ค่าเริ่มต้นเสมอ (ทำงานเฉพาะตอนอยู่ในเกม = เปิด, กันเดินไม่ได้ = เปิด) และไม่อ่านค่านี้จากไฟล์เซฟ
 
 -- =====================================================================
 --  ตั้งค่าที่แก้เองได้ (ไม่บังคับ)
@@ -30,12 +32,16 @@ local LOBBY_URL = "https://raw.githubusercontent.com/FCUKZX/Roblox-Scripts/refs/
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 
--- ผู้ดูแล: เห็นแท็บ Log / Detection และมีการจด Log  (ผู้เล่นทั่วไปไม่มีส่วนนี้เลย)
--- เช็กจากชื่อบัญชี (Name) ไม่ใช่ DisplayName    OWN.is = true เมื่อเป็น owner
-local OWN = { name = "owdkkek", is = false }
+-- รายชื่อผู้ที่เห็นส่วนที่ซ่อน: แท็บ Log / Detection / Developer + สวิตช์ "ทำงานเฉพาะตอนอยู่ในเกม" + สวิตช์ "กันเดินไม่ได้"
+-- และมีการจด Log  (คนนอกรายชื่อไม่มี UI ส่วนนี้เลย ไม่ถูกสร้างขึ้นมาด้วยซ้ำ)
+-- เช็กจากชื่อบัญชี (Name) ไม่ใช่ DisplayName ไม่สนตัวพิมพ์เล็ก/ใหญ่   อยากเพิ่มคนใส่ชื่อเพิ่มในปีกกาได้เลย เช่น { "owdkkek", "ชื่ออื่น" }
+-- OWN.is = true เมื่อบัญชีที่รันอยู่อยู่ในรายชื่อ
+local OWNER_NAMES = { "owdkkek" }
+local OWN = { names = {}, is = false }
+for _, n in ipairs(OWNER_NAMES) do OWN.names[string.lower(n)] = true end
 pcall(function()
     local lp = game:GetService("Players").LocalPlayer
-    OWN.is = lp ~= nil and string.lower(lp.Name) == OWN.name
+    OWN.is = lp ~= nil and OWN.names[string.lower(lp.Name)] == true
 end)
 -- warn ลงคอนโซล: เฉพาะ owner
 function OWN.warn(...)
@@ -46,7 +52,8 @@ end
 --  ด่านแรกสุด: ไม่เจอ PlayerGui.GameUI.GamemodeVoting "จริงๆ" = สคริปต์ไม่ทำงานอะไรเลย
 --  (ไม่โหลด UI / ไม่ hook / ไม่สร้างลูปใดๆ) -- ถ้าเป็นแมพลอบบี้ จะโหลดสคริปต์ลอบบี้จาก GitHub แทน
 --  รอได้สูงสุด GATE_WAIT วินาที (ลอบบี้จะเปิดหน้าต่างหลังรอนี้) เผื่อ GUI ของเกมยังโหลดไม่เสร็จ (เช่นหลังย้ายเซิร์ฟ)
---  ถ้าปิด "ทำงานเฉพาะตอนอยู่ในเกม" (REQUIRE_VOTE_UI) ในหน้า Settings ไว้ ก็จะข้ามด่านนี้
+--  ถ้าบัญชีในรายชื่อ (OWNER_NAMES) ปิด "ทำงานเฉพาะตอนอยู่ในเกม" (REQUIRE_VOTE_UI) ในหน้า Settings ไว้ ก็จะข้ามด่านนี้
+--  คนนอกรายชื่อข้ามด่านนี้ไม่ได้ (ค่าในไฟล์เซฟไม่มีผล)
 -- =====================================================================
 do
     local GATE_WAIT = 5
@@ -54,7 +61,7 @@ do
     pcall(function()
         if isfile and readfile and isfile("PexSkibidiTD_Settings.json") then
             local d = game:GetService("HttpService"):JSONDecode(readfile("PexSkibidiTD_Settings.json"))
-            if type(d) == "table" and d.REQUIRE_VOTE_UI == false then needGate = false end
+            if OWN.is and type(d) == "table" and d.REQUIRE_VOTE_UI == false then needGate = false end
         end
     end)
     if needGate then
@@ -196,6 +203,8 @@ local USER_KEYS = {
     "ANTI_AFK", "WEBHOOK_ON", "WEBHOOK_URL", "STOP_KEY", "AUTO_SKIP", "GAMESPEED_ON", "GAMESPEED_PICK",
     "WAVE_GATE", "ANTI_LAG", "PLACE_ACCURACY", "SAFE_CLICK", "GAME_NOTIF",
 }
+-- ค่าที่ปรับได้เฉพาะบัญชีในรายชื่อ OWNER_NAMES (UI ของมันถูกซ่อน) คนนอกรายชื่อล็อกเป็นค่าเริ่มต้นเสมอ ไม่โหลดจากไฟล์
+local OWNER_ONLY_KEYS = { REQUIRE_VOTE_UI = true, SAFE_CLICK = true, SNIFFER = true }
 local CONFIG = {}
 for k, v in pairs(DEFAULTS) do CONFIG[k] = v end
 
@@ -207,7 +216,11 @@ do
     end)
     if ok and type(data) == "table" then
         for _, k in ipairs(USER_KEYS) do
-            if type(data[k]) == type(DEFAULTS[k]) then CONFIG[k] = data[k] end
+            if OWNER_ONLY_KEYS[k] and not OWN.is then
+                -- คนนอกรายชื่อ: ไม่เอาค่าจากไฟล์ (ใช้ค่าเริ่มต้น)
+            elseif type(data[k]) == type(DEFAULTS[k]) then
+                CONFIG[k] = data[k]
+            end
         end
     end
 end
@@ -219,7 +232,10 @@ CONFIG.WEBHOOK_ON = true -- เปิดแจ้งเตือนดิสอ�
 --   เช่น 95% = เลื่อนไม่เกิน 0.5 สตั๊ด / 90% = ไม่เกิน 1 สตั๊ด  (อยากให้เลื่อนมากขึ้น เพิ่มเลข STUDS)
 local PLACE = { MIN = 90, STUDS = 10, rng = Random.new() }
 CONFIG.PLACE_ACCURACY = math.clamp(tonumber(CONFIG.PLACE_ACCURACY) or DEFAULTS.PLACE_ACCURACY, PLACE.MIN, 100)
-if not OWN.is then CONFIG.SNIFFER = false end -- ผู้เล่นทั่วไปไม่จด Log remote
+if not OWN.is then   -- คนนอกรายชื่อ: ล็อกค่าที่ซ่อนไว้เป็นค่าเริ่มต้น + ไม่จด Log remote
+    for k in pairs(OWNER_ONLY_KEYS) do CONFIG[k] = DEFAULTS[k] end
+    CONFIG.SNIFFER = false
+end
 
 local function saveSettings()
     if not writefile then return end
@@ -3423,8 +3439,10 @@ end
 
 -- กลุ่ม 1: การทำงานของสคริปต์
 local sGen = tSet:Section({ Title = "การทำงานของสคริปต์", Desc = "เงื่อนไขตอนเริ่มทำงาน / ตอนเล่นมาโคร", Icon = "settings", Color = PT.Blue })
-cfgToggle(sGen, "ทำงานเฉพาะตอนอยู่ในเกม", "REQUIRE_VOTE_UI", nil,
-    "เปิด = ลอบบี้ไม่ทำอะไร และเริ่มบันทึกได้เฉพาะตอนอยู่ในเกม | ปิดถ้าสคริปต์ตรวจไม่เจอว่าอยู่ในเกม")
+if OWN.is then   -- สวิตช์นี้เห็นเฉพาะรายชื่อ OWNER_NAMES (คนอื่นใช้ค่าเริ่มต้น = เปิดเสมอ)
+    cfgToggle(sGen, "ทำงานเฉพาะตอนอยู่ในเกม", "REQUIRE_VOTE_UI", nil,
+        "เปิด = ลอบบี้ไม่ทำอะไร และเริ่มบันทึกได้เฉพาะตอนอยู่ในเกม | ปิดถ้าสคริปต์ตรวจไม่เจอว่าอยู่ในเกม")
+end
 cfgToggle(sGen, "ลองยิงตอนเงินใกล้ถึง", "EAGER_ON", nil, "เปิด = เงินใกล้พอก็ลองซื้อเลย | ปิด = รอเงินครบก่อนค่อยซื้อ")
 
 -- กลุ่ม 2: แจ้งเตือนของเกม (PlayerGui.GameUI.Notifications)
@@ -3435,7 +3453,7 @@ cfgToggle(sNotif, "แสดงแจ้งเตือนของเกม", "
     if not gameUI("Notifications") then
         notify("ยังไม่พบแจ้งเตือนของเกม (จะมีผลเมื่อเกมโหลด GUI เสร็จ)", PT.Warn)
     end
-end, "เปิด = แสดงตามปกติ | ปิด = ซ่อนแจ้งเตือนทั้งหมด (แค่ซ่อน ไม่ได้ลบ และระบบตรวจ Game Speed ยังทำงานปกติ)")
+end)
 end
 
 -- กลุ่ม 3: Anti-AFK
@@ -3444,8 +3462,8 @@ local sAfk = tSet:Section({ Title = "Anti-AFK", Desc = "กันถูกเต
 cfgToggle(sAfk, "เปิด Anti-AFK", "ANTI_AFK")
 end
 
--- กลุ่ม 4: การกดปุ่มของสคริปต์ (ย้ายมาจากแท็บ Auto > Game Speed)
-do
+-- กลุ่ม 4: การกดปุ่มของสคริปต์ (ย้ายมาจากแท็บ Auto > Game Speed)  เห็นเฉพาะรายชื่อ OWNER_NAMES (คนอื่นใช้ค่าเริ่มต้น = เปิดเสมอ)
+if OWN.is then
 local sClick = tSet:Section({ Title = "การกดปุ่ม (มือถือ)", Desc = "วิธีที่สคริปต์กดปุ่มในเกม", Icon = "play", Color = PT.Orange })
 cfgToggle(sClick, "กันเดินไม่ได้ (มือถือ)", "SAFE_CLICK", nil,
     "เปิด = ตอนตัวละครกำลังเดิน สคริปต์จะไม่จำลองเมาส์กดปุ่ม (ใช้วิธีกดตรงแทน) | ปิด = ทำเหมือนเดิม")
