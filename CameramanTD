@@ -36,7 +36,7 @@ if not game:IsLoaded() then game.Loaded:Wait() end
 -- และมีการจด Log  (คนนอกรายชื่อไม่มี UI ส่วนนี้เลย ไม่ถูกสร้างขึ้นมาด้วยซ้ำ)
 -- เช็กจากชื่อบัญชี (Name) ไม่ใช่ DisplayName ไม่สนตัวพิมพ์เล็ก/ใหญ่   อยากเพิ่มคนใส่ชื่อเพิ่มในปีกกาได้เลย เช่น { "owdkkek", "ชื่ออื่น" }
 -- OWN.is = true เมื่อบัญชีที่รันอยู่อยู่ในรายชื่อ
-local OWNER_NAMES = { "owdkkek","VIP17y_8"}
+local OWNER_NAMES = { "owdkkek" }
 local OWN = { names = {}, is = false }
 for _, n in ipairs(OWNER_NAMES) do OWN.names[string.lower(n)] = true end
 pcall(function()
@@ -196,6 +196,8 @@ local DEFAULTS = {
     GAMESPEED_PICK = "",    -- ชื่อปุ่มความเร็วที่เลือก (ตรงกับชื่อใน GameUI.GameSpeeds เช่น "1.5")
     PLACE_ACCURACY = 95,    -- ความแม่นตำแหน่งตอนวาง (%) ปรับได้ 90-100 (100 = ตรงเป๊ะ / ต่ำกว่า 90 ไม่ได้)
     SAFE_CLICK = true,      -- มือถือ: ไม่จำลองเมาส์ตอนตัวละครกำลังเดิน (กันเดินไม่ได้หลังสคริปต์กดปุ่ม)
+    HIDE_NAME = false,      -- ซ่อนชื่อตัวเอง (Name + DisplayName) ทุกที่ในเกม -> แสดงเป็น "ถูกซ่อน"
+    NOOB_MODE = false,      -- ซ่อนตัวละคร: เปลี่ยนหน้าตาเป็น NOOB (ปิดแล้วคืนของเดิม)
     WALK_TO_PLACE = false,  -- (ส่วนที่ซ่อน) เปิด = ก่อนวางยูนิต ตัวละครเดินไปใกล้ตำแหน่งวางให้ห่างไม่เกิน PLACE.RANGE (8) ก่อน
 }
 -- มีแค่ค่าเหล่านี้ที่เซฟ/โหลดจากไฟล์ (ค่าอื่นล็อกตาม DEFAULTS เสมอ)
@@ -203,6 +205,7 @@ local USER_KEYS = {
     "EAGER_ON", "START_DELAY", "AUTO_REPLAY", "REPLAY_WAIT", "AUTO_RESUME", "REQUIRE_VOTE_UI", "SNIFFER",
     "ANTI_AFK", "WEBHOOK_ON", "WEBHOOK_URL", "STOP_KEY", "AUTO_SKIP", "GAMESPEED_ON", "GAMESPEED_PICK",
     "WAVE_GATE", "ANTI_LAG", "PLACE_ACCURACY", "SAFE_CLICK", "GAME_NOTIF", "WALK_TO_PLACE",
+    "HIDE_NAME", "NOOB_MODE",
 }
 -- ค่าที่ปรับได้เฉพาะบัญชีในรายชื่อ OWNER_NAMES (UI ของมันถูกซ่อน) คนนอกรายชื่อล็อกเป็นค่าเริ่มต้นเสมอ ไม่โหลดจากไฟล์
 local OWNER_ONLY_KEYS = { REQUIRE_VOTE_UI = true, SAFE_CLICK = true, SNIFFER = true, WALK_TO_PLACE = true }
@@ -2695,12 +2698,262 @@ function LAG.notifRestore()
     if node then LAG.notifSet(node, true) end
 end
 
+-- =====================================================================
+--  ความเป็นส่วนตัว : ซ่อนชื่อตัวเอง / ซ่อนตัวละคร (เปลี่ยนเป็น NOOB)
+--  ทำฝั่งเครื่องเราเท่านั้น (ไม่แตะเซิร์ฟเวอร์)  ปิดสวิตช์ = คืนของเดิมทั้งหมด
+--  เก็บทุกอย่างไว้ใน LAG.priv (ไม่เพิ่มตัวแปร local ระดับบนสุด)
+-- =====================================================================
+do
+local P = { nameOn = false, noobOn = false, nameConns = {}, noobConns = {} }
+local weak = function() return setmetatable({}, { __mode = "k" }) end
+P.hooked, P.orig, P.last = weak(), weak(), weak()
+LAG.priv = P
+local HIDDEN_TEXT = "ถูกซ่อน"
+
+-- ---------- 1) ซ่อนชื่อ ----------
+local function scrub(str)
+    local out = str
+    for _, nm in ipairs(P.names or {}) do
+        local low, lowN = out:lower(), nm:lower()
+        local init, parts, hit = 1, {}, false
+        while true do
+            local a, b = low:find(lowN, init, true)
+            if not a then break end
+            parts[#parts + 1] = out:sub(init, a - 1)
+            parts[#parts + 1] = HIDDEN_TEXT
+            init, hit = b + 1, true
+        end
+        if hit then
+            parts[#parts + 1] = out:sub(init)
+            out = table.concat(parts)
+        end
+    end
+    return out
+end
+
+local function hookText(o)
+    if P.hooked[o] then return end
+    local function fix()
+        if not P.nameOn then return end
+        local t = o.Text
+        if t == "" then return end
+        local n = scrub(t)
+        if n ~= t then
+            P.orig[o], P.last[o] = t, n   -- t = ข้อความจากเกม (ล่าสุด)
+            o.Text = n
+        end
+    end
+    P.hooked[o] = o:GetPropertyChangedSignal("Text"):Connect(fix)
+    fix()
+end
+
+local function isTextObj(o)
+    local c = o.ClassName
+    return c == "TextLabel" or c == "TextButton"   -- ไม่แตะ TextBox (ช่องพิมพ์ของผู้ใช้)
+end
+
+local function scanRoot(root)
+    local ok, list = pcall(function() return root:GetDescendants() end)
+    if not ok then return end
+    for i, d in ipairs(list) do
+        if not (alive and P.nameOn) then return end
+        if isTextObj(d) then pcall(hookText, d) end
+        if i % 300 == 0 then task.wait() end
+    end
+end
+
+local function hideHumanoidName(ch)
+    local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+    if hum and P.nameOn then pcall(function() hum.DisplayName = HIDDEN_TEXT end) end
+end
+
+function P.nameSet(on)
+    on = on and true or false
+    if on == P.nameOn then return end
+    P.nameOn = on
+    if on then
+        local names, seen = {}, {}
+        for _, n in ipairs({ player.Name, player.DisplayName }) do
+            if type(n) == "string" and #n >= 3 and not seen[n:lower()] then
+                seen[n:lower()] = true
+                names[#names + 1] = n
+            end
+        end
+        -- ชื่อยาวก่อน (กันชื่อสั้นที่เป็นส่วนหนึ่งของชื่อยาวแทนที่ไปก่อน)
+        table.sort(names, function(a, b) return #a > #b end)
+        P.names = names
+
+        local roots = { player:FindFirstChildOfClass("PlayerGui"), game:GetService("Workspace") }
+        local okC, core = pcall(function() return game:GetService("CoreGui") end)
+        if okC and core then roots[#roots + 1] = core end   -- ลิสต์ชื่อผู้เล่น / แชท (executor ส่วนใหญ่เข้าได้)
+        for _, root in ipairs(roots) do
+            local okS, conn = pcall(function()
+                return root.DescendantAdded:Connect(function(d)
+                    if P.nameOn and isTextObj(d) then pcall(hookText, d) end
+                end)
+            end)
+            if okS and conn then P.nameConns[#P.nameConns + 1] = conn end
+            task.spawn(scanRoot, root)
+        end
+        P.nameConns[#P.nameConns + 1] = player.CharacterAdded:Connect(function(ch)
+            for _, w in ipairs({ 0.2, 1, 3 }) do
+                task.delay(w, function() if alive then hideHumanoidName(ch) end end)
+            end
+        end)
+        hideHumanoidName(player.Character)
+    else
+        for _, c in ipairs(P.nameConns) do pcall(function() c:Disconnect() end) end
+        P.nameConns = {}
+        for o, c in pairs(P.hooked) do pcall(function() c:Disconnect() end) end
+        for o, orig in pairs(P.orig) do
+            pcall(function()
+                if o.Parent and o.Text == P.last[o] then o.Text = orig end
+            end)
+        end
+        P.hooked, P.orig, P.last = weak(), weak(), weak()
+        local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+        if hum then pcall(function() hum.DisplayName = player.DisplayName end) end
+    end
+end
+
+-- ---------- 2) ซ่อนตัวละคร (NOOB) ----------
+local NOOB = {
+    head  = BrickColor.new("Bright yellow").Color,
+    torso = BrickColor.new("Bright blue").Color,
+    arm   = BrickColor.new("Bright yellow").Color,
+    leg   = BrickColor.new("Bright green").Color,
+}
+
+local function noobColor(partName)
+    if partName == "Head" then return NOOB.head end
+    if partName == "Torso" or partName == "UpperTorso" or partName == "LowerTorso" then return NOOB.torso end
+    if partName:find("Arm") or partName:find("Hand") then return NOOB.arm end
+    if partName:find("Leg") or partName:find("Foot") then return NOOB.leg end
+    return nil
+end
+
+local function isAppearance(d)
+    local c = d.ClassName
+    return d:IsA("Accessory") or c == "Shirt" or c == "Pants" or c == "ShirtGraphic"
+        or c == "CharacterMesh" or c == "SurfaceAppearance"
+end
+
+local function parkAppearance(nb, d)
+    pcall(function()
+        nb.removed[#nb.removed + 1] = { d, d.Parent }
+        d.Parent = nil
+    end)
+end
+
+local function noobify(ch)
+    if not (P.noobOn and ch and ch.Parent) then return end
+    local nb = P.nb
+    if not nb or nb.ch ~= ch then
+        nb = { ch = ch, removed = {}, colors = {}, tex = {} }
+        P.nb = nb
+    end
+    -- ถอดเสื้อ/กางเกง/หมวก/ผิวพิเศษ (เก็บไว้ คืนได้)
+    for _, d in ipairs(ch:GetDescendants()) do
+        if isAppearance(d) then parkAppearance(nb, d) end
+    end
+    -- สีผิวผ่าน BodyColors
+    local bc = ch:FindFirstChildOfClass("BodyColors")
+    if not bc then
+        bc = Instance.new("BodyColors")
+        bc.Parent = ch
+        nb.bcNew = bc
+    elseif not nb.bcOrig then
+        nb.bcOrig = {
+            bc, bc.HeadColor3, bc.TorsoColor3,
+            bc.LeftArmColor3, bc.RightArmColor3, bc.LeftLegColor3, bc.RightLegColor3,
+        }
+    end
+    pcall(function()
+        bc.HeadColor3, bc.TorsoColor3 = NOOB.head, NOOB.torso
+        bc.LeftArmColor3, bc.RightArmColor3 = NOOB.arm, NOOB.arm
+        bc.LeftLegColor3, bc.RightLegColor3 = NOOB.leg, NOOB.leg
+    end)
+    -- ทาสีที่ชิ้นส่วนตรงๆ ด้วย (เผื่อเกมไม่ใช้ BodyColors) + ล้างลายของ MeshPart
+    for _, part in ipairs(ch:GetChildren()) do
+        if part:IsA("BasePart") then
+            local col = noobColor(part.Name)
+            if col then
+                if nb.colors[part] == nil then nb.colors[part] = part.Color end
+                pcall(function() part.Color = col end)
+                if part:IsA("MeshPart") and part.TextureID ~= "" then
+                    if nb.tex[part] == nil then nb.tex[part] = part.TextureID end
+                    pcall(function() part.TextureID = "" end)
+                end
+            end
+        end
+    end
+end
+
+local function noobStart(ch)
+    if not ch then return end
+    P.nb = nil
+    noobify(ch)
+    -- เกมมักโหลดชุดตัวละครตามหลัง -> ทำซ้ำช่วงแรก + ดักของที่โผล่มาใหม่
+    for _, w in ipairs({ 0.3, 1, 2.5, 5 }) do
+        task.delay(w, function() if alive and P.noobOn and player.Character == ch then noobify(ch) end end)
+    end
+    P.noobConns[#P.noobConns + 1] = ch.DescendantAdded:Connect(function(d)
+        if not (P.noobOn and P.nb and P.nb.ch == ch) then return end
+        if isAppearance(d) then
+            task.defer(function() if P.nb and P.nb.ch == ch then parkAppearance(P.nb, d) end end)
+        end
+    end)
+end
+
+function P.noobSet(on)
+    on = on and true or false
+    if on == P.noobOn then return end
+    P.noobOn = on
+    if on then
+        P.noobConns[#P.noobConns + 1] = player.CharacterAdded:Connect(function(ch)
+            task.wait(0.1)
+            if alive and P.noobOn then noobStart(ch) end
+        end)
+        noobStart(player.Character)
+    else
+        for _, c in ipairs(P.noobConns) do pcall(function() c:Disconnect() end) end
+        P.noobConns = {}
+        local nb = P.nb
+        P.nb = nil
+        if not nb then return end
+        for part, col in pairs(nb.colors) do pcall(function() if part.Parent then part.Color = col end end) end
+        for part, tex in pairs(nb.tex) do pcall(function() if part.Parent then part.TextureID = tex end end) end
+        if nb.bcOrig then
+            local o = nb.bcOrig
+            pcall(function()
+                local bc = o[1]
+                bc.HeadColor3, bc.TorsoColor3 = o[2], o[3]
+                bc.LeftArmColor3, bc.RightArmColor3 = o[4], o[5]
+                bc.LeftLegColor3, bc.RightLegColor3 = o[6], o[7]
+            end)
+        end
+        if nb.bcNew then pcall(function() nb.bcNew:Destroy() end) end
+        for _, r in ipairs(nb.removed) do
+            pcall(function()
+                if r[2] and r[2].Parent then r[1].Parent = r[2] end
+            end)
+        end
+    end
+end
+
+function P.restoreAll()
+    pcall(P.nameSet, false)
+    pcall(P.noobSet, false)
+end
+end
+
 -- ----- ปิดสคริปต์ -----
 local function shutdown()
     if not alive then return end
     alive = false
     setAntiLag(false)   -- เอาของที่ย้ายไว้กลับที่เดิม
     pcall(LAG.notifRestore)   -- คืนแจ้งเตือนของเกมที่ซ่อนไว้
+    if LAG.priv then pcall(LAG.priv.restoreAll) end   -- คืนชื่อ / หน้าตาตัวละคร
     isPlaying = false
     isRecording = false
     playToken = playToken + 1
@@ -3505,6 +3758,19 @@ cfgToggle(sNotif, "แสดงแจ้งเตือนของเกม", "
         notify("ยังไม่พบแจ้งเตือนของเกม (จะมีผลเมื่อเกมโหลด GUI เสร็จ)", PT.Warn)
     end
 end)
+end
+
+-- กลุ่ม: ความเป็นส่วนตัว (เห็นทุกคน)
+do
+local sPriv = tSet:Section({ Title = "ความเป็นส่วนตัว", Desc = "ซ่อนชื่อและหน้าตาของตัวเอง (เห็นเฉพาะในเครื่องเรา)", Icon = "shield-check", Color = PT.Pink })
+cfgToggle(sPriv, "ซ่อนชื่อตัวเอง", "HIDE_NAME", function(v)
+    LAG.priv.nameSet(v)
+end, "เปิด = ชื่อบัญชีและชื่อที่แสดงของเรา ไม่ว่าจะโผล่ตรงไหนในเกม จะถูกเปลี่ยนเป็นคำว่า \"ถูกซ่อน\" | ปิด = คืนตามเดิม")
+cfgToggle(sPriv, "ซ่อนตัวละคร (เป็น NOOB)", "NOOB_MODE", function(v)
+    LAG.priv.noobSet(v)
+end, "เปิด = เปลี่ยนหน้าตาเราเป็น NOOB (ถอดเสื้อผ้า/หมวก ใช้สีผิวมาตรฐาน) | ปิด = กลับเป็นหน้าตาเดิม")
+if CONFIG.HIDE_NAME then task.spawn(function() pcall(LAG.priv.nameSet, true) end) end
+if CONFIG.NOOB_MODE then task.spawn(function() pcall(LAG.priv.noobSet, true) end) end
 end
 
 -- กลุ่ม 3: Anti-AFK
