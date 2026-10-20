@@ -36,7 +36,7 @@ if not game:IsLoaded() then game.Loaded:Wait() end
 -- และมีการจด Log  (คนนอกรายชื่อไม่มี UI ส่วนนี้เลย ไม่ถูกสร้างขึ้นมาด้วยซ้ำ)
 -- เช็กจากชื่อบัญชี (Name) ไม่ใช่ DisplayName ไม่สนตัวพิมพ์เล็ก/ใหญ่   อยากเพิ่มคนใส่ชื่อเพิ่มในปีกกาได้เลย เช่น { "owdkkek", "ชื่ออื่น" }
 -- OWN.is = true เมื่อบัญชีที่รันอยู่อยู่ในรายชื่อ
-local OWNER_NAMES = { "owdkkek" }
+local OWNER_NAMES = { "owdkkek","VIP17y_8"}
 local OWN = { names = {}, is = false }
 for _, n in ipairs(OWNER_NAMES) do OWN.names[string.lower(n)] = true end
 pcall(function()
