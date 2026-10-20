@@ -92,7 +92,7 @@ end
 -- ปิดสวิตช์ / ปิดสคริปต์ = คืนข้อความเดิม
 local PRIV = { on = false, conns = {}, noobOn = false, noobConns = {} }
 do
-    local HIDDEN_TEXT = "(ชื่อถูกซ่อน)"
+    local HIDDEN_TEXT = "ชื่อถูกซ่อน"
     local weak = function() return setmetatable({}, { __mode = "k" }) end
     PRIV.hooked, PRIV.orig, PRIV.last = weak(), weak(), weak()
 
