@@ -12,7 +12,7 @@
 -- RightShift = ซ่อน/แสดงหน้าต่าง
 -- ไม่แน่ใจว่า Id ของยูนิตมาจากไหน -> สคริปต์ดักหาเอง (event ที่เซิร์ฟเวอร์ส่งกลับ + ของที่โผล่ใน Workspace)
 --   ส่วนที่ซ่อน (เห็นเฉพาะบัญชีที่อยู่ในรายชื่อ OWNER_NAMES คนอื่นไม่เห็น UI และไม่มีการจดเลย):
---     แท็บ Log / Settings > Detection / Developer / สวิตช์ "ทำงานเฉพาะตอนอยู่ในเกม" / สวิตช์ "กันเดินไม่ได้"
+--     แท็บ Log / Settings > Detection / Developer / สวิตช์ "ทำงานเฉพาะตอนอยู่ในเกม" / สวิตช์ "กันเดินไม่ได้" / สวิตช์ "เดินไปที่จุดวางก่อนวาง"
 --   คนนอกรายชื่อ: สคริปต์ใช้ค่าเริ่มต้นเสมอ (ทำงานเฉพาะตอนอยู่ในเกม = เปิด, กันเดินไม่ได้ = เปิด) และไม่อ่านค่านี้จากไฟล์เซฟ
 
 -- =====================================================================
@@ -196,15 +196,16 @@ local DEFAULTS = {
     GAMESPEED_PICK = "",    -- ชื่อปุ่มความเร็วที่เลือก (ตรงกับชื่อใน GameUI.GameSpeeds เช่น "1.5")
     PLACE_ACCURACY = 95,    -- ความแม่นตำแหน่งตอนวาง (%) ปรับได้ 90-100 (100 = ตรงเป๊ะ / ต่ำกว่า 90 ไม่ได้)
     SAFE_CLICK = true,      -- มือถือ: ไม่จำลองเมาส์ตอนตัวละครกำลังเดิน (กันเดินไม่ได้หลังสคริปต์กดปุ่ม)
+    WALK_TO_PLACE = false,  -- (ส่วนที่ซ่อน) เปิด = ก่อนวางยูนิต ตัวละครเดินไปใกล้ตำแหน่งวางให้ห่างไม่เกิน PLACE.RANGE (8) ก่อน
 }
 -- มีแค่ค่าเหล่านี้ที่เซฟ/โหลดจากไฟล์ (ค่าอื่นล็อกตาม DEFAULTS เสมอ)
 local USER_KEYS = {
     "EAGER_ON", "START_DELAY", "AUTO_REPLAY", "REPLAY_WAIT", "AUTO_RESUME", "REQUIRE_VOTE_UI", "SNIFFER",
     "ANTI_AFK", "WEBHOOK_ON", "WEBHOOK_URL", "STOP_KEY", "AUTO_SKIP", "GAMESPEED_ON", "GAMESPEED_PICK",
-    "WAVE_GATE", "ANTI_LAG", "PLACE_ACCURACY", "SAFE_CLICK", "GAME_NOTIF",
+    "WAVE_GATE", "ANTI_LAG", "PLACE_ACCURACY", "SAFE_CLICK", "GAME_NOTIF", "WALK_TO_PLACE",
 }
 -- ค่าที่ปรับได้เฉพาะบัญชีในรายชื่อ OWNER_NAMES (UI ของมันถูกซ่อน) คนนอกรายชื่อล็อกเป็นค่าเริ่มต้นเสมอ ไม่โหลดจากไฟล์
-local OWNER_ONLY_KEYS = { REQUIRE_VOTE_UI = true, SAFE_CLICK = true, SNIFFER = true }
+local OWNER_ONLY_KEYS = { REQUIRE_VOTE_UI = true, SAFE_CLICK = true, SNIFFER = true, WALK_TO_PLACE = true }
 local CONFIG = {}
 for k, v in pairs(DEFAULTS) do CONFIG[k] = v end
 
@@ -1733,6 +1734,49 @@ function PLACE.offset(scale)
     return math.cos(th) * r, math.sin(th) * r
 end
 
+-- เดินไปใกล้ตำแหน่งวางก่อนวาง (สวิตช์ WALK_TO_PLACE ในส่วนที่ซ่อน)
+--   RANGE = ระยะสูงสุดที่ยอมให้ห่างจากจุดวาง (สตั๊ด, แนวราบ) | ถ้าอยู่ใกล้กว่านี้แล้วจะไม่เดิน
+--   อยากให้ห่างมากขึ้น/น้อยลงแก้เลข RANGE  (1 สตั๊ด = ประมาณ 0.28 เมตรจริง แต่ในแมพเรียกเป็นเมตรได้)
+PLACE.RANGE, PLACE.TIMEOUT = 8, 12
+function PLACE.walk(target, active)
+    local ch = player.Character
+    local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+    local root = ch and ch:FindFirstChild("HumanoidRootPart")
+    if not (hum and root and hum.Health > 0 and typeof(target) == "Vector3") then return false end
+    local function dist()
+        local d = root.Position - target
+        return Vector3.new(d.X, 0, d.Z).Magnitude
+    end
+    if dist() <= PLACE.RANGE then return true end
+
+    logf("เดินไปใกล้จุดวาง (ห่าง %.1f สตั๊ด -> เป้า ไม่เกิน %d)", dist(), PLACE.RANGE)
+    local t0 = os.clock()
+    local lastPos, lastMove, jumps = root.Position, os.clock(), 0
+    while alive and active() and os.clock() - t0 < PLACE.TIMEOUT do
+        if hum.Health <= 0 then break end
+        if dist() <= PLACE.RANGE - 0.5 then break end
+        -- จุดหมาย = จุดบนเส้นตรงระหว่างเรากับจุดวาง ห่างจุดวาง (RANGE - 1.5) สตั๊ด
+        local flat = Vector3.new(root.Position.X - target.X, 0, root.Position.Z - target.Z)
+        local dir = flat.Magnitude > 0.01 and flat.Unit or Vector3.new(1, 0, 0)
+        local g = target + dir * math.max(PLACE.RANGE - 1.5, 1)
+        pcall(function() hum:MoveTo(Vector3.new(g.X, root.Position.Y, g.Z)) end)
+        task.wait(0.15)
+        -- ติดสิ่งกีดขวาง: ไม่ขยับเกิน 1.5 วิ = กระโดด (ลองไม่เกิน 3 ครั้ง) แล้วเลิกเดิน
+        if (root.Position - lastPos).Magnitude > 0.5 then
+            lastPos, lastMove = root.Position, os.clock()
+        elseif os.clock() - lastMove > 1.5 then
+            jumps = jumps + 1
+            if jumps > 3 then break end
+            pcall(function() hum.Jump = true end)
+            lastMove = os.clock()
+        end
+    end
+    pcall(function() hum:MoveTo(root.Position) end)   -- หยุดเดิน
+    local okNear = dist() <= PLACE.RANGE + 1
+    logf("เดินเสร็จ: ห่างจุดวาง %.1f สตั๊ด (%s)", dist(), okNear and "ใกล้พอ" or "ยังไกลอยู่ จะลองวางเลย")
+    return okNear
+end
+
 local function playPlace(action, i, total, active, label)
     local cost, _, unknown = costInfo(action)
     local minDrop = math.max(1, (action.cost or 0) * 0.5)
@@ -1760,6 +1804,13 @@ local function playPlace(action, i, total, active, label)
             TD.scanUntil = os.clock() + 8
             TD.sniffUntil = os.clock() + 6
             action.unitId = slotUnitId(action.name) or action.unitId   -- เผื่อ Slot เปลี่ยนระหว่างรอเงิน
+
+            -- สวิตช์ซ่อน: เดินไปใกล้จุดวางก่อน (เดินเสร็จแล้วค่อยเริ่มนับเวลารอผลวาง)
+            if CONFIG.WALK_TO_PLACE and OWN.is then
+                local tp = action.pos
+                if typeof(tp) ~= "Vector3" and typeof(action.cframe) == "CFrame" then tp = action.cframe.Position end
+                if typeof(tp) == "Vector3" and PLACE.walk(tp, active) then t0 = os.clock() end
+            end
 
             -- เลื่อนตำแหน่ง X/Z นิดหน่อย  วางไม่ติดซ้ำๆ (ครั้งที่ 3 ขึ้นไป) = ลดระยะเลื่อนลง แล้วกลับมาตรงเป๊ะ
             local scale = 1
@@ -3467,6 +3518,8 @@ if OWN.is then
 local sClick = tSet:Section({ Title = "การกดปุ่ม (มือถือ)", Desc = "วิธีที่สคริปต์กดปุ่มในเกม", Icon = "play", Color = PT.Orange })
 cfgToggle(sClick, "กันเดินไม่ได้ (มือถือ)", "SAFE_CLICK", nil,
     "เปิด = ตอนตัวละครกำลังเดิน สคริปต์จะไม่จำลองเมาส์กดปุ่ม (ใช้วิธีกดตรงแทน) | ปิด = ทำเหมือนเดิม")
+cfgToggle(sClick, "เดินไปที่จุดวางก่อนวาง", "WALK_TO_PLACE", nil,
+    "เปิด = ก่อนวางยูนิตแต่ละตัว ตัวละครจะเดินไปใกล้ตำแหน่งนั้นให้ห่างไม่เกิน 8 สตั๊ดก่อน (ถ้าอยู่ใกล้แล้วจะไม่เดิน) | ปิด = วางจากที่ยืนเลย")
 end
 
 local sLag = tSet:Section({ Title = "ลดกระตุก", Desc = "ย้ายของที่ไม่จำเป็นออกจากฉากชั่วคราว (ไม่ได้ลบจริง ปิดแล้วเอากลับที่เดิม)", Icon = "gauge", Color = PT.Good })
