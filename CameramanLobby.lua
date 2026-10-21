@@ -554,8 +554,8 @@ local function fitMax()
     notify(string.format("ตั้งจำนวน %d กล่อง (ใช้ %s Coins)", n, fmt((calcCost(n)))), PT.Good, "check")
 end
 
-sel:Action({ Text = "💰 ใส่จำนวนพอดีกับเงินทั้งหมด", Icon = "coins", Color = PT.Blue, Callback = fitMax })
-sel:Action({ Text = "🎲 สุ่มเลย", Icon = "boxes", Color = PT.Purple, Callback = roll })
+sel:Action({ Text = "ใส่จำนวนพอดีกับเงินทั้งหมด", Icon = "coins", Color = PT.Blue, Callback = fitMax })
+sel:Action({ Text = "สุ่มเลย", Icon = "boxes", Color = PT.Purple, Callback = roll })
 
 -- ---------- สุ่มต่อเนื่องจนกว่า Coin จะหมด ----------
 local autoOn, autoRunning = false, false
@@ -680,7 +680,7 @@ end)
 local sPriv = tab:Section({ Title = "ความเป็นส่วนตัว", Desc = "ซ่อนชื่อและหน้าตาของตัวเอง (เห็นเฉพาะในเครื่องเรา)", Icon = "shield-check", Color = PT.Pink })
 sPriv:Toggle({
     Title = "ซ่อนชื่อตัวเอง",
-    Desc = "เปิด = ชื่อบัญชีและชื่อที่แสดงของเราจะถูกซ่อน,
+    Desc = "เปิด = ชื่อบัญชีและชื่อที่แสดงของเราจะถูกซ่อน",
     Default = CFG.HIDE_NAME,
     Callback = function(v)
         CFG.HIDE_NAME = v and true or false
