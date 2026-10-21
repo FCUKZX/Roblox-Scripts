@@ -14,6 +14,9 @@
 --   ส่วนที่ซ่อน (เห็นเฉพาะบัญชีที่อยู่ในรายชื่อ OWNER_NAMES คนอื่นไม่เห็น UI และไม่มีการจดเลย):
 --     แท็บ Log / Settings > Detection / Developer / สวิตช์ "ทำงานเฉพาะตอนอยู่ในเกม" / สวิตช์ "กันเดินไม่ได้" / สวิตช์ "เดินไปที่จุดวางก่อนวาง"
 --   คนนอกรายชื่อ: สคริปต์ใช้ค่าเริ่มต้นเสมอ (ทำงานเฉพาะตอนอยู่ในเกม = เปิด, กันเดินไม่ได้ = เปิด) และไม่อ่านค่านี้จากไฟล์เซฟ
+--
+-- + Auto สุ่มตัวกำหนดเอง (แท็บ Auto): ทุกครึ่งชั่วโมงตู้รีเซ็ต -> (เวฟ <= ค่าที่ตั้ง) ออกไปลอบบี้สุ่มตัว แล้วกลับมาเล่นมาโครต่อ
+--   ตั้งตัว/ด่านที่สคริปต์ลอบบี้ (CameramanLobby.lua)
 
 -- =====================================================================
 --  ตั้งค่าที่แก้เองได้ (ไม่บังคับ)
@@ -199,13 +202,15 @@ local DEFAULTS = {
     HIDE_NAME = false,      -- ซ่อนชื่อตัวเอง (Name + DisplayName) ทุกที่ในเกม -> แสดงเป็น "ถูกซ่อน"
     NOOB_MODE = false,      -- ซ่อนตัวละคร: เปลี่ยนหน้าตาเป็น NOOB (ปิดแล้วคืนของเดิม)
     WALK_TO_PLACE = false,  -- (ส่วนที่ซ่อน) เปิด = ก่อนวางยูนิต ตัวละครเดินไปใกล้ตำแหน่งวางให้ห่างไม่เกิน PLACE.RANGE (8) ก่อน
+    AUTO_SELECT_SUMMON = false, -- ปุ่มเดียวกับในลอบบี้: ทุกครึ่งชั่วโมงออกไปลอบบี้สุ่มตัวที่เลือก แล้วกลับมาเล่นต่อ
+    SUMMON_WAVE_MAX = 10,       -- ออกไปได้เมื่อเวฟ <= ค่านี้ (เกินกว่านี้จะรอจนเริ่มรอบใหม่)
 }
 -- มีแค่ค่าเหล่านี้ที่เซฟ/โหลดจากไฟล์ (ค่าอื่นล็อกตาม DEFAULTS เสมอ)
 local USER_KEYS = {
     "EAGER_ON", "START_DELAY", "AUTO_REPLAY", "REPLAY_WAIT", "AUTO_RESUME", "REQUIRE_VOTE_UI", "SNIFFER",
     "ANTI_AFK", "WEBHOOK_ON", "WEBHOOK_URL", "STOP_KEY", "AUTO_SKIP", "GAMESPEED_ON", "GAMESPEED_PICK",
     "WAVE_GATE", "ANTI_LAG", "PLACE_ACCURACY", "SAFE_CLICK", "GAME_NOTIF", "WALK_TO_PLACE",
-    "HIDE_NAME", "NOOB_MODE",
+    "HIDE_NAME", "NOOB_MODE", "AUTO_SELECT_SUMMON", "SUMMON_WAVE_MAX",
 }
 -- ค่าที่ปรับได้เฉพาะบัญชีในรายชื่อ OWNER_NAMES (UI ของมันถูกซ่อน) คนนอกรายชื่อล็อกเป็นค่าเริ่มต้นเสมอ ไม่โหลดจากไฟล์
 local OWNER_ONLY_KEYS = { REQUIRE_VOTE_UI = true, SAFE_CLICK = true, SNIFFER = true, WALK_TO_PLACE = true }
@@ -243,7 +248,14 @@ end
 
 local function saveSettings()
     if not writefile then return end
-    local out = { CFG_VERSION = DEFAULTS.CFG_VERSION }
+    local out = {}
+    pcall(function()
+        if isfile and readfile and isfile(SETTINGS_FILE) then
+            local d = HttpService:JSONDecode(readfile(SETTINGS_FILE))
+            if type(d) == "table" then out = d end   -- เก็บค่าของสคริปต์ลอบบี้ไว้ (ตัว/ด่านที่เลือกสุ่ม)
+        end
+    end)
+    out.CFG_VERSION = DEFAULTS.CFG_VERSION
     for _, k in ipairs(USER_KEYS) do out[k] = CONFIG[k] end
     pcall(function() writefile(SETTINGS_FILE, HttpService:JSONEncode(out)) end)
 end
@@ -2187,6 +2199,7 @@ local function runLoops(total, startCompleted, waitForGame)
     end
 
     local forever = (total == math.huge)
+    TD.playCtx = { total = total, forever = forever, completed = startCompleted or 0 }   -- ใช้ตอนออกไปสุ่มตัว
     isPlaying = true
     playToken = playToken + 1
     local my = playToken
@@ -2249,6 +2262,7 @@ local function runLoops(total, startCompleted, waitForGame)
 
                     local dur = os.clock() - roundStart
                     completed = completed + 1
+                    if TD.playCtx then TD.playCtx.completed = completed end
                     stats.rounds = stats.rounds + 1
                     stats.lastRound = dur
                     stats.totalRoundTime = stats.totalRoundTime + dur
@@ -2302,10 +2316,11 @@ local function setupQueue()
 end
 
 local function tryResume()
-    if not (CONFIG.AUTO_RESUME and isfile and readfile and isfile(RESUME_FILE)) then return end
+    if not (isfile and readfile and isfile(RESUME_FILE)) then return end
     local ok, d = pcall(function() return HttpService:JSONDecode(readfile(RESUME_FILE)) end)
     if not ok or type(d) ~= "table" or not d.playing then return end
-    if os.time() - (tonumber(d.ts) or 0) > CONFIG.RESUME_MAX_AGE then
+    if not (CONFIG.AUTO_RESUME or d.fromSummon) then return end   -- fromSummon = กลับมาจากการสุ่มตัวในลอบบี้
+    if os.time() - (tonumber(d.ts) or 0) > (tonumber(d.maxAge) or CONFIG.RESUME_MAX_AGE) then
         log("ไฟล์ resume เก่าเกินไป ไม่เล่นต่อ")
         clearResume()
         return
@@ -3649,6 +3664,98 @@ cfgToggle(sSkip, "เปิด Auto Skip ให้อัตโนมัติ", 
     AS.fail, AS.nextAt, AS.seen = 0, 0, 0
 end)
 ui.skipLabel = sSkip:Label({ Text = "สถานะ: —", Color = PT.Text })
+
+-- ---------- Auto สุ่มตัวกำหนดเอง (ปุ่มเดียวกับในลอบบี้) ----------
+do
+local sSum = tAuto:Section({
+    Title = "Auto สุ่มตัวกำหนดเอง",
+    Desc = "ทุกครึ่งชั่วโมง (ตู้รีเซ็ต :00 / :30) ออกไปลอบบี้สุ่มตัวที่เลือก แล้วกลับมาเล่นมาโครต่อ | ตั้งตัว/ด่านที่หน้าลอบบี้",
+    Icon = "gift", Color = PT.Purple,
+})
+cfgToggle(sSum, "ออโต้สุ่มตัวแบบกำหนดตัว", "AUTO_SELECT_SUMMON", function(v)
+    TD.sumPending = false
+    TD.sumSlot = os.time() // 1800
+end, "เปิด = ตู้รีเซ็ตแล้วออกไปลอบบี้ | ปิด = หยุดระบบนี้ เล่นต่อเหมือนเดิม")
+ui.numSlider(sSum, "ออกไปได้เมื่อเวฟไม่เกิน", "SUMMON_WAVE_MAX", 1, 100, 1, "")
+ui.sumLabel = sSum:Label({ Text = "—", TextSize = 12, Color = PT.Text })
+
+-- ออกไปลอบบี้: หยุดมาโคร -> เซฟสถานะ (ชื่อมาโคร/รอบที่เล่นถึง) -> Teleport
+function TD.sumLeave()
+    if TD.sumLeaving then return end
+    TD.sumLeaving = true
+    local ctx = TD.playCtx
+    local wasPlaying = isPlaying and ctx ~= nil and selectedName ~= nil and #recordedActions > 0
+    local name = selectedName
+    local completed = ctx and ctx.completed or 0
+    local forever = ctx and ctx.forever == true
+    local total = ctx and ctx.total or 1
+
+    stopAll("ออกไปลอบบี้เพื่อสุ่มตัว (ตู้รีเซ็ต)")   -- stopAll ลบไฟล์ resume ทิ้ง จึงต้องเขียนหลังจากนี้
+
+    if wasPlaying and writefile then
+        local st = {}
+        for k, v in pairs(stats) do
+            if type(v) == "number" and k ~= "sessionStart" then st[k] = v end
+        end
+        pcall(function()
+            writefile(RESUME_FILE, HttpService:JSONEncode({
+                playing = true, fromSummon = true, ts = os.time(), maxAge = 7200,
+                gameId = game.GameId, name = name, round = completed,
+                total = forever and 0 or total, forever = forever, stats = st,
+            }))
+        end)
+    end
+
+    pcall(setupQueue)   -- ให้สคริปต์รันต่อหลังย้ายไปลอบบี้ (ถ้าตั้ง SCRIPT_URL / ใช้ autoexec)
+    notify("ตู้รีเซ็ตแล้ว กำลังไปลอบบี้เพื่อสุ่มตัว", PT.Accent, 5, "gift")
+    task.wait(0.5)
+    local ok, err = pcall(function()
+        game:GetService("TeleportService"):Teleport(LOBBY_PLACE_ID, player)
+    end)
+    if not ok then
+        logf("ย้ายไปลอบบี้ไม่สำเร็จ: %s", tostring(err))
+        notify("ย้ายไปลอบบี้ไม่สำเร็จ", PT.Bad, 5, "x")
+        TD.sumLeaving = false
+    end
+end
+
+-- เช็กทุก 1 วิ: ข้ามช่วงครึ่งชั่วโมงใหม่ = ตู้รีเซ็ต -> รอจนเวฟ <= ค่าที่ตั้ง (หรือหน้าโหวตโหมดเปิด) แล้วออก
+function TD.sumTick()
+    local slot = os.time() // 1800
+    if not CONFIG.AUTO_SELECT_SUMMON then
+        TD.sumSlot, TD.sumPending = slot, false
+        return "ปิดอยู่"
+    end
+    if not inGame() then return "ไม่ได้อยู่ในเกม" end
+    if TD.sumSlot == nil then TD.sumSlot = slot end
+    if slot ~= TD.sumSlot then
+        TD.sumSlot = slot
+        TD.sumPending = true
+    end
+    local max = tonumber(CONFIG.SUMMON_WAVE_MAX) or 10
+    if not TD.sumPending then
+        local left = 1800 - os.time() % 1800
+        return string.format("เปิดอยู่ | ตู้รีเซ็ตในอีก %02d:%02d | ออกเมื่อเวฟ ≤ %d", left // 60, left % 60, max)
+    end
+    local wave = getWave()
+    if votingOpen() or (wave ~= nil and wave <= max) then
+        TD.sumPending = false
+        task.spawn(TD.sumLeave)
+        return "กำลังออกไปลอบบี้..."
+    end
+    return string.format("ตู้รีเซ็ตแล้ว รอเวฟ ≤ %d ก่อนออก (ตอนนี้เวฟ %s)", max, wave and tostring(wave) or "?")
+end
+
+task.spawn(function()
+    while alive do
+        task.wait(1)
+        local ok, txt = pcall(TD.sumTick)
+        if tAuto.Page.Visible and ui.sumLabel then
+            ui.sumLabel.Text = ok and tostring(txt or "") or "error"
+        end
+    end
+end)
+end
 
 local sSpeed = tAuto:Section({
     Title = "Game Speed", Desc = "เลือกความเร็ว แล้วสคริปต์ปรับให้อัตโนมัติ",
