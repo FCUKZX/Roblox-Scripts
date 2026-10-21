@@ -4,6 +4,7 @@
 --  ใส่จำนวนกล่อง -> กดสุ่ม | ทุก 10 กล่อง = 900 Coins, เศษกล่องละ 100 Coins
 --  สุ่มทีละ 10 กล่อง จนเหลือเศษหลักหน่วยแล้วสุ่มทีละ 1 กล่อง จนครบจำนวน
 --  + ซ่อนชื่อตัวเอง / ซ่อนตัวละคร NOOB (แท็บ Crate > ความเป็นส่วนตัว) ใช้ไฟล์ตั้งค่าเดียวกับ CameramanTD
+--  + ออโต้สุ่มตัวแบบกำหนดตัว (แท็บ Auto Summon) อยู่ท้ายไฟล์
 -- =====================================================================
 if not game:IsLoaded() then game.Loaded:Wait() end
 
@@ -713,3 +714,583 @@ task.spawn(function()
         task.wait(0.5)
     end
 end)
+
+-- =====================================================================
+--  AUTO SUMMON แบบกำหนดตัว  (วางต่อท้ายไฟล์ CameramanLobby.lua ได้เลย ไม่ต้องแก้ส่วนอื่น)
+--  ลำดับ: เช็กเงิน + เช็กว่าตู้มีตัวที่เลือก -> เดินไปจุดสุ่ม -> สุ่มจนเงินหมด
+--         -> เดินไปลิฟต์ที่เป็นด่านที่เลือก (ลิฟต์ว่างเท่านั้น) -> กด Ready -> เกมเล่นต่อเอง
+--  ตู้รีเซ็ตทุกครึ่งชั่วโมงตามนาฬิกาโลก (นาทีที่ :00 และ :30) ฝั่งในเกมจะพากลับมาลอบบี้เอง
+--  เก็บค่าลงไฟล์เดียวกับสคริปต์อื่น: AUTO_SELECT_SUMMON / SUMMON_MAP / SUMMON_WANTED
+-- =====================================================================
+do
+local PathfindingService = game:GetService("PathfindingService")
+local Workspace = game:GetService("Workspace")
+local GuiService = game:GetService("GuiService")
+local _okV, VIM = pcall(function() return game:GetService("VirtualInputManager") end)
+if not _okV then VIM = nil end
+
+local SUMMON_CF = CFrame.new(583.37, 310.81, 741.09)   -- จุดที่ต้องไปยืนสุ่ม
+local RESUME_FILE = "PexSkibidiTD_Resume.json"
+-- ถ้าไม่ได้ใช้ autoexec ให้ปล่อย true (จะ queue_on_teleport สคริปต์ในเกมให้ก่อนกด Ready)
+-- ถ้าใช้ autoexec อยู่แล้ว ตั้งเป็น false กันสคริปต์รันซ้อน
+local QUEUE_GAME = true
+local GAME_URL = "https://raw.githubusercontent.com/FCUKZX/Roblox-Scripts/refs/heads/main/CameramanTD.lua"
+
+local SM = {
+    on = false, wanted = {}, map = "", maps = {}, mapOrder = {},
+    crate = nil, crateN = 0, state = "ปิดอยู่", bad = {}, loopOn = false,
+    skipSummonUntil = 0, queued = false,
+}
+
+-- ---------- โหลดค่าที่เซฟไว้ ----------
+do
+    local d = readSettings()
+    SM.on = d.AUTO_SELECT_SUMMON == true
+    if type(d.SUMMON_MAP) == "string" then SM.map = d.SUMMON_MAP end
+    if type(d.SUMMON_WANTED) == "table" then
+        for _, n in ipairs(d.SUMMON_WANTED) do
+            if type(n) == "string" and n ~= "" then SM.wanted[#SM.wanted + 1] = n end
+        end
+    end
+end
+
+local function saveSM()
+    if not writefile then return end
+    pcall(function()
+        local data = readSettings()   -- อ่านใหม่ทุกครั้ง เก็บค่าอื่นไว้เหมือนเดิม
+        if data.CFG_VERSION == nil then data.CFG_VERSION = 1 end
+        data.AUTO_SELECT_SUMMON = SM.on
+        data.SUMMON_MAP = SM.map
+        data.SUMMON_WANTED = SM.wanted
+        writefile(SETTINGS_FILE, HttpService:JSONEncode(data))
+    end)
+end
+
+local function setState(t) SM.state = tostring(t) end
+
+-- ---------- อ่านตู้ (รายชื่อตัวที่อยู่ในตู้ตอนนี้ เก็บสดทุกครั้ง ไม่สะสมของเก่า) ----------
+local function scanCrate()
+    local list = pg:FindFirstChild("SummonBoardUI")
+    list = list and list:FindFirstChild("SummonHolder")
+    list = list and list:FindFirstChild("MainFrame")
+    list = list and list:FindFirstChild("UnitList")
+    if not list then return nil end
+    local set, n = {}, 0
+    for _, d in ipairs(list:GetDescendants()) do
+        if d.Name == "UnitName" and (d:IsA("TextLabel") or d:IsA("TextButton")) then
+            local k = cleanText(d.Text)
+            if k ~= "" and not set[k] then
+                set[k] = (tostring(d.Text):gsub("<[^>]+>", ""))
+                n = n + 1
+            end
+        end
+    end
+    if n == 0 then return nil end
+    SM.crate, SM.crateN = set, n
+    return set
+end
+
+local function foundWanted(set)
+    local found = {}
+    if set then
+        for _, w in ipairs(SM.wanted) do
+            local d = set[cleanText(w)]
+            if d then found[#found + 1] = d end
+        end
+    end
+    return found
+end
+
+local function waitFor(fn, timeout, active)
+    local t0 = os.clock()
+    repeat
+        local v = fn()
+        if v then return v end
+        task.wait(0.5)
+    until os.clock() - t0 > timeout or not (alive and active())
+    return fn()
+end
+
+-- ---------- ลิฟต์ ----------
+local function readText(obj)
+    local ok, t = pcall(function() return obj.Text end)
+    if ok and type(t) == "string" then return (t:gsub("<[^>]+>", "")) end
+    return nil
+end
+
+local function allElevators()
+    local out = {}
+    local root = Workspace:FindFirstChild("Elevators")
+    if not root then return out end
+    for _, e in ipairs(root:GetChildren()) do
+        local bp = e:FindFirstChild("BasePart")
+        local sg = bp and bp:FindFirstChild("StatusGui")
+        local mapL = sg and sg:FindFirstChild("MapName")
+        local cntL = sg and sg:FindFirstChild("PlayersCount")
+        local map = mapL and readText(mapL)
+        local cnt = cntL and readText(cntL)
+        local a, b = tostring(cnt or ""):match("(%d+)%s*/%s*(%d+)")
+        out[#out + 1] = {
+            model = e, map = map, key = map and cleanText(map) or nil,
+            area = e:FindFirstChild("Area"), players = tonumber(a), max = tonumber(b),
+        }
+    end
+    table.sort(out, function(x, y) return x.model.Name < y.model.Name end)
+    return out
+end
+
+local function areaPos(area)
+    if not area then return nil end
+    if area:IsA("BasePart") then return area.Position end
+    if area:IsA("Model") then return area:GetPivot().Position end
+    local p = area:FindFirstChildWhichIsA("BasePart", true)
+    return p and p.Position
+end
+
+-- ชื่อด่านซ้ำ = ที่เดียวกัน (เทียบด้วย key ตัวเล็ก)
+local function scanMaps()
+    local changed = false
+    if SM.map ~= "" then
+        local k = cleanText(SM.map)
+        if not SM.maps[k] then SM.maps[k] = SM.map SM.mapOrder[#SM.mapOrder + 1] = k changed = true end
+    end
+    for _, e in ipairs(allElevators()) do
+        if e.key and e.key ~= "" and not SM.maps[e.key] then
+            SM.maps[e.key] = e.map
+            SM.mapOrder[#SM.mapOrder + 1] = e.key
+            changed = true
+        end
+    end
+    return changed
+end
+
+local function queueFrame()
+    local g = pg:FindFirstChild("ElevatorGui")
+    return g and g:FindFirstChild("QueueFrame")
+end
+
+local function guiShown(o)
+    local cur = o
+    while cur and cur ~= pg do
+        if cur:IsA("GuiObject") and not cur.Visible then return false end
+        if cur:IsA("ScreenGui") and not cur.Enabled then return false end
+        cur = cur.Parent
+    end
+    return cur == pg
+end
+
+local function queueShown()
+    local f = queueFrame()
+    return (f and guiShown(f)) and f or nil
+end
+
+-- ---------- กดปุ่ม ----------
+local function pressBtn(obj)
+    local btn = obj
+    if not obj:IsA("GuiButton") then btn = obj:FindFirstChildWhichIsA("GuiButton", true) or obj end
+    local fired = false
+    if getconnections then
+        for _, sig in ipairs({ "MouseButton1Click", "Activated", "MouseButton1Down" }) do
+            local ok, list = pcall(function() return getconnections(btn[sig]) end)
+            if ok and list then
+                for _, c in ipairs(list) do pcall(function() c:Fire() end) fired = true end
+            end
+            if fired then break end
+        end
+    end
+    if not fired and firesignal then
+        fired = pcall(function() firesignal(btn.MouseButton1Click) end)
+        pcall(function() firesignal(btn.Activated) end)
+    end
+    if not fired and VIM then
+        pcall(function()
+            local pos, size = btn.AbsolutePosition, btn.AbsoluteSize
+            local gui = btn:FindFirstAncestorWhichIsA("ScreenGui")
+            local inset = (gui and gui.IgnoreGuiInset) and 0 or GuiService:GetGuiInset().Y
+            local x, y = pos.X + size.X / 2, pos.Y + size.Y / 2 + inset
+            VIM:SendMouseButtonEvent(x, y, 0, true, game, 1)
+            task.wait(0.05)
+            VIM:SendMouseButtonEvent(x, y, 0, false, game, 1)
+        end)
+    end
+end
+
+-- ---------- เดินฉลาด (PathfindingService หลบสิ่งกีดขวาง / กระโดดเมื่อติด / คำนวณทางใหม่) ----------
+local function getRH()
+    local ch = lp.Character
+    local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+    local root = ch and ch:FindFirstChild("HumanoidRootPart")
+    if hum and root and hum.Health > 0 then return root, hum end
+    return nil
+end
+
+local function flat(a, b) return Vector3.new(a.X - b.X, 0, a.Z - b.Z).Magnitude end
+
+-- คืน true = ถึงแล้ว | false = ไม่ถึง / ถูกสั่งหยุด (active() เป็น false)
+local function walkTo(target, active, reach)
+    reach = reach or 3
+    local t0, fails = os.clock(), 0
+    while alive and active() and os.clock() - t0 < 120 and fails < 8 do
+        local root, hum = getRH()
+        if not root then
+            task.wait(0.5)
+        elseif flat(root.Position, target) <= reach and math.abs(root.Position.Y - target.Y) < 10 then
+            pcall(function() hum:MoveTo(root.Position) end)
+            return true
+        else
+            local path = PathfindingService:CreatePath({
+                AgentRadius = 2, AgentHeight = 5, AgentCanJump = true, AgentCanClimb = true, WaypointSpacing = 4,
+            })
+            local okP = pcall(function() path:ComputeAsync(root.Position, target) end)
+            if okP and path.Status == Enum.PathStatus.Success then
+                local wps = path:GetWaypoints()
+                local blocked = false
+                local bc = path.Blocked:Connect(function() blocked = true end)
+                for i = 2, #wps do
+                    if blocked or not (alive and active()) then break end
+                    local wp = wps[i]
+                    if wp.Action == Enum.PathWaypointAction.Jump then hum.Jump = true end
+                    hum:MoveTo(wp.Position)
+                    local ws, lastP, lastT = os.clock(), root.Position, os.clock()
+                    while alive and active() and not blocked do
+                        if not root.Parent or hum.Health <= 0 then blocked = true break end
+                        if flat(root.Position, wp.Position) < 2.5 then break end
+                        if os.clock() - ws > 5 then blocked = true break end
+                        if (root.Position - lastP).Magnitude > 0.5 then
+                            lastP, lastT = root.Position, os.clock()
+                        elseif os.clock() - lastT > 0.7 then
+                            hum.Jump = true            -- ติดสิ่งกีดขวาง ลองกระโดด
+                            lastT = os.clock()
+                        end
+                        task.wait(0.1)
+                    end
+                end
+                bc:Disconnect()
+                if blocked then fails = fails + 1 else fails = 0 end
+            else
+                -- หาเส้นทางไม่ได้: แผนสำรอง เดินตรงไปทางเป้าหมาย
+                fails = fails + 1
+                pcall(function() hum:MoveTo(target) end)
+                local lp0 = root.Position
+                task.wait(1.5)
+                if (root.Position - lp0).Magnitude < 1 then hum.Jump = true end
+            end
+        end
+    end
+    return false
+end
+
+-- ---------- สุ่มจนเงินหมด (ใช้ summonOnce / getCoins / handleResults ของสคริปต์เดิม) ----------
+local function summonBody(active)
+    local opened, spent, fails, stop = 0, 0, 0, nil
+    local slot = os.time() // 1800
+    while active() do
+        if os.time() // 1800 ~= slot then   -- ตู้รีเซ็ตระหว่างสุ่ม: เช็กใหม่ว่ายังมีตัวที่เลือกไหม
+            slot = os.time() // 1800
+            local set = scanCrate()
+            if set and #foundWanted(set) == 0 then stop = "ตู้รีเซ็ตแล้ว ไม่มีตัวที่เลือก" break end
+        end
+        local coins = getCoins()
+        if not coins then stop = "อ่านเงินไม่ได้" break end
+        local count, price
+        if coins >= PRICE_TEN then count, price = 10, PRICE_TEN
+        elseif coins >= PRICE_ONE then count, price = 1, PRICE_ONE
+        else stop = "Coin หมดแล้ว" break end
+        setState(string.format("กำลังสุ่ม... สุ่มแล้ว %d กล่อง (เหลือ %s Coins)", opened, fmt(coins)))
+        local ok, err, fatal, res = summonOnce(count, price)
+        if ok then
+            fails = 0
+            opened = opened + count
+            spent = spent + price
+            handleResults(res)
+        else
+            fails = fails + 1
+            if fatal or fails >= 3 then
+                stop = fatal and err or ("สุ่มไม่สำเร็จติดกัน 3 ครั้ง (" .. tostring(err) .. ")")
+                break
+            end
+            task.wait(0.3)
+        end
+    end
+    return opened, spent, stop
+end
+
+local function summonRun(active)
+    running = true
+    local ok, a, b, c = pcall(summonBody, active)
+    running = false
+    if ok then return a, b, c end
+    return 0, 0, "error: " .. tostring(a)
+end
+
+-- ---------- กลับไปเล่น: ลิฟต์ -> Ready ----------
+local function touchResume()   -- ต่ออายุไฟล์ resume ให้สคริปต์ในเกมยังเล่นต่อได้
+    pcall(function()
+        if isfile and readfile and isfile(RESUME_FILE) then
+            local d = HttpService:JSONDecode(readfile(RESUME_FILE))
+            if type(d) == "table" and d.playing then
+                d.ts = os.time()
+                writefile(RESUME_FILE, HttpService:JSONEncode(d))
+            end
+        end
+    end)
+end
+
+local function goPlay(active)
+    if SM.map == "" then
+        setState("ยังไม่ได้เลือกด่านที่จะกลับไปเล่น (เลือกในรายการด่าน)")
+        task.wait(3)
+        return
+    end
+    local want = cleanText(SM.map)
+    local cands = {}
+    for _, e in ipairs(allElevators()) do
+        local busy = e.players ~= nil and e.players >= 1          -- 1/5 ขึ้นไป = มีคนอยู่ ข้าม
+        local bad = SM.bad[e.model] and SM.bad[e.model] > os.clock()
+        if e.key == want and e.area and not busy and not bad then cands[#cands + 1] = e end
+    end
+    if #cands == 0 then
+        setState("ไม่มีลิฟต์ว่างที่เป็นด่าน " .. SM.map .. " รอสักครู่...")
+        task.wait(3)
+        return
+    end
+    local e = cands[1]
+    local ap = areaPos(e.area)
+    if not ap then SM.bad[e.model] = os.clock() + 30 return end
+    setState("เดินไปที่ " .. e.model.Name .. " (" .. SM.map .. ")")
+    walkTo(ap, function() return alive and SM.on and not queueShown() end, 2.5)
+    if not (alive and SM.on) then return end
+    if not waitFor(queueShown, 4, function() return SM.on end) then
+        SM.bad[e.model] = os.clock() + 20
+        setState("ลิฟต์นี้ไม่เปิดหน้าคิว ลองอันอื่น")
+        return
+    end
+
+    setState("เปิดหน้าคิวแล้ว กด Ready")
+    touchResume()
+    if QUEUE_GAME and queue_on_teleport and GAME_URL ~= "" and not SM.queued then
+        SM.queued = true
+        pcall(queue_on_teleport, string.format("loadstring(game:HttpGet(%q))()", GAME_URL))
+    end
+    local lastPress = -100
+    local t0 = os.clock()
+    while alive and SM.on and os.clock() - t0 < 90 do
+        local qf = queueShown()
+        if not qf then break end
+        local rb = qf:FindFirstChild("ReadyButton")
+        -- กดครั้งเดียวต่อรอบ 30 วิ (กันปุ่มเป็นแบบสลับ Ready/ยกเลิก)
+        if rb and os.clock() - lastPress > 30 then
+            lastPress = os.clock()
+            pressBtn(rb)
+            setState("กด Ready แล้ว รอเกมย้ายแมพ...")
+        end
+        task.wait(0.5)
+    end
+end
+
+-- ---------- 1 รอบการตัดสินใจ ----------
+function SM.cycle()
+    local function active() return alive and SM.on end
+    if not active() then return end
+    setState("ตรวจเงินและตู้...")
+    local coins = waitFor(getCoins, 20, active)
+    local set = waitFor(scanCrate, 20, active)
+    if not active() then return end
+    local found = foundWanted(set)
+
+    if #found > 0 and coins and coins >= PRICE_ONE and os.clock() >= SM.skipSummonUntil then
+        if running then
+            setState("กำลังสุ่มด้วยปุ่มอื่นอยู่ รอให้เสร็จก่อน")
+            task.wait(2)
+            return
+        end
+        setState("ตู้มี " .. table.concat(found, ", ") .. " -> เดินไปจุดสุ่ม")
+        local arrived = walkTo(SUMMON_CF.Position, active, 3)
+        if arrived and active() then
+            local opened, spent, stop = summonRun(active)
+            local msg = string.format("สุ่มตัวที่เลือกเสร็จ %d กล่อง (ใช้ %s Coins)%s",
+                opened, fmt(spent), stop and (" | " .. stop) or "")
+            notify(msg, (stop == "Coin หมดแล้ว") and PT.Good or PT.Warn, "trophy", 6)
+            if stop and stop ~= "Coin หมดแล้ว" then SM.skipSummonUntil = os.clock() + 120 end
+        elseif active() then
+            SM.skipSummonUntil = os.clock() + 120
+            notify("เดินไปจุดสุ่มไม่ถึง ข้ามไปเล่นก่อน", PT.Warn, "x")
+        end
+    else
+        local why = (not set) and "อ่านตู้ไม่ได้"
+            or (#found == 0) and "ตู้ไม่มีตัวที่เลือก"
+            or (not coins or coins < PRICE_ONE) and "เงินไม่พอ"
+            or "รอพักหลังสุ่มพลาด"
+        setState(why .. " -> กลับไปเล่น")
+    end
+    if active() then goPlay(active) end
+end
+
+function SM.start()
+    if SM.loopOn then return end
+    SM.loopOn = true
+    task.spawn(function()
+        while alive and SM.on do
+            local ok, err = pcall(SM.cycle)
+            if not ok then
+                setState("error: " .. tostring(err))
+                task.wait(3)
+            end
+            task.wait(0.3)
+        end
+        SM.loopOn = false
+        if not SM.on then setState("ปิดอยู่") end
+    end)
+end
+
+-- =====================================================================
+--  UI (แท็บ Auto Summon)
+-- =====================================================================
+local tabSM = win:AddTab({ Name = "Auto Summon", Category = "Lobby", Icon = "zap", Color = PT.Purple })
+
+local sMain = tabSM:Section({
+    Title = "ออโต้สุ่มตัวแบบกำหนดตัว",
+    Desc = "ตู้มีตัวที่เลือก + เงินพอ = เดินไปสุ่มจนเงินหมด แล้วกลับไปเล่นต่อ | ตู้รีเซ็ตทุก 30 นาที (:00 / :30)",
+    Icon = "gift", Color = PT.Purple,
+})
+sMain:Toggle({
+    Title = "ออโต้สุ่มตัวแบบกำหนดตัว",
+    Desc = "ปุ่มเดียวทำทุกอย่าง (ใช้ได้ข้ามแมพ) | ปิด = หยุดระบบนี้ทันที",
+    Default = SM.on,
+    Callback = function(v)
+        SM.on = v and true or false
+        saveSM()
+        if SM.on then SM.start() else setState("ปิดอยู่") end
+    end,
+})
+local lblState = sMain:Label({ Text = "สถานะ: ปิดอยู่", TextSize = 12, Color = PT.Text })
+local lblReset = sMain:Label({ Text = "-", TextSize = 12, Color = PT.Text })
+local lblCrate = sMain:Label({ Text = "ตู้ตอนนี้: กำลังอ่าน...", TextSize = 12, Color = PT.Text })
+sMain:Action({
+    Text = "สแกนตู้ตอนนี้", Icon = "refresh-cw", Color = PT.Blue,
+    Callback = function()
+        local set = scanCrate()
+        if SM.refreshWant then SM.refreshWant() end
+        notify(set and ("พบ " .. SM.crateN .. " ตัวในตู้") or "อ่านตู้ไม่ได้ (เปิดหน้า Summon ในเกมหนึ่งครั้ง)",
+            set and PT.Good or PT.Warn, "refresh-cw")
+    end,
+})
+
+local sWant = tabSM:Section({
+    Title = "ตัวที่ต้องการ",
+    Desc = "พิมพ์ชื่อให้ตรงกับชื่อในตู้ (ตัวใหญ่/เล็กไม่สำคัญ) | บันทึกอัตโนมัติ | แตะชื่อในรายการเพื่อลบ",
+    Icon = "bell", Color = PT.Orange,
+})
+local wantList
+local function addWanted(box)
+    local name = (tostring(box.Text or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+    box.Text = ""
+    if name == "" then return end
+    for _, w in ipairs(SM.wanted) do
+        if cleanText(w) == cleanText(name) then notify("มีชื่อนี้อยู่ในรายการแล้ว", PT.Warn, "x") return end
+    end
+    -- ถ้าตัวนี้อยู่ในตู้ตอนนี้ ใช้ชื่อจริงตามตู้ (สะกดตรงเป๊ะ)
+    local real = SM.crate and SM.crate[cleanText(name)]
+    SM.wanted[#SM.wanted + 1] = real or name
+    saveSM()
+    SM.refreshWant()
+    notify(real and ("เพิ่ม " .. real .. " แล้ว (อยู่ในตู้ตอนนี้)") or ("เพิ่ม " .. name .. " แล้ว (ตอนนี้ยังไม่อยู่ในตู้ จะรอเจอ)"),
+        PT.Good, "check")
+end
+sWant:Input({ Title = "พิมพ์ชื่อตัว แล้วกด Enter", Placeholder = "เช่น Camera Helicopter", Callback = addWanted })
+wantList = sWant:List({ Height = 150, Title = "ตัวที่เลือกไว้" })
+function SM.refreshWant()
+    wantList:Clear()
+    if #SM.wanted == 0 then wantList:Note("ยังไม่ได้เลือกตัว พิมพ์ชื่อด้านบนได้เลย") return end
+    for i, name in ipairs(SM.wanted) do
+        local inCrate = SM.crate and SM.crate[cleanText(name)]
+        wantList:Add({
+            Text = name .. (inCrate and "   ● อยู่ในตู้ตอนนี้" or ""), Order = i,
+            Callback = function()
+                win:Dialog({
+                    Title = "ลบตัวนี้?", Text = "\"" .. name .. "\" จะถูกลบออกจากรายการ", Dismissable = true,
+                    Buttons = {
+                        { Text = "ยกเลิก" },
+                        {
+                            Text = "ลบ", Icon = "trash-2", Color = PT.Bad,
+                            Callback = function()
+                                for k, w in ipairs(SM.wanted) do
+                                    if w == name then table.remove(SM.wanted, k) break end
+                                end
+                                saveSM()
+                                SM.refreshWant()
+                            end,
+                        },
+                    },
+                })
+            end,
+        })
+    end
+end
+
+local sMap = tabSM:Section({
+    Title = "ด่านที่จะกลับไปเล่น",
+    Desc = "อ่านชื่อด่านจากลิฟต์ทุกตัว (ชื่อซ้ำ = ที่เดียวกัน) | แตะเพื่อเลือก | ลิฟต์ที่มีคน (1/5 ขึ้นไป) จะข้ามไปตัวอื่นเอง",
+    Icon = "map-pin", Color = PT.Cyan,
+})
+local mapList = sMap:List({ Height = 130, Title = "ด่านที่พบ" })
+function SM.refreshMaps()
+    mapList:Clear()
+    if #SM.mapOrder == 0 then mapList:Note("ยังไม่พบลิฟต์ (รอเกมโหลด แล้วกดสแกน)") return end
+    for i, key in ipairs(SM.mapOrder) do
+        local nm = SM.maps[key]
+        mapList:Add({
+            Text = nm, Selected = (cleanText(SM.map) == key), Order = i,
+            Callback = function()
+                SM.map = nm
+                saveSM()
+                SM.refreshMaps()
+                notify("เลือกด่าน: " .. nm, PT.Good, "check")
+            end,
+        })
+    end
+end
+sMap:Action({
+    Text = "สแกนลิฟต์ใหม่", Icon = "refresh-cw", Color = PT.Blue,
+    Callback = function()
+        scanMaps()
+        SM.refreshMaps()
+        notify(#SM.mapOrder > 0 and ("พบ " .. #SM.mapOrder .. " ด่าน") or "ยังไม่พบลิฟต์",
+            #SM.mapOrder > 0 and PT.Good or PT.Warn, "refresh-cw")
+    end,
+})
+
+-- ---------- ลูปอัปเดต UI ----------
+task.spawn(function()
+    local lastMaps, lastCrate, sig = -100, -100, ""
+    while alive do
+        local now = os.clock()
+        if now - lastMaps > 3 then
+            lastMaps = now
+            if scanMaps() then SM.refreshMaps() end
+        end
+        if now - lastCrate > 5 then
+            lastCrate = now
+            scanCrate()
+            local names = {}
+            for _, v in pairs(SM.crate or {}) do names[#names + 1] = v end
+            table.sort(names)
+            local s = table.concat(names, ", ")
+            if s ~= sig then
+                sig = s
+                SM.refreshWant()
+                lblCrate.Text = (#names > 0) and ("ตู้ตอนนี้ (" .. #names .. "): " .. s) or "ตู้ตอนนี้: อ่านไม่ได้"
+            end
+        end
+        local left = 1800 - (os.time() % 1800)
+        lblReset.Text = string.format("ตู้รีเซ็ตในอีก %02d:%02d", left // 60, left % 60)
+        lblState.Text = "สถานะ: " .. SM.state
+        task.wait(0.5)
+    end
+end)
+
+SM.refreshWant()
+scanMaps()
+SM.refreshMaps()
+if SM.on then SM.start() end
+end
