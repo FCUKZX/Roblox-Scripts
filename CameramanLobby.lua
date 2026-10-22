@@ -5,6 +5,7 @@
 --  สุ่มทีละ 10 กล่อง จนเหลือเศษหลักหน่วยแล้วสุ่มทีละ 1 กล่อง จนครบจำนวน
 --  + ซ่อนชื่อตัวเอง / ซ่อนตัวละคร NOOB (แท็บ Crate > ความเป็นส่วนตัว) ใช้ไฟล์ตั้งค่าเดียวกับ CameramanTD
 --  + ออโต้สุ่มตัวแบบกำหนดตัว (แท็บ Auto Summon) อยู่ท้ายไฟล์
+--  + [แก้ใหม่] ระบบเดินลื่น/เสถียรขึ้น + เช็กลิฟต์สด + เช็กว่าอยู่คนเดียวก่อนกด Ready
 -- =====================================================================
 if not game:IsLoaded() then game.Loaded:Wait() end
 
@@ -914,14 +915,16 @@ local function pressBtn(obj)
 end
 
 -- ---------- เดินฉลาด (PathfindingService หลบสิ่งกีดขวาง / กระโดดเมื่อติด) ----------
--- เดินต่อเนื่อง ไม่หยุดเป็นช่วงๆ (ของเดิมสั่งเดินไปทีละจุดแล้วรอให้ถึงก่อนค่อยไปจุดต่อไป ตัวละครเลยสะดุดทุกจุด):
---   1) คำนวณทางครั้งเดียว แล้วสั่งเดินไปจุดที่อยู่ "ข้างหน้า" ประมาณ LOOK_AHEAD สตั๊ด ไม่รอให้ถึงทีละจุด
---   2) เช็กทุกเฟรม (Heartbeat) จุดไหนผ่านแล้วข้ามไปเลย ตัวละครไม่เบรกที่ทุกจุด
---   3) ระหว่างรอคำนวณทางใหม่ ให้เดินตรงไปทางเป้าหมายก่อน ไม่ยืนนิ่งรอ
---   4) คำนวณทางใหม่เฉพาะตอนติดจริงๆ (ไม่ขยับเกิน 2.5 วิ) / ติดสั้นๆ ลองกระโดดก่อน
+-- [แก้ใหม่] เสถียรขึ้น:
+--   * มองไปข้างหน้าแค่ 5 สตั๊ด + จุดถี่ขึ้น ไม่ตัดมุมจนตกขอบ/ชนมุม
+--   * ถูกดัน/ตกออกนอกเส้นทางเกิน 14 สตั๊ด = คำนวณทางใหม่
+--   * active() ถูกเรียกทุกเฟรม -> ยกเลิกทันทีได้ (เช่น ลิฟต์มีคนเข้าแล้ว) แม้อยู่ระหว่างคำนวณทาง
+--   * ตัวละครนั่งอยู่จะลุกก่อนเดิน / กระโดดมี cooldown / คำนวณทางใหม่ไม่รัว
+--   * จบแล้วสั่งหยุดตัวละครเสมอ
 local RunService = game:GetService("RunService")
-local LOOK_AHEAD = 8      -- มองไปข้างหน้ากี่สตั๊ด (มาก = เดินลื่นขึ้น แต่ตัดมุมมากขึ้น)
-local ADVANCE_DIST = 3.5  -- เข้าใกล้จุดไหนในระยะนี้ = ถือว่าผ่านจุดนั้นแล้ว
+local LOOK_AHEAD = 5       -- มองไปข้างหน้ากี่สตั๊ด
+local ADVANCE_DIST = 3     -- เข้าใกล้จุดในระยะนี้ = ถือว่าผ่านจุดนั้นแล้ว
+local OFFPATH_DIST = 14    -- ห่างทางเกินระยะนี้ = คำนวณทางใหม่
 
 local function getRH()
     local ch = lp.Character
@@ -933,10 +936,16 @@ end
 
 local function flat(a, b) return Vector3.new(a.X - b.X, 0, a.Z - b.Z).Magnitude end
 
+local function stopMoving()
+    local root, hum = getRH()
+    if root and hum then pcall(function() hum:MoveTo(root.Position) end) end
+end
+
 -- คืน true = ถึงแล้ว | false = ไม่ถึง / ถูกสั่งหยุด (active() เป็น false)
 local function walkTo(target, active, reach)
     reach = reach or 3
     local t0, fails = os.clock(), 0
+    local result = false
     local function arrived(root)
         return flat(root.Position, target) <= reach and math.abs(root.Position.Y - target.Y) < 10
     end
@@ -944,27 +953,29 @@ local function walkTo(target, active, reach)
     while alive and active() and os.clock() - t0 < 120 and fails < 8 do
         local root, hum = getRH()
         if not root then
-            task.wait(0.5)
+            task.wait(0.3)
         elseif arrived(root) then
-            pcall(function() hum:MoveTo(root.Position) end)
-            return true
+            result = true
+            break
         else
-            -- ระหว่างคำนวณทาง ให้เดินตรงไปทางเป้าหมายก่อน (ไม่ยืนนิ่งรอ)
-            pcall(function() hum:MoveTo(target) end)
+            if hum.Sit then hum.Sit = false hum.Jump = true end   -- นั่งอยู่ลุกก่อน
+            pcall(function() hum:MoveTo(target) end)              -- ระหว่างคำนวณทางเดินตรงไปก่อน
             local path = PathfindingService:CreatePath({
-                AgentRadius = 2, AgentHeight = 5, AgentCanJump = true, AgentCanClimb = true, WaypointSpacing = 6,
+                AgentRadius = 2, AgentHeight = 5, AgentCanJump = true, AgentCanClimb = true, WaypointSpacing = 5,
             })
             local okP = pcall(function() path:ComputeAsync(root.Position, target) end)
-            if not (alive and active()) then break end
+            if not (alive and active()) then break end           -- คำนวณทางนานแล้วถูกยกเลิก = หยุดทันที
             root, hum = getRH()
 
             local wps = (okP and path.Status == Enum.PathStatus.Success) and path:GetWaypoints() or nil
             if not root then
-                task.wait(0.5)                       -- ตัวละครตาย / กำลังเกิดใหม่ รอก่อน
+                task.wait(0.3)
             elseif wps and #wps >= 1 then
                 local blocked, done = false, false
-                local bc = path.Blocked:Connect(function() blocked = true end)
                 local i = math.min(2, #wps)
+                local bc = path.Blocked:Connect(function(idx)
+                    if idx >= i then blocked = true end          -- สนใจเฉพาะจุดที่ยังไม่ผ่าน
+                end)
                 local lastP, lastMoveT, lastJumpT = root.Position, os.clock(), 0
                 local segT0, maxT = os.clock(), 8 + #wps * 2.5
 
@@ -973,10 +984,20 @@ local function walkTo(target, active, reach)
                     local pos = root.Position
                     if arrived(root) then done = true break end
                     if os.clock() - segT0 > maxT then blocked = true break end
+                    if hum.Sit then hum.Sit = false end
 
-                    -- จุดที่ทางสั่งให้กระโดด: กระโดดเมื่อเข้าใกล้ภายใน 6 สตั๊ด
-                    if wps[i].Action == Enum.PathWaypointAction.Jump and flat(pos, wps[i].Position) < 6 then
+                    -- ถูกดัน/ตกออกนอกเส้นทางมาก -> คำนวณใหม่
+                    local prev = wps[math.max(i - 1, 1)].Position
+                    if flat(pos, wps[i].Position) > OFFPATH_DIST and flat(pos, prev) > OFFPATH_DIST then
+                        blocked = true
+                        break
+                    end
+
+                    -- จุดกระโดด: กระโดดเมื่อเข้าใกล้ (มี cooldown กันกระโดดรัว)
+                    if wps[i].Action == Enum.PathWaypointAction.Jump and flat(pos, wps[i].Position) < 4
+                        and os.clock() - lastJumpT > 0.6 then
                         hum.Jump = true
+                        lastJumpT = os.clock()
                     end
                     -- ข้ามจุดที่ผ่านแล้ว (ไม่ข้ามจุดสุดท้าย)
                     while i < #wps and flat(pos, wps[i].Position) < ADVANCE_DIST do i = i + 1 end
@@ -989,7 +1010,7 @@ local function walkTo(target, active, reach)
                     end
                     hum:MoveTo(wps[j].Position)
 
-                    -- ถึงจุดสุดท้ายของทางแล้วแต่ยังไม่ตรงเงื่อนไขถึงเป้า -> จบรอบนี้ (รอบหน้าเช็ก/คำนวณใหม่)
+                    -- ถึงปลายทางของเส้นทางแล้ว แต่ยังไม่เข้าเงื่อนไขถึงเป้า -> ค่อยๆ เดินเข้าเป้าตรงๆ
                     if i >= #wps and flat(pos, wps[#wps].Position) < 2.5 then
                         local tf = os.clock()
                         while alive and active() and os.clock() - tf < 1.5 do
@@ -1003,7 +1024,7 @@ local function walkTo(target, active, reach)
                         break
                     end
 
-                    -- ติดสิ่งกีดขวาง: ไม่ขยับ 0.7 วิ = ลองกระโดด | 2.5 วิ = คำนวณทางใหม่
+                    -- ติดสิ่งกีดขวาง: ไม่ขยับ 0.7 วิ = กระโดด | 2.5 วิ = คำนวณทางใหม่
                     if (pos - lastP).Magnitude > 0.5 then
                         lastP, lastMoveT = pos, os.clock()
                     else
@@ -1018,11 +1039,11 @@ local function walkTo(target, active, reach)
                     RunService.Heartbeat:Wait()
                 end
                 bc:Disconnect()
-                if done then
-                    pcall(function() hum:MoveTo(root.Position) end)
-                    return true
+                if done then result = true break end
+                if blocked then
+                    fails = fails + 1
+                    task.wait(0.15)   -- กันคำนวณทางรัวเกินไปตอนติดจริง
                 end
-                if blocked then fails = fails + 1 end
             else
                 -- หาเส้นทางไม่ได้: แผนสำรอง เดินตรงไปทางเป้าหมาย
                 fails = fails + 1
@@ -1038,7 +1059,8 @@ local function walkTo(target, active, reach)
             end
         end
     end
-    return false
+    stopMoving()
+    return result
 end
 
 -- ---------- สุ่มจนเงินหมด (ใช้ summonOnce / getCoins / handleResults ของสคริปต์เดิม) ----------
@@ -1097,6 +1119,90 @@ local function touchResume()   -- ต่ออายุไฟล์ resume ใ�
     end)
 end
 
+-- ---------- [แก้ใหม่] เช็กลิฟต์สด / เช็กว่าอยู่คนเดียว ----------
+local SOLO_SETTLE = 1.2    -- ต้องอยู่คนเดียวต่อเนื่องกี่วิ ก่อนกด Ready (กันคนวิ่งเข้ามาพร้อมกัน)
+local WALK_MARGIN = 1.5    -- ระหว่างเดินไป: มีคนอยู่ใน Area (ขยายขอบกี่สตั๊ด) = ไม่ว่าง
+local SOLO_MARGIN = 3      -- ตอนอยู่ในลิฟต์: เช็กกว้างขึ้น (จับคนที่กำลังวิ่งเข้ามาติดขอบ)
+
+-- อ่านสถานะลิฟต์ 1 ตัวสดๆ (ชื่อด่าน + จำนวนคน + Area)
+local function readElevator(model)
+    local bp = model:FindFirstChild("BasePart")
+    local sg = bp and bp:FindFirstChild("StatusGui")
+    local mapL = sg and sg:FindFirstChild("MapName")
+    local cntL = sg and sg:FindFirstChild("PlayersCount")
+    local map = mapL and readText(mapL)
+    local cnt = cntL and readText(cntL)
+    local a, b = tostring(cnt or ""):match("(%d+)%s*/%s*(%d+)")
+    return {
+        model = model, map = map, key = map and cleanText(map) or nil,
+        area = model:FindFirstChild("Area"), players = tonumber(a), max = tonumber(b),
+    }
+end
+
+-- กล่องของ Area (CFrame + Size) ใช้เช็กว่าใครยืนอยู่ในลิฟต์ "ตามตำแหน่งจริง" (เร็วกว่าป้ายตัวเลขที่อัปเดตช้า)
+local function areaBox(area)
+    if not area then return nil end
+    if area:IsA("BasePart") then return area.CFrame, area.Size end
+    if area:IsA("Model") then
+        local ok, cf, size = pcall(function() return area:GetBoundingBox() end)
+        if ok and cf then return cf, size end
+    end
+    local p = area:FindFirstChildWhichIsA("BasePart", true)
+    if p then return p.CFrame, p.Size end
+    return nil
+end
+
+local function inBox(pos, cf, size, margin)
+    local rel = cf:PointToObjectSpace(pos)
+    return math.abs(rel.X) <= size.X / 2 + margin
+        and math.abs(rel.Z) <= size.Z / 2 + margin
+        and math.abs(rel.Y) <= size.Y / 2 + 8
+end
+
+local function otherInArea(cf, size, margin)
+    if not cf then return false end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= lp then
+            local ch = p.Character
+            local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+            if hrp and inBox(hrp.Position, cf, size, margin) then return true end
+        end
+    end
+    return false
+end
+
+-- เช็กลิฟต์แบบสด: ด่านตรง + ไม่มีคนอื่น (ทั้งป้ายตัวเลข และตำแหน่งตัวละครจริง)
+-- ถ้าเราเองยืนอยู่ในลิฟต์แล้ว ยอมให้ป้ายขึ้น 1 (คือตัวเรา)
+local function elevCheck(model, want, margin)
+    if not (model and model.Parent) then return false, "ลิฟต์หาย" end
+    local e = readElevator(model)
+    if not e.area then return false, "ไม่เจอ Area" end
+    if e.key ~= want then return false, "ด่านเปลี่ยน" end
+    local cf, size = areaBox(e.area)
+    local root = getRH()
+    local meIn = (root and cf) and inBox(root.Position, cf, size, 2) or false
+    local limit = meIn and 1 or 0
+    if e.players and e.players > limit then
+        return false, string.format("มีคนอยู่แล้ว (%d/%s)", e.players, tostring(e.max or "?"))
+    end
+    if e.players and e.max and e.players >= e.max then return false, "ลิฟต์เต็ม" end
+    if otherInArea(cf, size, margin or WALK_MARGIN) then return false, "มีคนยืนอยู่ในลิฟต์" end
+    return true
+end
+
+-- ออกจากลิฟต์ (ยกเลิกคิว) ด้วยการเดินกลับไปทางที่มา
+local function leaveElevator(ap, startPos)
+    local d = Vector3.new(startPos.X - ap.X, 0, startPos.Z - ap.Z)
+    local leaveTo = startPos
+    if d.Magnitude < 10 then
+        local dir = (d.Magnitude > 0.1) and d.Unit or Vector3.new(1, 0, 0)
+        leaveTo = Vector3.new(ap.X + dir.X * 14, ap.Y, ap.Z + dir.Z * 14)
+    end
+    local t0 = os.clock()
+    walkTo(leaveTo, function() return alive and SM.on and os.clock() - t0 < 8 end, 4)
+    waitFor(function() return not queueShown() end, 3, function() return SM.on end)
+end
+
 local function goPlay(active)
     if SM.map == "" then
         setState("ยังไม่ได้เลือกด่านที่จะกลับไปเล่น")
@@ -1104,48 +1210,119 @@ local function goPlay(active)
         return
     end
     local want = cleanText(SM.map)
-    local cands = {}
-    for _, e in ipairs(allElevators()) do
-        local busy = e.players ~= nil and e.players >= 1          -- 1/5 ขึ้นไป = มีคนอยู่ ข้าม
-        local bad = SM.bad[e.model] and SM.bad[e.model] > os.clock()
-        if e.key == want and e.area and not busy and not bad then cands[#cands + 1] = e end
-    end
-    if #cands == 0 then
-        setState("รอลิฟต์ว่างของด่าน " .. SM.map)
-        task.wait(3)
-        return
-    end
-    local e = cands[1]
-    local ap = areaPos(e.area)
-    if not ap then SM.bad[e.model] = os.clock() + 30 return end
-    setState("เดินไปลิฟต์ด่าน " .. SM.map)
-    walkTo(ap, function() return alive and SM.on and not queueShown() end, 2.5)
-    if not (alive and SM.on) then return end
-    if not waitFor(queueShown, 4, function() return SM.on end) then
-        SM.bad[e.model] = os.clock() + 20
-        setState("ลิฟต์นี้เข้าคิวไม่ได้ -> ลองลิฟต์อื่น")
-        return
-    end
 
-    setState("เข้าคิวแล้ว -> กด Ready")
-    touchResume()
-    if QUEUE_GAME and queue_on_teleport and GAME_URL ~= "" and not SM.queued then
-        SM.queued = true
-        pcall(queue_on_teleport, string.format("loadstring(game:HttpGet(%q))()", GAME_URL))
-    end
-    local lastPress = -100
-    local t0 = os.clock()
-    while alive and SM.on and os.clock() - t0 < 90 do
-        local qf = queueShown()
-        if not qf then break end
-        local rb = qf:FindFirstChild("ReadyButton")
-        -- กดครั้งเดียวต่อรอบ 30 วิ (กันปุ่มเป็นแบบสลับ Ready/ยกเลิก)
-        if rb and os.clock() - lastPress > 30 then
-            lastPress = os.clock()
-            pressBtn(rb)
-            setState("กด Ready แล้ว รอเข้าเกม...")
+    -- ลองได้หลายลิฟต์ในรอบเดียว (ลิฟต์ไหนมีคนเข้า = ตัดทิ้งแล้วเลือกตัวใหม่ทันที)
+    for attempt = 1, 8 do
+        if not (alive and SM.on) then return end
+        local root = getRH()
+        if not root then
+            task.wait(1)
+            continue
         end
-        task.wait(0.5)
+
+        -- 1) เลือกลิฟต์ที่ว่างจริง (เช็กสด) ใกล้ที่สุดก่อน
+        local cands = {}
+        for _, e in ipairs(allElevators()) do
+            local bad = SM.bad[e.model] and SM.bad[e.model] > os.clock()
+            if e.key == want and e.area and not bad and elevCheck(e.model, want) then
+                local ap = areaPos(e.area)
+                if ap then
+                    e.ap, e.dist = ap, flat(root.Position, ap)
+                    cands[#cands + 1] = e
+                end
+            end
+        end
+        if #cands == 0 then
+            setState("รอลิฟต์ว่างของด่าน " .. SM.map)
+            task.wait(2)
+            return
+        end
+        table.sort(cands, function(x, y) return x.dist < y.dist end)
+        local e = cands[1]
+        local ap = e.ap
+        local startPos = root.Position
+
+        -- 2) เดินไป พร้อมเช็กลิฟต์สดทุก ~0.1 วิ ถ้ามีคนเข้าก่อน = หยุดทันที
+        setState("เดินไปลิฟต์ด่าน " .. SM.map)
+        local abortReason
+        local lastChk, lastOk = -100, true
+        local function walking()
+            if not (alive and SM.on) then return false end
+            if queueShown() then return false end          -- เข้าคิวแล้ว
+            if os.clock() - lastChk > 0.1 then
+                lastChk = os.clock()
+                local ok, why = elevCheck(e.model, want, WALK_MARGIN)
+                lastOk = ok
+                if not ok then abortReason = why end
+            end
+            return lastOk
+        end
+        walkTo(ap, walking, 2.5)
+        if not (alive and SM.on) then return end
+
+        -- 3) ยืนยันว่าเข้าคิวจริง
+        local inQueue = queueShown() ~= nil
+        if not inQueue and not abortReason then
+            inQueue = waitFor(queueShown, 3, function() return SM.on end) ~= nil
+        end
+        if not inQueue then
+            SM.bad[e.model] = os.clock() + (abortReason and 6 or 20)
+            setState(abortReason and ("ลิฟต์ไม่ว่างแล้ว (" .. abortReason .. ") -> เปลี่ยนลิฟต์")
+                or "ลิฟต์นี้เข้าคิวไม่ได้ -> ลองลิฟต์อื่น")
+            continue
+        end
+
+        -- 4) ด่านตรวจ "อยู่คนเดียว" : ต้องผ่านต่อเนื่อง SOLO_SETTLE วิ ก่อนกด Ready
+        setState("เข้าคิวแล้ว -> ตรวจว่าอยู่คนเดียว")
+        local soloSince, gateT0, solo, why = nil, os.clock(), false, nil
+        while alive and SM.on and queueShown() and os.clock() - gateT0 < 8 do
+            local ok, w = elevCheck(e.model, want, SOLO_MARGIN)
+            if ok then
+                soloSince = soloSince or os.clock()
+                if os.clock() - soloSince >= SOLO_SETTLE then solo = true break end
+            else
+                soloSince, why = nil, w
+            end
+            task.wait(0.1)
+        end
+        if not (alive and SM.on) then return end
+        if not queueShown() then continue end
+        if not solo then
+            setState("มีคนเข้าลิฟต์ด้วย (" .. tostring(why or "ไม่แน่ใจ") .. ") -> ออกแล้วเปลี่ยนลิฟต์")
+            SM.bad[e.model] = os.clock() + 8
+            leaveElevator(ap, startPos)
+            continue
+        end
+
+        -- 5) กด Ready (ยังเช็กต่อทุกรอบ ถ้ามีคนเข้ามาก่อนเกมเริ่ม = ออกทันที)
+        setState("อยู่คนเดียว -> กด Ready")
+        touchResume()
+        if QUEUE_GAME and queue_on_teleport and GAME_URL ~= "" and not SM.queued then
+            SM.queued = true
+            pcall(queue_on_teleport, string.format("loadstring(game:HttpGet(%q))()", GAME_URL))
+        end
+        local lastPress, t0, kicked = -100, os.clock(), false
+        while alive and SM.on and os.clock() - t0 < 90 do
+            local qf = queueShown()
+            if not qf then break end
+            local ok, w = elevCheck(e.model, want, SOLO_MARGIN)
+            if not ok then kicked, why = true, w break end
+            local rb = qf:FindFirstChild("ReadyButton")
+            -- กดครั้งเดียวต่อรอบ 30 วิ (กันปุ่มเป็นแบบสลับ Ready/ยกเลิก)
+            if rb and os.clock() - lastPress > 30 then
+                lastPress = os.clock()
+                pressBtn(rb)
+                setState("กด Ready แล้ว รอเข้าเกม...")
+            end
+            task.wait(0.1)
+        end
+        if kicked and queueShown() then
+            setState("มีคนเข้ามาก่อนเริ่ม (" .. tostring(why) .. ") -> ออกแล้วเปลี่ยนลิฟต์")
+            SM.bad[e.model] = os.clock() + 8
+            leaveElevator(ap, startPos)
+            continue
+        end
+        return   -- เข้าเกมแล้ว / หมดเวลา: ให้ cycle รอบถัดไปจัดการ
     end
 end
 
