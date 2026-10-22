@@ -915,7 +915,16 @@ local function pressBtn(obj)
     end
 end
 
--- ---------- เดินฉลาด (PathfindingService หลบสิ่งกีดขวาง / กระโดดเมื่อติด / คำนวณทางใหม่) ----------
+-- ---------- เดินฉลาด (PathfindingService หลบสิ่งกีดขวาง / กระโดดเมื่อติด) ----------
+-- เดินต่อเนื่อง ไม่หยุดเป็นช่วงๆ (ของเดิมสั่งเดินไปทีละจุดแล้วรอให้ถึงก่อนค่อยไปจุดต่อไป ตัวละครเลยสะดุดทุกจุด):
+--   1) คำนวณทางครั้งเดียว แล้วสั่งเดินไปจุดที่อยู่ "ข้างหน้า" ประมาณ LOOK_AHEAD สตั๊ด ไม่รอให้ถึงทีละจุด
+--   2) เช็กทุกเฟรม (Heartbeat) จุดไหนผ่านแล้วข้ามไปเลย ตัวละครไม่เบรกที่ทุกจุด
+--   3) ระหว่างรอคำนวณทางใหม่ ให้เดินตรงไปทางเป้าหมายก่อน ไม่ยืนนิ่งรอ
+--   4) คำนวณทางใหม่เฉพาะตอนติดจริงๆ (ไม่ขยับเกิน 2.5 วิ) / ติดสั้นๆ ลองกระโดดก่อน
+local RunService = game:GetService("RunService")
+local LOOK_AHEAD = 8      -- มองไปข้างหน้ากี่สตั๊ด (มาก = เดินลื่นขึ้น แต่ตัดมุมมากขึ้น)
+local ADVANCE_DIST = 3.5  -- เข้าใกล้จุดไหนในระยะนี้ = ถือว่าผ่านจุดนั้นแล้ว
+
 local function getRH()
     local ch = lp.Character
     local hum = ch and ch:FindFirstChildOfClass("Humanoid")
@@ -930,50 +939,104 @@ local function flat(a, b) return Vector3.new(a.X - b.X, 0, a.Z - b.Z).Magnitude 
 local function walkTo(target, active, reach)
     reach = reach or 3
     local t0, fails = os.clock(), 0
+    local function arrived(root)
+        return flat(root.Position, target) <= reach and math.abs(root.Position.Y - target.Y) < 10
+    end
+
     while alive and active() and os.clock() - t0 < 120 and fails < 8 do
         local root, hum = getRH()
         if not root then
             task.wait(0.5)
-        elseif flat(root.Position, target) <= reach and math.abs(root.Position.Y - target.Y) < 10 then
+        elseif arrived(root) then
             pcall(function() hum:MoveTo(root.Position) end)
             return true
         else
+            -- ระหว่างคำนวณทาง ให้เดินตรงไปทางเป้าหมายก่อน (ไม่ยืนนิ่งรอ)
+            pcall(function() hum:MoveTo(target) end)
             local path = PathfindingService:CreatePath({
-                AgentRadius = 2, AgentHeight = 5, AgentCanJump = true, AgentCanClimb = true, WaypointSpacing = 4,
+                AgentRadius = 2, AgentHeight = 5, AgentCanJump = true, AgentCanClimb = true, WaypointSpacing = 6,
             })
             local okP = pcall(function() path:ComputeAsync(root.Position, target) end)
-            if okP and path.Status == Enum.PathStatus.Success then
-                local wps = path:GetWaypoints()
-                local blocked = false
+            if not (alive and active()) then break end
+            root, hum = getRH()
+
+            local wps = (okP and path.Status == Enum.PathStatus.Success) and path:GetWaypoints() or nil
+            if not root then
+                task.wait(0.5)                       -- ตัวละครตาย / กำลังเกิดใหม่ รอก่อน
+            elseif wps and #wps >= 1 then
+                local blocked, done = false, false
                 local bc = path.Blocked:Connect(function() blocked = true end)
-                for i = 2, #wps do
-                    if blocked or not (alive and active()) then break end
-                    local wp = wps[i]
-                    if wp.Action == Enum.PathWaypointAction.Jump then hum.Jump = true end
-                    hum:MoveTo(wp.Position)
-                    local ws, lastP, lastT = os.clock(), root.Position, os.clock()
-                    while alive and active() and not blocked do
-                        if not root.Parent or hum.Health <= 0 then blocked = true break end
-                        if flat(root.Position, wp.Position) < 2.5 then break end
-                        if os.clock() - ws > 5 then blocked = true break end
-                        if (root.Position - lastP).Magnitude > 0.5 then
-                            lastP, lastT = root.Position, os.clock()
-                        elseif os.clock() - lastT > 0.7 then
-                            hum.Jump = true            -- ติดสิ่งกีดขวาง ลองกระโดด
-                            lastT = os.clock()
-                        end
-                        task.wait(0.1)
+                local i = math.min(2, #wps)
+                local lastP, lastMoveT, lastJumpT = root.Position, os.clock(), 0
+                local segT0, maxT = os.clock(), 8 + #wps * 2.5
+
+                while alive and active() and not blocked and not done do
+                    if not root.Parent or hum.Health <= 0 then blocked = true break end
+                    local pos = root.Position
+                    if arrived(root) then done = true break end
+                    if os.clock() - segT0 > maxT then blocked = true break end
+
+                    -- จุดที่ทางสั่งให้กระโดด: กระโดดเมื่อเข้าใกล้ภายใน 6 สตั๊ด
+                    if wps[i].Action == Enum.PathWaypointAction.Jump and flat(pos, wps[i].Position) < 6 then
+                        hum.Jump = true
                     end
+                    -- ข้ามจุดที่ผ่านแล้ว (ไม่ข้ามจุดสุดท้าย)
+                    while i < #wps and flat(pos, wps[i].Position) < ADVANCE_DIST do i = i + 1 end
+
+                    -- เลือกจุดที่จะวิ่งไป = มองไปข้างหน้า LOOK_AHEAD สตั๊ด (ไม่มองข้ามจุดกระโดด)
+                    local j, acc = i, flat(pos, wps[i].Position)
+                    while j < #wps and acc < LOOK_AHEAD and wps[j].Action ~= Enum.PathWaypointAction.Jump do
+                        acc = acc + flat(wps[j].Position, wps[j + 1].Position)
+                        j = j + 1
+                    end
+                    hum:MoveTo(wps[j].Position)
+
+                    -- ถึงจุดสุดท้ายของทางแล้วแต่ยังไม่ตรงเงื่อนไขถึงเป้า -> จบรอบนี้ (รอบหน้าเช็ก/คำนวณใหม่)
+                    if i >= #wps and flat(pos, wps[#wps].Position) < 2.5 then
+                        local tf = os.clock()
+                        while alive and active() and os.clock() - tf < 1.5 do
+                            local r2 = getRH()
+                            if not r2 or arrived(r2) then break end
+                            hum:MoveTo(target)
+                            RunService.Heartbeat:Wait()
+                        end
+                        local r3 = getRH()
+                        if r3 and arrived(r3) then done = true else fails = fails + 1 end
+                        break
+                    end
+
+                    -- ติดสิ่งกีดขวาง: ไม่ขยับ 0.7 วิ = ลองกระโดด | 2.5 วิ = คำนวณทางใหม่
+                    if (pos - lastP).Magnitude > 0.5 then
+                        lastP, lastMoveT = pos, os.clock()
+                    else
+                        local idle = os.clock() - lastMoveT
+                        if idle > 2.5 then
+                            blocked = true
+                        elseif idle > 0.7 and os.clock() - lastJumpT > 0.7 then
+                            hum.Jump = true
+                            lastJumpT = os.clock()
+                        end
+                    end
+                    RunService.Heartbeat:Wait()
                 end
                 bc:Disconnect()
-                if blocked then fails = fails + 1 else fails = 0 end
+                if done then
+                    pcall(function() hum:MoveTo(root.Position) end)
+                    return true
+                end
+                if blocked then fails = fails + 1 end
             else
                 -- หาเส้นทางไม่ได้: แผนสำรอง เดินตรงไปทางเป้าหมาย
                 fails = fails + 1
                 pcall(function() hum:MoveTo(target) end)
-                local lp0 = root.Position
-                task.wait(1.5)
-                if (root.Position - lp0).Magnitude < 1 then hum.Jump = true end
+                local lp0, tw = root.Position, os.clock()
+                while alive and active() and os.clock() - tw < 1.5 do
+                    local r2 = getRH()
+                    if not r2 or arrived(r2) then break end
+                    RunService.Heartbeat:Wait()
+                end
+                local r3 = getRH()
+                if r3 and (r3.Position - lp0).Magnitude < 1 then hum.Jump = true end
             end
         end
     end
@@ -988,15 +1051,15 @@ local function summonBody(active)
         if os.time() // 1800 ~= slot then   -- ตู้รีเซ็ตระหว่างสุ่ม: เช็กใหม่ว่ายังมีตัวที่เลือกไหม
             slot = os.time() // 1800
             local set = scanCrate()
-            if set and #foundWanted(set) == 0 then stop = "ตู้รีเซ็ตแล้ว ไม่มีตัวที่เลือก" break end
+            if set and #foundWanted(set) == 0 then stop = "ตู้รีเซ็ตระหว่างสุ่ม และตัวที่เลือกไม่อยู่ในตู้แล้ว" break end
         end
         local coins = getCoins()
-        if not coins then stop = "อ่านเงินไม่ได้" break end
+        if not coins then stop = "อ่านจำนวน Coin ไม่ได้" break end
         local count, price
         if coins >= PRICE_TEN then count, price = 10, PRICE_TEN
         elseif coins >= PRICE_ONE then count, price = 1, PRICE_ONE
         else stop = "Coin หมดแล้ว" break end
-        setState(string.format("กำลังสุ่ม... สุ่มแล้ว %d กล่อง (เหลือ %s Coins)", opened, fmt(coins)))
+        setState(string.format("ขั้น 2/3 กำลังสุ่ม | สุ่มแล้ว %d กล่อง | เหลือ %s Coins", opened, fmt(coins)))
         local ok, err, fatal, res = summonOnce(count, price)
         if ok then
             fails = 0
@@ -1006,7 +1069,7 @@ local function summonBody(active)
         else
             fails = fails + 1
             if fatal or fails >= 3 then
-                stop = fatal and err or ("สุ่มไม่สำเร็จติดกัน 3 ครั้ง (" .. tostring(err) .. ")")
+                stop = fatal and err or ("สุ่มพลาดติดกัน 3 ครั้ง (" .. tostring(err) .. ")")
                 break
             end
             task.wait(0.3)
@@ -1038,7 +1101,7 @@ end
 
 local function goPlay(active)
     if SM.map == "" then
-        setState("ยังไม่ได้เลือกด่านที่จะกลับไปเล่น (เลือกในรายการด่าน)")
+        setState("ยังไม่ได้เลือกด่าน -> แตะชื่อด่านในรายการ \"ด่านที่จะกลับไปเล่น\" ด้านล่าง")
         task.wait(3)
         return
     end
@@ -1050,23 +1113,23 @@ local function goPlay(active)
         if e.key == want and e.area and not busy and not bad then cands[#cands + 1] = e end
     end
     if #cands == 0 then
-        setState("ไม่มีลิฟต์ว่างที่เป็นด่าน " .. SM.map .. " รอสักครู่...")
+        setState("ขั้น 3/3 รอลิฟต์ว่างของด่าน " .. SM.map .. " (ลิฟต์ที่มีคนอยู่จะข้าม)")
         task.wait(3)
         return
     end
     local e = cands[1]
     local ap = areaPos(e.area)
     if not ap then SM.bad[e.model] = os.clock() + 30 return end
-    setState("เดินไปที่ " .. e.model.Name .. " (" .. SM.map .. ")")
+    setState("ขั้น 3/3 กลับไปเล่น -> เดินไปลิฟต์ด่าน " .. SM.map)
     walkTo(ap, function() return alive and SM.on and not queueShown() end, 2.5)
     if not (alive and SM.on) then return end
     if not waitFor(queueShown, 4, function() return SM.on end) then
         SM.bad[e.model] = os.clock() + 20
-        setState("ลิฟต์นี้ไม่เปิดหน้าคิว ลองอันอื่น")
+        setState("ลิฟต์นี้เข้าคิวไม่ได้ -> ลองลิฟต์อื่น")
         return
     end
 
-    setState("เปิดหน้าคิวแล้ว กด Ready")
+    setState("ขั้น 3/3 เข้าคิวแล้ว -> กด Ready")
     touchResume()
     if QUEUE_GAME and queue_on_teleport and GAME_URL ~= "" and not SM.queued then
         SM.queued = true
@@ -1082,7 +1145,7 @@ local function goPlay(active)
         if rb and os.clock() - lastPress > 30 then
             lastPress = os.clock()
             pressBtn(rb)
-            setState("กด Ready แล้ว รอเกมย้ายแมพ...")
+            setState("ขั้น 3/3 กด Ready แล้ว รอเข้าเกม...")
         end
         task.wait(0.5)
     end
@@ -1092,7 +1155,7 @@ end
 function SM.cycle()
     local function active() return alive and SM.on end
     if not active() then return end
-    setState("ตรวจเงินและตู้...")
+    setState("ขั้น 1/3 ตรวจเงินและตู้...")
     local coins = waitFor(getCoins, 20, active)
     local set = waitFor(scanCrate, 20, active)
     if not active() then return end
@@ -1100,28 +1163,28 @@ function SM.cycle()
 
     if #found > 0 and coins and coins >= PRICE_ONE and os.clock() >= SM.skipSummonUntil then
         if running then
-            setState("กำลังสุ่มด้วยปุ่มอื่นอยู่ รอให้เสร็จก่อน")
+            setState("กำลังสุ่มจากแท็บ Crate อยู่ รอให้เสร็จก่อน")
             task.wait(2)
             return
         end
-        setState("ตู้มี " .. table.concat(found, ", ") .. " -> เดินไปจุดสุ่ม")
+        setState("ขั้น 2/3 ตู้มี " .. table.concat(found, ", ") .. " -> เดินไปจุดสุ่ม")
         local arrived = walkTo(SUMMON_CF.Position, active, 3)
         if arrived and active() then
             local opened, spent, stop = summonRun(active)
-            local msg = string.format("สุ่มตัวที่เลือกเสร็จ %d กล่อง (ใช้ %s Coins)%s",
-                opened, fmt(spent), stop and (" | " .. stop) or "")
+            local msg = string.format("สุ่มเสร็จ %d กล่อง | ใช้ %s Coins%s",
+                opened, fmt(spent), stop and (" | หยุดเพราะ: " .. stop) or "")
             notify(msg, (stop == "Coin หมดแล้ว") and PT.Good or PT.Warn, "trophy", 6)
             if stop and stop ~= "Coin หมดแล้ว" then SM.skipSummonUntil = os.clock() + 120 end
         elseif active() then
             SM.skipSummonUntil = os.clock() + 120
-            notify("เดินไปจุดสุ่มไม่ถึง ข้ามไปเล่นก่อน", PT.Warn, "x")
+            notify("เดินไปจุดสุ่มไม่ถึง -> ข้ามไปเล่นก่อน", PT.Warn, "x")
         end
     else
         local why = (not set) and "อ่านตู้ไม่ได้"
             or (#found == 0) and "ตู้ไม่มีตัวที่เลือก"
-            or (not coins or coins < PRICE_ONE) and "เงินไม่พอ"
-            or "รอพักหลังสุ่มพลาด"
-        setState(why .. " -> กลับไปเล่น")
+            or (not coins or coins < PRICE_ONE) and "Coin ไม่พอ"
+            or "เพิ่งสุ่มพลาด พักก่อน"
+        setState("ไม่ต้องสุ่ม (" .. why .. ") -> ขั้น 3/3 กลับไปเล่น")
     end
     if active() then goPlay(active) end
 end
@@ -1150,12 +1213,12 @@ local tabSM = win:AddTab({ Name = "Auto Summon", Category = "Lobby", Icon = "zap
 
 local sMain = tabSM:Section({
     Title = "ออโต้สุ่มตัวแบบกำหนดตัว",
-    Desc = "ตู้มีตัวที่เลือก + เงินพอ = เดินไปสุ่มจนเงินหมด แล้วกลับไปเล่นต่อ | ตู้รีเซ็ตทุก 30 นาที (:00 / :30)",
+    Desc = "ตู้รีเซ็ตทุก 30 นาที (xx:00 / xx:30) | ตู้มีตัวที่เลือกและมี Coin = เดินไปสุ่มจนเงินหมด แล้วกลับไปเล่นต่อเอง",
     Icon = "gift", Color = PT.Purple,
 })
 sMain:Toggle({
     Title = "ออโต้สุ่มตัวแบบกำหนดตัว",
-    Desc = "ปุ่มเดียวทำทุกอย่าง (ใช้ได้ข้ามแมพ) | ปิด = หยุดระบบนี้ทันที",
+    Desc = "เปิดปุ่มเดียวทำครบ: ตรวจตู้ -> สุ่ม -> กลับไปเล่น | ปิด = หยุดทันที",
     Default = SM.on,
     Callback = function(v)
         SM.on = v and true or false
@@ -1163,7 +1226,7 @@ sMain:Toggle({
         if SM.on then SM.start() else setState("ปิดอยู่") end
     end,
 })
-local lblState = sMain:Label({ Text = "สถานะ: ปิดอยู่", TextSize = 12, Color = PT.Text })
+local lblState = sMain:Label({ Text = "สถานะ: ปิดอยู่", TextSize = 13, Color = PT.Text })
 local lblReset = sMain:Label({ Text = "-", TextSize = 12, Color = PT.Text })
 local lblCrate = sMain:Label({ Text = "ตู้ตอนนี้: กำลังอ่าน...", TextSize = 12, Color = PT.Text })
 sMain:Action({
@@ -1171,14 +1234,14 @@ sMain:Action({
     Callback = function()
         local set = scanCrate()
         if SM.refreshWant then SM.refreshWant() end
-        notify(set and ("พบ " .. SM.crateN .. " ตัวในตู้") or "อ่านตู้ไม่ได้ (เปิดหน้า Summon ในเกมหนึ่งครั้ง)",
+        notify(set and ("พบ " .. SM.crateN .. " ตัวในตู้") or "อ่านตู้ไม่ได้ -> เปิดหน้า Summon ในเกมสักครั้งก่อน",
             set and PT.Good or PT.Warn, "refresh-cw")
     end,
 })
 
 local sWant = tabSM:Section({
     Title = "ตัวที่ต้องการ",
-    Desc = "พิมพ์ชื่อให้ตรงกับชื่อในตู้ (ตัวใหญ่/เล็กไม่สำคัญ) | บันทึกอัตโนมัติ | แตะชื่อในรายการเพื่อลบ",
+    Desc = "พิมพ์ชื่อตามที่ขึ้นในตู้ (ตัวเล็ก/ใหญ่ไม่สำคัญ) แล้วกด Enter | บันทึกให้อัตโนมัติ | แตะชื่อในรายการ = ลบ",
     Icon = "bell", Color = PT.Orange,
 })
 local wantList
@@ -1194,14 +1257,14 @@ local function addWanted(box)
     SM.wanted[#SM.wanted + 1] = real or name
     saveSM()
     SM.refreshWant()
-    notify(real and ("เพิ่ม " .. real .. " แล้ว (อยู่ในตู้ตอนนี้)") or ("เพิ่ม " .. name .. " แล้ว (ตอนนี้ยังไม่อยู่ในตู้ จะรอเจอ)"),
+    notify(real and ("เพิ่ม " .. real .. " แล้ว (อยู่ในตู้ตอนนี้)") or ("เพิ่ม " .. name .. " แล้ว (ยังไม่อยู่ในตู้ จะสุ่มให้เมื่อโผล่)"),
         PT.Good, "check")
 end
-sWant:Input({ Title = "พิมพ์ชื่อตัว แล้วกด Enter", Placeholder = "เช่น Camera Helicopter", Callback = addWanted })
+sWant:Input({ Title = "ชื่อตัวที่ต้องการ", Placeholder = "เช่น Camera Helicopter แล้วกด Enter", Callback = addWanted })
 wantList = sWant:List({ Height = 150, Title = "ตัวที่เลือกไว้" })
 function SM.refreshWant()
     wantList:Clear()
-    if #SM.wanted == 0 then wantList:Note("ยังไม่ได้เลือกตัว พิมพ์ชื่อด้านบนได้เลย") return end
+    if #SM.wanted == 0 then wantList:Note("ยังไม่ได้เลือกตัว -> พิมพ์ชื่อในช่องด้านบนได้เลย") return end
     for i, name in ipairs(SM.wanted) do
         local inCrate = SM.crate and SM.crate[cleanText(name)]
         wantList:Add({
@@ -1230,13 +1293,13 @@ end
 
 local sMap = tabSM:Section({
     Title = "ด่านที่จะกลับไปเล่น",
-    Desc = "อ่านชื่อด่านจากลิฟต์ทุกตัว (ชื่อซ้ำ = ที่เดียวกัน) | แตะเพื่อเลือก | ลิฟต์ที่มีคน (1/5 ขึ้นไป) จะข้ามไปตัวอื่นเอง",
+    Desc = "สุ่มเสร็จแล้วจะกลับไปเล่นด่านนี้ | แตะชื่อด่านเพื่อเลือก | ลิฟต์ที่มีคนอยู่แล้วจะข้ามไปลิฟต์อื่นเอง",
     Icon = "map-pin", Color = PT.Cyan,
 })
 local mapList = sMap:List({ Height = 130, Title = "ด่านที่พบ" })
 function SM.refreshMaps()
     mapList:Clear()
-    if #SM.mapOrder == 0 then mapList:Note("ยังไม่พบลิฟต์ (รอเกมโหลด แล้วกดสแกน)") return end
+    if #SM.mapOrder == 0 then mapList:Note("ยังไม่พบลิฟต์ -> รอเกมโหลดสักครู่ แล้วกด \"สแกนลิฟต์ใหม่\"") return end
     for i, key in ipairs(SM.mapOrder) do
         local nm = SM.maps[key]
         mapList:Add({
