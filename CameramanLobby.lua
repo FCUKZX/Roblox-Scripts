@@ -6,6 +6,7 @@
 --  + ซ่อนชื่อตัวเอง / ซ่อนตัวละคร NOOB (แท็บ Crate > ความเป็นส่วนตัว) ใช้ไฟล์ตั้งค่าเดียวกับ CameramanTD
 --  + ออโต้สุ่มตัวแบบกำหนดตัว (แท็บ Auto Summon) อยู่ท้ายไฟล์
 --  + [แก้ใหม่] ระบบเดินลื่น/เสถียรขึ้น + เช็กลิฟต์สด + เช็กว่าอยู่คนเดียวก่อนกด Ready
+--  + [ใหม่] เลือกรูปแบบเคลื่อนที่ได้ 3 แบบ: เดิน / ลอย / วาปเลย (แท็บ Auto Summon > รูปแบบการเคลื่อนที่)
 -- =====================================================================
 if not game:IsLoaded() then game.Loaded:Wait() end
 
@@ -739,6 +740,7 @@ local SM = {
     on = false, wanted = {}, map = "", maps = {}, mapOrder = {},
     crate = nil, crateN = 0, state = "ปิดอยู่", bad = {}, loopOn = false,
     skipSummonUntil = 0, queued = false,
+    mode = "walk",   -- walk = เดิน | float = ลอย | tp = วาปเลย
 }
 
 -- ---------- โหลดค่าที่เซฟไว้ ----------
@@ -746,6 +748,7 @@ do
     local d = readSettings()
     SM.on = d.AUTO_SELECT_SUMMON == true
     if type(d.SUMMON_MAP) == "string" then SM.map = d.SUMMON_MAP end
+    if d.MOVE_MODE == "walk" or d.MOVE_MODE == "float" or d.MOVE_MODE == "tp" then SM.mode = d.MOVE_MODE end
     if type(d.SUMMON_WANTED) == "table" then
         for _, n in ipairs(d.SUMMON_WANTED) do
             if type(n) == "string" and n ~= "" then SM.wanted[#SM.wanted + 1] = n end
@@ -760,6 +763,7 @@ local function saveSM()
         if data.CFG_VERSION == nil then data.CFG_VERSION = 1 end
         data.AUTO_SELECT_SUMMON = SM.on
         data.SUMMON_MAP = SM.map
+        data.MOVE_MODE = SM.mode
         data.SUMMON_WANTED = SM.wanted
         writefile(SETTINGS_FILE, HttpService:JSONEncode(data))
     end)
@@ -1063,6 +1067,66 @@ local function walkTo(target, active, reach)
     return result
 end
 
+-- ---------- [ใหม่] เลือกรูปแบบเคลื่อนที่: เดิน / ลอย / วาปเลย ----------
+--   walk  = เดินตามเส้นทาง (walkTo ด้านบน) ปลอดภัยสุด ช้าสุด
+--   float = ลอยตรงไปหาจุดหมายด้วยความเร็วคงที่ (ทะลุสิ่งกีดขวาง ไม่ตกขอบ) เช็กยกเลิกได้ทุกเฟรม
+--   tp    = วาปเลย ย้ายตำแหน่งทันที เร็วสุด (เสี่ยงโดนระบบกันโกงของเกมมากกว่า)
+local FLOAT_SPEED = 80   -- ความเร็วตอนลอย (สตั๊ด/วินาที) ปรับได้
+
+local function floatTo(target, active)
+    local root, hum = getRH()
+    if not root then return false end
+    local ch = lp.Character
+    local saved = {}
+    for _, d in ipairs(ch:GetDescendants()) do
+        if d:IsA("BasePart") and d.CanCollide then saved[d] = true d.CanCollide = false end
+    end
+    local oldPS = hum.PlatformStand
+    hum.PlatformStand = true   -- กัน Humanoid ออกแรงสู้ตอนลอย
+    local result = false
+    local t0 = os.clock()
+    while alive and active() and os.clock() - t0 < 60 do
+        root, hum = getRH()
+        if not root then break end
+        local dt = RunService.Heartbeat:Wait()
+        root, hum = getRH()
+        if not root then break end
+        local pos = root.Position
+        local delta = target - pos
+        local dist = delta.Magnitude
+        if dist <= 1.5 then result = true break end
+        local newPos = pos + delta.Unit * math.min(dist, FLOAT_SPEED * dt)
+        root.CFrame = CFrame.new(newPos) * (root.CFrame - root.CFrame.Position)
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end
+    for p in pairs(saved) do pcall(function() if p.Parent then p.CanCollide = true end end) end
+    local r2, h2 = getRH()
+    if h2 then pcall(function() h2.PlatformStand = oldPS end) end
+    if r2 then pcall(function() r2.AssemblyLinearVelocity = Vector3.zero end) end
+    return result
+end
+
+local function tpTo(target, active)
+    if not (alive and active()) then return false end
+    local root = getRH()
+    if not root then return false end
+    root.CFrame = CFrame.new(target) * (root.CFrame - root.CFrame.Position)
+    root.AssemblyLinearVelocity = Vector3.zero
+    task.wait(0.15)
+    return true
+end
+
+-- ใช้แทน walkTo ทุกที่ | yOff = ยกตำแหน่งสูงขึ้น (ใช้กับจุดที่เป็นศูนย์กลางของ Area ตอนลอย/วาป กันฝังพื้น)
+local function moveTo(target, active, reach, yOff)
+    if SM.mode == "float" then
+        return floatTo(target + Vector3.new(0, yOff or 0, 0), active)
+    elseif SM.mode == "tp" then
+        return tpTo(target + Vector3.new(0, yOff or 0, 0), active)
+    end
+    return walkTo(target, active, reach)
+end
+
 -- ---------- สุ่มจนเงินหมด (ใช้ summonOnce / getCoins / handleResults ของสคริปต์เดิม) ----------
 local function summonBody(active)
     local opened, spent, fails, stop = 0, 0, 0, nil
@@ -1193,13 +1257,14 @@ end
 -- ออกจากลิฟต์ (ยกเลิกคิว) ด้วยการเดินกลับไปทางที่มา
 local function leaveElevator(ap, startPos)
     local d = Vector3.new(startPos.X - ap.X, 0, startPos.Z - ap.Z)
-    local leaveTo = startPos
+    local leaveTo, yOff = startPos, 0
     if d.Magnitude < 10 then
         local dir = (d.Magnitude > 0.1) and d.Unit or Vector3.new(1, 0, 0)
         leaveTo = Vector3.new(ap.X + dir.X * 14, ap.Y, ap.Z + dir.Z * 14)
+        yOff = 3
     end
     local t0 = os.clock()
-    walkTo(leaveTo, function() return alive and SM.on and os.clock() - t0 < 8 end, 4)
+    moveTo(leaveTo, function() return alive and SM.on and os.clock() - t0 < 8 end, 4, yOff)
     waitFor(function() return not queueShown() end, 3, function() return SM.on end)
 end
 
@@ -1257,8 +1322,20 @@ local function goPlay(active)
             end
             return lastOk
         end
-        walkTo(ap, walking, 2.5)
+        moveTo(ap, walking, 2.5, 2.5)
         if not (alive and SM.on) then return end
+        if SM.mode ~= "walk" and not abortReason and not queueShown() then
+            -- ลอย/วาป: บางทีเกมยังไม่นับว่าเหยียบลิฟต์ -> ขยับตัวนิดหน่อยให้ลิฟต์ตรวจจับ
+            if not waitFor(queueShown, 1, function() return SM.on end) then
+                local _, h = getRH()
+                if h then
+                    pcall(function() h:MoveTo(ap + Vector3.new(2, 0, 0)) end)
+                    task.wait(0.4)
+                    pcall(function() h:MoveTo(ap - Vector3.new(2, 0, 0)) end)
+                    task.wait(0.4)
+                end
+            end
+        end
 
         -- 3) ยืนยันว่าเข้าคิวจริง
         local inQueue = queueShown() ~= nil
@@ -1343,7 +1420,7 @@ function SM.cycle()
             return
         end
         setState("ตู้มี " .. table.concat(found, ", ") .. " -> เดินไปจุดสุ่ม")
-        local arrived = walkTo(SUMMON_CF.Position, active, 3)
+        local arrived = moveTo(SUMMON_CF.Position, active, 3, 0)
         if arrived and active() then
             local opened, spent, stop = summonRun(active)
             local msg = string.format("สุ่มเสร็จ %d กล่อง | ใช้ %s Coins%s",
@@ -1465,6 +1542,32 @@ function SM.refreshWant()
     end
 end
 
+local MODES = {
+    { key = "walk",  text = "เดิน (ตามเส้นทาง ปลอดภัยสุด)" },
+    { key = "float", text = "ลอย (บินตรงไปหาจุดหมาย)" },
+    { key = "tp",    text = "วาปเลย (ย้ายทันที เร็วสุด)" },
+}
+local sMove = tabSM:Section({
+    Title = "รูปแบบการเคลื่อนที่",
+    Desc = "เลือกวิธีไปจุดสุ่ม / ลิฟต์ | เดิน = ปลอดภัยสุด | ลอย = เร็วและนิ่ง | วาป = เร็วสุดแต่เสี่ยงกว่า",
+    Icon = "zap", Color = PT.Blue,
+})
+local moveList = sMove:List({ Height = 110, Title = "เลือกแบบ (แตะเพื่อเปลี่ยน)" })
+function SM.refreshMode()
+    moveList:Clear()
+    for i, m in ipairs(MODES) do
+        moveList:Add({
+            Text = m.text, Selected = (SM.mode == m.key), Order = i,
+            Callback = function()
+                SM.mode = m.key
+                saveSM()
+                SM.refreshMode()
+                notify("รูปแบบเคลื่อนที่: " .. m.text, PT.Good, "check")
+            end,
+        })
+    end
+end
+
 local sMap = tabSM:Section({
     Title = "ด่านที่จะกลับไปเล่น",
     Desc = "แตะชื่อด่านที่จะกลับไปเล่นหลังสุ่ม",
@@ -1527,6 +1630,7 @@ task.spawn(function()
 end)
 
 SM.refreshWant()
+SM.refreshMode()
 scanMaps()
 SM.refreshMaps()
 if SM.on then SM.start() end
