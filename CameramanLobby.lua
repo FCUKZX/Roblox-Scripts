@@ -619,7 +619,7 @@ end
 
 autoTog = sel:Toggle({
     Title = "สุ่มต่อเนื่องจนกว่า Coin จะหมด",
-    Desc = "เปิด = สุ่มทีละ 10 (เศษทีละ 1) ไปเรื่อยๆ จน Coin ไม่พอ | ปิดเมื่อไหร่ก็หยุดทันที",
+    Desc = "สุ่มทีละ 10 (เศษทีละ 1) จนกว่า Coin จะไม่พอ",
     Default = false,
     Callback = function(v)
         autoOn = v and true or false
@@ -681,7 +681,6 @@ end)
 local sPriv = tab:Section({ Title = "ความเป็นส่วนตัว", Desc = "ซ่อนชื่อและหน้าตาของตัวเอง (เห็นเฉพาะในเครื่องเรา)", Icon = "shield-check", Color = PT.Pink })
 sPriv:Toggle({
     Title = "ซ่อนชื่อตัวเอง",
-    Desc = "เปิด = ชื่อบัญชีและชื่อที่แสดงของเราจะถูกซ่อน",
     Default = CFG.HIDE_NAME,
     Callback = function(v)
         CFG.HIDE_NAME = v and true or false
@@ -691,7 +690,6 @@ sPriv:Toggle({
 })
 sPriv:Toggle({
     Title = "ซ่อนตัวละคร (เป็น NOOB)",
-    Desc = "เปิด = เปลี่ยนหน้าตาเราเป็น NOOB",
     Default = CFG.NOOB_MODE,
     Callback = function(v)
         CFG.NOOB_MODE = v and true or false
@@ -1059,7 +1057,7 @@ local function summonBody(active)
         if coins >= PRICE_TEN then count, price = 10, PRICE_TEN
         elseif coins >= PRICE_ONE then count, price = 1, PRICE_ONE
         else stop = "Coin หมดแล้ว" break end
-        setState(string.format("ขั้น 2/3 กำลังสุ่ม | สุ่มแล้ว %d กล่อง | เหลือ %s Coins", opened, fmt(coins)))
+        setState(string.format("กำลังสุ่ม | แล้ว %d กล่อง | เหลือ %s Coins", opened, fmt(coins)))
         local ok, err, fatal, res = summonOnce(count, price)
         if ok then
             fails = 0
@@ -1101,7 +1099,7 @@ end
 
 local function goPlay(active)
     if SM.map == "" then
-        setState("ยังไม่ได้เลือกด่าน -> แตะชื่อด่านในรายการ \"ด่านที่จะกลับไปเล่น\" ด้านล่าง")
+        setState("ยังไม่ได้เลือกด่านที่จะกลับไปเล่น")
         task.wait(3)
         return
     end
@@ -1113,14 +1111,14 @@ local function goPlay(active)
         if e.key == want and e.area and not busy and not bad then cands[#cands + 1] = e end
     end
     if #cands == 0 then
-        setState("ขั้น 3/3 รอลิฟต์ว่างของด่าน " .. SM.map .. " (ลิฟต์ที่มีคนอยู่จะข้าม)")
+        setState("รอลิฟต์ว่างของด่าน " .. SM.map)
         task.wait(3)
         return
     end
     local e = cands[1]
     local ap = areaPos(e.area)
     if not ap then SM.bad[e.model] = os.clock() + 30 return end
-    setState("ขั้น 3/3 กลับไปเล่น -> เดินไปลิฟต์ด่าน " .. SM.map)
+    setState("เดินไปลิฟต์ด่าน " .. SM.map)
     walkTo(ap, function() return alive and SM.on and not queueShown() end, 2.5)
     if not (alive and SM.on) then return end
     if not waitFor(queueShown, 4, function() return SM.on end) then
@@ -1129,7 +1127,7 @@ local function goPlay(active)
         return
     end
 
-    setState("ขั้น 3/3 เข้าคิวแล้ว -> กด Ready")
+    setState("เข้าคิวแล้ว -> กด Ready")
     touchResume()
     if QUEUE_GAME and queue_on_teleport and GAME_URL ~= "" and not SM.queued then
         SM.queued = true
@@ -1145,7 +1143,7 @@ local function goPlay(active)
         if rb and os.clock() - lastPress > 30 then
             lastPress = os.clock()
             pressBtn(rb)
-            setState("ขั้น 3/3 กด Ready แล้ว รอเข้าเกม...")
+            setState("กด Ready แล้ว รอเข้าเกม...")
         end
         task.wait(0.5)
     end
@@ -1155,7 +1153,7 @@ end
 function SM.cycle()
     local function active() return alive and SM.on end
     if not active() then return end
-    setState("ขั้น 1/3 ตรวจเงินและตู้...")
+    setState("ตรวจเงินและตู้...")
     local coins = waitFor(getCoins, 20, active)
     local set = waitFor(scanCrate, 20, active)
     if not active() then return end
@@ -1163,16 +1161,16 @@ function SM.cycle()
 
     if #found > 0 and coins and coins >= PRICE_ONE and os.clock() >= SM.skipSummonUntil then
         if running then
-            setState("กำลังสุ่มจากแท็บ Crate อยู่ รอให้เสร็จก่อน")
+            setState("กำลังสุ่มจากแท็บ Crate อยู่ รอก่อน")
             task.wait(2)
             return
         end
-        setState("ขั้น 2/3 ตู้มี " .. table.concat(found, ", ") .. " -> เดินไปจุดสุ่ม")
+        setState("ตู้มี " .. table.concat(found, ", ") .. " -> เดินไปจุดสุ่ม")
         local arrived = walkTo(SUMMON_CF.Position, active, 3)
         if arrived and active() then
             local opened, spent, stop = summonRun(active)
             local msg = string.format("สุ่มเสร็จ %d กล่อง | ใช้ %s Coins%s",
-                opened, fmt(spent), stop and (" | หยุดเพราะ: " .. stop) or "")
+                opened, fmt(spent), stop and (" | " .. stop) or "")
             notify(msg, (stop == "Coin หมดแล้ว") and PT.Good or PT.Warn, "trophy", 6)
             if stop and stop ~= "Coin หมดแล้ว" then SM.skipSummonUntil = os.clock() + 120 end
         elseif active() then
@@ -1184,7 +1182,7 @@ function SM.cycle()
             or (#found == 0) and "ตู้ไม่มีตัวที่เลือก"
             or (not coins or coins < PRICE_ONE) and "Coin ไม่พอ"
             or "เพิ่งสุ่มพลาด พักก่อน"
-        setState("ไม่ต้องสุ่ม (" .. why .. ") -> ขั้น 3/3 กลับไปเล่น")
+        setState("ไม่สุ่ม (" .. why .. ") -> กลับไปเล่น")
     end
     if active() then goPlay(active) end
 end
@@ -1213,12 +1211,11 @@ local tabSM = win:AddTab({ Name = "Auto Summon", Category = "Lobby", Icon = "zap
 
 local sMain = tabSM:Section({
     Title = "ออโต้สุ่มตัวแบบกำหนดตัว",
-    Desc = "ตู้รีเซ็ตทุก 30 นาที (xx:00 / xx:30) | ตู้มีตัวที่เลือกและมี Coin = เดินไปสุ่มจนเงินหมด แล้วกลับไปเล่นต่อเอง",
+    Desc = "ตู้มีตัวที่เลือกและมี Coin = เดินไปสุ่มจนเงินหมด แล้วกลับไปเล่นต่อ",
     Icon = "gift", Color = PT.Purple,
 })
 sMain:Toggle({
     Title = "ออโต้สุ่มตัวแบบกำหนดตัว",
-    Desc = "เปิดปุ่มเดียวทำครบ: ตรวจตู้ -> สุ่ม -> กลับไปเล่น | ปิด = หยุดทันที",
     Default = SM.on,
     Callback = function(v)
         SM.on = v and true or false
@@ -1234,14 +1231,14 @@ sMain:Action({
     Callback = function()
         local set = scanCrate()
         if SM.refreshWant then SM.refreshWant() end
-        notify(set and ("พบ " .. SM.crateN .. " ตัวในตู้") or "อ่านตู้ไม่ได้ -> เปิดหน้า Summon ในเกมสักครั้งก่อน",
+        notify(set and ("พบ " .. SM.crateN .. " ตัวในตู้") or "อ่านตู้ไม่ได้ เปิดหน้า Summon สักครั้งก่อน",
             set and PT.Good or PT.Warn, "refresh-cw")
     end,
 })
 
 local sWant = tabSM:Section({
     Title = "ตัวที่ต้องการ",
-    Desc = "พิมพ์ชื่อตามที่ขึ้นในตู้ (ตัวเล็ก/ใหญ่ไม่สำคัญ) แล้วกด Enter | บันทึกให้อัตโนมัติ | แตะชื่อในรายการ = ลบ",
+    Desc = "พิมพ์ชื่อตามที่ขึ้นในตู้ แล้วกด Enter | แตะชื่อในรายการ = ลบ",
     Icon = "bell", Color = PT.Orange,
 })
 local wantList
@@ -1264,7 +1261,7 @@ sWant:Input({ Title = "ชื่อตัวที่ต้องการ", Pla
 wantList = sWant:List({ Height = 150, Title = "ตัวที่เลือกไว้" })
 function SM.refreshWant()
     wantList:Clear()
-    if #SM.wanted == 0 then wantList:Note("ยังไม่ได้เลือกตัว -> พิมพ์ชื่อในช่องด้านบนได้เลย") return end
+    if #SM.wanted == 0 then wantList:Note("ยังไม่ได้เลือกตัว") return end
     for i, name in ipairs(SM.wanted) do
         local inCrate = SM.crate and SM.crate[cleanText(name)]
         wantList:Add({
@@ -1293,13 +1290,13 @@ end
 
 local sMap = tabSM:Section({
     Title = "ด่านที่จะกลับไปเล่น",
-    Desc = "สุ่มเสร็จแล้วจะกลับไปเล่นด่านนี้ | แตะชื่อด่านเพื่อเลือก | ลิฟต์ที่มีคนอยู่แล้วจะข้ามไปลิฟต์อื่นเอง",
+    Desc = "แตะชื่อด่านที่จะกลับไปเล่นหลังสุ่ม",
     Icon = "map-pin", Color = PT.Cyan,
 })
 local mapList = sMap:List({ Height = 130, Title = "ด่านที่พบ" })
 function SM.refreshMaps()
     mapList:Clear()
-    if #SM.mapOrder == 0 then mapList:Note("ยังไม่พบลิฟต์ -> รอเกมโหลดสักครู่ แล้วกด \"สแกนลิฟต์ใหม่\"") return end
+    if #SM.mapOrder == 0 then mapList:Note("ยังไม่พบลิฟต์ รอเกมโหลดแล้วกดสแกน") return end
     for i, key in ipairs(SM.mapOrder) do
         local nm = SM.maps[key]
         mapList:Add({
