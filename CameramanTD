@@ -200,6 +200,7 @@ local DEFAULTS = {
     GAME_NOTIF = true,      -- แจ้งเตือนของเกม (GameUI.Notifications): เปิด = แสดงตามปกติ | ปิด = ซ่อน (จำค่าไว้)
     GAMESPEED_PICK = "",    -- ชื่อปุ่มความเร็วที่เลือก (ตรงกับชื่อใน GameUI.GameSpeeds เช่น "1.5")
     PLACE_ACCURACY = 95,    -- ความแม่นตำแหน่งตอนวาง (%) ปรับได้ 90-100 (100 = ตรงเป๊ะ / ต่ำกว่า 90 ไม่ได้)
+    PLACE_ANYWHERE = false, -- วางไม่จำกัดพื้นที่: จุดแดงวางไม่ได้ -> กดสองรอบติด สคริปต์ยิง TowerAdd ด้วยตำแหน่งของ "รอบแรก" ให้เอง
     SAFE_CLICK = true,      -- มือถือ: ไม่จำลองเมาส์ตอนตัวละครกำลังเดิน (กันเดินไม่ได้หลังสคริปต์กดปุ่ม)
     HIDE_NAME = false,      -- ซ่อนชื่อตัวเอง (Name + DisplayName) ทุกที่ในเกม -> แสดงเป็น "ถูกซ่อน"
     NOOB_MODE = false,      -- ซ่อนตัวละคร: เปลี่ยนหน้าตาเป็น NOOB (ปิดแล้วคืนของเดิม)
@@ -212,7 +213,7 @@ local USER_KEYS = {
     "EAGER_ON", "START_DELAY", "AUTO_REPLAY", "REPLAY_WAIT", "AUTO_RESUME", "REQUIRE_VOTE_UI", "SNIFFER",
     "ANTI_AFK", "WEBHOOK_ON", "WEBHOOK_URL", "STOP_KEY", "AUTO_SKIP", "GAMESPEED_ON", "GAMESPEED_PICK",
     "WAVE_GATE", "ANTI_LAG", "PLACE_ACCURACY", "SAFE_CLICK", "GAME_NOTIF", "WALK_TO_PLACE",
-    "HIDE_NAME", "NOOB_MODE", "AUTO_SELECT_SUMMON", "SUMMON_WAVE_MAX",
+    "HIDE_NAME", "NOOB_MODE", "AUTO_SELECT_SUMMON", "SUMMON_WAVE_MAX", "PLACE_ANYWHERE",
 }
 -- ค่าที่ปรับได้เฉพาะบัญชีในรายชื่อ OWNER_NAMES (UI ของมันถูกซ่อน) คนนอกรายชื่อล็อกเป็นค่าเริ่มต้นเสมอ ไม่โหลดจากไฟล์
 local OWNER_ONLY_KEYS = { REQUIRE_VOTE_UI = true, SAFE_CLICK = true, SNIFFER = true, WALK_TO_PLACE = true }
@@ -1749,6 +1750,134 @@ function PLACE.offset(scale)
     local r = maxR * (0.4 + 0.6 * PLACE.rng:NextNumber())   -- เลื่อนอย่างน้อย 40% ของระยะสูงสุด ไม่เกินระยะสูงสุด
     local th = PLACE.rng:NextNumber() * math.pi * 2
     return math.cos(th) * r, math.sin(th) * r
+end
+
+-- =====================================================================
+--  วางไม่จำกัดพื้นที่ (CONFIG.PLACE_ANYWHERE)  ปรับตัวเลขได้ที่ตาราง ANY ด้านล่าง
+--  ตอนลากวางยูนิต เกมจะมีตัวอย่าง (ghost) อยู่ที่ workspace.Game.PlacingTowers["<ชื่อยูนิต>"]
+--    - Highlight ของมันสี 154,0,0 = จุดนั้นวางไม่ได้
+--    - เกมใช้ระบบ: กดรอบแรก = แค่ย้ายตำแหน่ง ยังไม่วาง | กดรอบสองติดกัน = วาง (ใช้ตำแหน่ง "รอบแรก")
+--  สคริปต์ทำ: กดรอบแรก -> รอ ghost นิ่งแล้วจดตำแหน่ง + สี | กดรอบสองติดกัน และจุดนั้นเป็นสีแดง
+--             -> ยิง TowerAdd เองด้วย CFrame/Pos ของรอบแรก (UnitId หาจาก Slot ของเรา)
+--  จุดที่ไม่แดง (วางได้ปกติ) สคริปต์ไม่ยุ่ง ให้เกมวางเอง
+-- =====================================================================
+do
+    local ANY = {
+        WINDOW = 0.7,    -- กดรอบสองต้องตามมาภายในกี่วินาที ถึงนับว่า "กดสองรอบติด"
+        SETTLE = 0.3,    -- รอให้ ghost ขยับตามที่กดรอบแรกเสร็จสูงสุดกี่วินาที
+        COOLDOWN = 0.4,  -- หลังยิงแล้วพักกี่วินาที (กันยิงซ้ำ)
+    }
+    local UIS = game:GetService("UserInputService")
+    local pending, lastFire = nil, -100
+
+    local function colorBad(c)   -- เทียบกับ Color3.fromRGB(154, 0, 0)
+        return typeof(c) == "Color3"
+            and math.abs(c.R * 255 - 154) < 1.5 and c.G * 255 < 1.5 and c.B * 255 < 1.5
+    end
+
+    local function findHighlight(g)
+        local h = g:FindFirstChild("Highlight")
+        if h then return h end
+        return g:FindFirstChildWhichIsA("Highlight", true)
+    end
+
+    -- จุดนี้วางไม่ได้ไหม (Highlight สีแดง 154,0,0) -- เช็กหลายชื่อ property เผื่อ Highlight ไม่ใช่คลาส Highlight ตรงๆ
+    local function ghostRed(g)
+        local h = findHighlight(g)
+        if not h then return false end
+        for _, prop in ipairs({ "FillColor", "OutlineColor", "Color", "Color3" }) do
+            local ok, v = pcall(function() return h[prop] end)
+            if ok and colorBad(v) then return true end
+        end
+        return false
+    end
+
+    local function ghostCFrame(g)
+        if g:IsA("Model") then return g:GetPivot() end
+        return g.CFrame
+    end
+
+    -- ghost ที่กำลังลากวางอยู่ (เลือกตัวที่ชื่อตรงกับ Slot ของเรา ถ้าไม่มีก็ตัวแรกที่มี Highlight)
+    local function currentGhost()
+        local gm = workspace:FindFirstChild("Game")
+        local folder = gm and gm:FindFirstChild("PlacingTowers")
+        if not folder then return nil end
+        local fallback
+        for _, g in ipairs(folder:GetChildren()) do
+            if (g:IsA("Model") or g:IsA("BasePart")) and findHighlight(g) then
+                if slotUnitId(g.Name) then return g end
+                fallback = fallback or g
+            end
+        end
+        return fallback
+    end
+
+    -- รอบแรก: รอ ghost นิ่ง (2 เฟรมติด) แล้วจดตำแหน่ง/ชื่อ/สีแดงหรือไม่
+    local function capture(first, ghost)
+        local t0, last, still = os.clock(), nil, 0
+        while alive and os.clock() - t0 < ANY.SETTLE do
+            RunService.Heartbeat:Wait()
+            if not ghost.Parent then return end
+            local pos = ghostCFrame(ghost).Position
+            if last and (pos - last).Magnitude < 0.01 then still = still + 1 else still = 0 end
+            last = pos
+            if os.clock() - t0 >= 0.06 and still >= 2 then break end
+        end
+        RunService.Heartbeat:Wait()   -- เผื่อสีอัปเดตช้ากว่าตำแหน่งหนึ่งเฟรม
+        if not ghost.Parent then return end
+        first.cf = ghostCFrame(ghost)
+        first.name = ghost.Name
+        first.red = ghostRed(ghost)
+        first.done = true
+    end
+
+    -- รอบสอง: ถ้าจุดรอบแรกเป็นสีแดง -> ยิง TowerAdd ด้วยตำแหน่งรอบแรก
+    local function placeFromFirst(first)
+        local t0 = os.clock()
+        while alive and not first.done and os.clock() - t0 < 0.5 do task.wait() end
+        if not (alive and CONFIG.PLACE_ANYWHERE and first.done and first.red and first.cf) then return end
+        if os.clock() - lastFire < ANY.COOLDOWN then return end
+
+        local id = slotUnitId(first.name)
+        if not id then
+            setStatus("วางไม่จำกัดพื้นที่: หา UnitId ของ " .. tostring(first.name) .. " ไม่เจอ", "warn", "x")
+            return
+        end
+        local cf = first.cf
+        local payload = { UnitId = id, CFrame = cf, Name = first.name, Pos = cf.Position }
+        lastFire = os.clock()
+        local ok, err = fire(towerAddRE, payload)
+        if not ok then
+            logf("วางไม่จำกัดพื้นที่: ยิง TowerAdd ไม่ได้: %s", tostring(err))
+            return
+        end
+        logf("วางไม่จำกัดพื้นที่: %s ที่ (%.1f, %.1f, %.1f)", tostring(first.name), cf.X, cf.Y, cf.Z)
+        -- กำลังบันทึกมาโครอยู่ -> ส่งเข้าคิวบันทึกเหมือนที่เกมวางเอง (fire() ปิด hook ไว้ จึงต้องส่งเอง)
+        if isRecording and not isPlaying and rec and rec.out then
+            rec.seq = rec.seq + 1
+            rec.out[#rec.out + 1] = { towerAddRE, table.pack(payload), rec.seq, os.clock() }
+        end
+    end
+
+    track(UIS.InputBegan:Connect(function(input)
+        if not alive or isPlaying then return end
+        if not CONFIG.PLACE_ANYWHERE or not towerAddRE then pending = nil return end
+        local ut = input.UserInputType
+        if ut ~= Enum.UserInputType.MouseButton1 and ut ~= Enum.UserInputType.Touch then return end
+        local ghost = currentGhost()
+        if not ghost then pending = nil return end
+
+        local now = os.clock()
+        if pending and now - pending.t <= ANY.WINDOW then
+            local first = pending
+            pending = nil            -- ใช้ผลของรอบแรกแล้ว รอบถัดไปนับเป็นรอบแรกใหม่
+            task.spawn(placeFromFirst, first)
+        else
+            local first = { t = now, done = false }
+            pending = first
+            task.spawn(capture, first, ghost)
+        end
+    end))
 end
 
 -- เดินไปใกล้ตำแหน่งวางก่อนวาง (สวิตช์ WALK_TO_PLACE ในส่วนที่ซ่อน)
@@ -3959,6 +4088,14 @@ if OWN.is then   -- สวิตช์นี้เห็นเฉพาะรา
     cfgToggle(sGen, "ทำงานเฉพาะตอนอยู่ในเกม", "REQUIRE_VOTE_UI", nil, "ปิดถ้าสคริปต์ตรวจไม่เจอว่าอยู่ในเกม")
 end
 cfgToggle(sGen, "ลองยิงตอนเงินใกล้ถึง", "EAGER_ON")
+
+-- กลุ่ม: วางไม่จำกัดพื้นที่
+do
+local sAny = tSet:Section({ Title = "วางไม่จำกัดพื้นที่", Desc = "จุดสีแดงวางไม่ได้ -> กดสองรอบติด สคริปต์วางให้ที่ตำแหน่งรอบแรก", Icon = "flag", Color = PT.Orange })
+cfgToggle(sAny, "วางตัวไม่จำกัดพื้นที่", "PLACE_ANYWHERE", function(v)
+    notify(v and "เปิดวางไม่จำกัดพื้นที่: ถ้าจุดเป็นสีแดง ให้กดสองรอบติด" or "ปิดวางไม่จำกัดพื้นที่แล้ว", v and PT.Good or PT.Warn)
+end, "ลากยูนิตไปจุดแดงแล้วแตะสองรอบติด (รอบแรกเลือกจุด รอบสองสั่งวาง)")
+end
 
 -- กลุ่ม 2: แจ้งเตือนของเกม (PlayerGui.GameUI.Notifications)
 do
