@@ -1759,6 +1759,7 @@ end
 --    - เกมใช้ระบบ: กดรอบแรก = แค่ย้ายตำแหน่ง ยังไม่วาง | กดรอบสองติดกัน = วาง (ใช้ตำแหน่ง "รอบแรก")
 --  สคริปต์ทำ: กดรอบแรก -> รอ ghost นิ่งแล้วจดตำแหน่ง + สี | กดรอบสองติดกัน และจุดนั้นเป็นสีแดง
 --             -> ยิง TowerAdd เองด้วย CFrame/Pos ของรอบแรก (UnitId หาจาก Slot ของเรา)
+--  วางเสร็จ -> สคริปต์กดคีย์ X ให้เองทันที (ไม่มีสวิตช์ ทำงานตามระบบวางไม่จำกัดพื้นที่) ไม่รบกวนการเล่นมือถือ
 --  จุดที่ไม่แดง (วางได้ปกติ) สคริปต์ไม่ยุ่ง ให้เกมวางเอง
 -- =====================================================================
 do
@@ -1831,6 +1832,31 @@ do
         first.done = true
     end
 
+    -- =====================================================================
+    --  วางเสร็จ -> กด X ให้เองทันที
+    --  เกมนี้ไม่มีปุ่ม X ใน GUI -> หลังสคริปต์ยิง TowerAdd เอง ghost ยังค้างอยู่ -> จำลอง "คีย์บอร์ด X" ให้
+    --  ใช้ VirtualInputManager:SendKeyEvent (คีย์บอร์ดเท่านั้น) ไม่แตะนิ้ว/จอยเดิน -> เล่นมือถือได้ปกติ
+    -- =====================================================================
+    local function pressKeyX()
+        if not VirtualInputManager then return false end
+        local ok = pcall(function()
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.X, false, game)
+            task.wait(0.05)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.X, false, game)
+        end)
+        return ok
+    end
+
+    local function closePlacing(ghostName)
+        for try = 1, 3 do
+            if not alive then return end
+            if not pressKeyX() then return end   -- กดคีย์ X ทันที ไม่ต้องรอ
+            logf("กด X ปิดโหมดวาง (%s) ครั้งที่ %d", tostring(ghostName), try)
+            task.wait(0.25)
+            if not currentGhost() then return end   -- โหมดวางปิดแล้ว จบเลย
+        end
+    end
+
     -- รอบสอง: ถ้าจุดรอบแรกเป็นสีแดง -> ยิง TowerAdd ด้วยตำแหน่งรอบแรก
     local function placeFromFirst(first)
         local t0 = os.clock()
@@ -1852,6 +1878,7 @@ do
             return
         end
         logf("วางไม่จำกัดพื้นที่: %s ที่ (%.1f, %.1f, %.1f)", tostring(first.name), cf.X, cf.Y, cf.Z)
+        task.spawn(closePlacing, first.name)   -- วางเสร็จ -> กด X ปิดโหมดวางให้เอง
         -- กำลังบันทึกมาโครอยู่ -> ส่งเข้าคิวบันทึกเหมือนที่เกมวางเอง (fire() ปิด hook ไว้ จึงต้องส่งเอง)
         if isRecording and not isPlaying and rec and rec.out then
             rec.seq = rec.seq + 1
@@ -4075,13 +4102,25 @@ end
 -- =====================================================================
 --  TAB 7 : Settings
 -- =====================================================================
+-- แท็บ Extras = ระบบเสริม (ฟังก์ชันที่ไม่ใช่ตั้งค่าหลัก) แยกออกจาก Settings
+ui.tExtra = win:AddTab({ Name = "Extras", Category = "System", Icon = "puzzle", Color = PT.Orange })
+do
+    local sMap = ui.tExtra:Section({ Title = "ระบบเสริม", Desc = "ฟังก์ชันพิเศษ เปิด/ปิดแยกจากตั้งค่าหลัก", Icon = "puzzle", Color = PT.Orange })
+    sMap:Label({ Text = "• วางไม่จำกัดพื้นที่\n• แจ้งเตือนของเกม\n• ความเป็นส่วนตัว (ซ่อนชื่อ/ตัวละคร)\n• Anti-AFK\n• ลดกระตุก\n• Discord Webhook", TextSize = 12, Color = PT.Text })
+end
+
 local tSet = win:AddTab({ Name = "Settings", Category = "System", Icon = "settings", Color = PT.Pink })
+do
+    local sWhere = tSet:Section({ Title = "ฟังก์ชันอยู่ตรงไหน", Desc = "Settings = ตั้งค่าหลักเท่านั้น", Icon = "map-pin", Color = PT.Blue })
+    sWhere:Label({ Text = "Macro: บันทึก / เล่น / สุ่มตำแหน่ง\nSaves / Editor: จัดการมาโคร\nAuto: PlayAgain / Resume / Skip / สุ่มตัว / ความเร็ว\nExtras: ระบบเสริม (วางไม่จำกัดพื้นที่, Anti-AFK, ลดกระตุก, ซ่อนชื่อ, Webhook)", TextSize = 12, Color = PT.Text })
+end
 
 if OWN.is then   -- Detection: เฉพาะ owner
     local sDet = tSet:Section({ Title = "Detection", Desc = "ตรวจว่าสคริปต์เห็น GUI/Remote ของเกมหรือยัง", Icon = "map-pin", Color = PT.Good })
     ui.detectLabel = sDet:Label({ Text = "—", TextSize = 12, Color = PT.Text })
 end
 
+-- Settings = ตั้งค่าหลักเท่านั้น | ระบบเสริมทั้งหมดอยู่แท็บ Extras
 -- กลุ่ม 1: การทำงานของสคริปต์
 local sGen = tSet:Section({ Title = "การทำงานของสคริปต์", Desc = "เงื่อนไขตอนเริ่มทำงาน / ตอนเล่นมาโคร", Icon = "settings", Color = PT.Blue })
 if OWN.is then   -- สวิตช์นี้เห็นเฉพาะรายชื่อ OWNER_NAMES (คนอื่นใช้ค่าเริ่มต้น = เปิดเสมอ)
@@ -4091,15 +4130,15 @@ cfgToggle(sGen, "ลองยิงตอนเงินใกล้ถึง", 
 
 -- กลุ่ม: วางไม่จำกัดพื้นที่
 do
-local sAny = tSet:Section({ Title = "วางไม่จำกัดพื้นที่", Desc = "จุดสีแดงวางไม่ได้ -> กดสองรอบติด สคริปต์วางให้ที่ตำแหน่งรอบแรก", Icon = "flag", Color = PT.Orange })
+local sAny = ui.tExtra:Section({ Title = "วางไม่จำกัดพื้นที่", Desc = "", Icon = "flag", Color = PT.Orange })
 cfgToggle(sAny, "วางตัวไม่จำกัดพื้นที่", "PLACE_ANYWHERE", function(v)
-    notify(v and "เปิดวางไม่จำกัดพื้นที่: ถ้าจุดเป็นสีแดง ให้กดสองรอบติด" or "ปิดวางไม่จำกัดพื้นที่แล้ว", v and PT.Good or PT.Warn)
-end, "ลากยูนิตไปจุดแดงแล้วแตะสองรอบติด (รอบแรกเลือกจุด รอบสองสั่งวาง)")
+    notify(v and "เปิดวางไม่จำกัดพื้นที่" or "ปิดวางไม่จำกัดพื้นที่แล้ว", v and PT.Good or PT.Warn)
+end)
 end
 
 -- กลุ่ม 2: แจ้งเตือนของเกม (PlayerGui.GameUI.Notifications)
 do
-local sNotif = tSet:Section({ Title = "แจ้งเตือนของเกม", Desc = "เปิด/ปิดแจ้งเตือนที่เกมแสดงบนหน้าจอ (GameUI.Notifications)", Icon = "layout-list", Color = PT.Cyan })
+local sNotif = ui.tExtra:Section({ Title = "แจ้งเตือนของเกม", Desc = "เปิด/ปิดแจ้งเตือนที่เกมแสดงบนหน้าจอ (GameUI.Notifications)", Icon = "layout-list", Color = PT.Cyan })
 cfgToggle(sNotif, "แสดงแจ้งเตือนของเกม", "GAME_NOTIF", function(v)
     LAG.notifApply()
     if not gameUI("Notifications") then
@@ -4110,7 +4149,7 @@ end
 
 -- กลุ่ม: ความเป็นส่วนตัว (เห็นทุกคน)
 do
-local sPriv = tSet:Section({ Title = "ความเป็นส่วนตัว", Desc = "ซ่อนชื่อและหน้าตาของตัวเอง (เห็นเฉพาะในเครื่องเรา)", Icon = "shield-check", Color = PT.Pink })
+local sPriv = ui.tExtra:Section({ Title = "ความเป็นส่วนตัว", Desc = "ซ่อนชื่อและหน้าตาของตัวเอง (เห็นเฉพาะในเครื่องเรา)", Icon = "shield-check", Color = PT.Pink })
 cfgToggle(sPriv, "ซ่อนชื่อตัวเอง", "HIDE_NAME", function(v)
     LAG.priv.nameSet(v)
 end)
@@ -4123,7 +4162,7 @@ end
 
 -- กลุ่ม 3: Anti-AFK
 do
-local sAfk = tSet:Section({ Title = "Anti-AFK", Desc = "กันถูกเตะเมื่อไม่ได้ขยับ", Icon = "shield-check", Color = PT.Good })
+local sAfk = ui.tExtra:Section({ Title = "Anti-AFK", Desc = "กันถูกเตะเมื่อไม่ได้ขยับ", Icon = "shield-check", Color = PT.Good })
 cfgToggle(sAfk, "เปิด Anti-AFK", "ANTI_AFK")
 end
 
@@ -4134,7 +4173,7 @@ cfgToggle(sClick, "กันเดินไม่ได้ (มือถือ)"
 cfgToggle(sClick, "เดินไปที่จุดวางก่อนวาง", "WALK_TO_PLACE")
 end
 
-local sLag = tSet:Section({ Title = "ลดกระตุก", Desc = "ย้ายของที่ไม่จำเป็นออกจากฉากชั่วคราว (ไม่ได้ลบจริง ปิดแล้วเอากลับที่เดิม)", Icon = "gauge", Color = PT.Good })
+local sLag = ui.tExtra:Section({ Title = "ลดกระตุก", Desc = "ย้ายของที่ไม่จำเป็นออกจากฉากชั่วคราว (ไม่ได้ลบจริง ปิดแล้วเอากลับที่เดิม)", Icon = "gauge", Color = PT.Good })
 cfgToggle(sLag, "โหมดลดกระตุก", "ANTI_LAG", function(v)
     setAntiLag(v)
 end)
@@ -4146,7 +4185,7 @@ if CONFIG.ANTI_LAG then
     end)
 end
 
-local sHook = tSet:Section({ Title = "Discord Webhook", Desc = "ส่งแจ้งเตือนเข้า Discord", Icon = "send", Color = PT.Purple, Collapsible = true, Collapsed = true })
+local sHook = ui.tExtra:Section({ Title = "Discord Webhook", Desc = "ส่งแจ้งเตือนเข้า Discord", Icon = "send", Color = PT.Purple, Collapsible = true, Collapsed = true })
 cfgToggle(sHook, "ส่งแจ้งเตือนเข้า Discord", "WEBHOOK_ON")
 ui.urlBox = sHook:Input({
     Title = "Webhook URL", Default = CONFIG.WEBHOOK_URL, Placeholder = "https://discord.com/api/webhooks/...",
