@@ -1343,7 +1343,7 @@ local function registerPlaced(action, tc)
             action.tid = action.tid or id
             logf("ยูนิต %s -> Id %s (จาก %s)", tostring(action.name), tostring(id), tostring(src))
         else
-            logf("⚠️ จับ Id ของ %s ไม่ได้ (ดู Log / Settings > Detection)", tostring(action.name))
+            logf("⚠️ จับ Id ของ %s ไม่ได้ (ดู Log / Settings > สถานะระบบ)", tostring(action.name))
         end
         rec.ticketServing = my
         rec.pending = rec.pending - 1
@@ -1847,11 +1847,35 @@ do
         return ok
     end
 
+    -- ระบบมือถือ: PlayerGui.GameUI.UserInputUI.Mobile.ButtonX (ใช้เมื่อ Mobile เปิดอยู่)
+    local function mobileButtonX()
+        local g = playerGui:FindFirstChild("GameUI")
+        local inp = g and g:FindFirstChild("UserInputUI")
+        local mob = inp and inp:FindFirstChild("Mobile")
+        local btn = mob and mob:FindFirstChild("ButtonX")
+        if btn and guiVisible(mob) and guiVisible(btn) then return btn end
+        return nil
+    end
+
+    local function pressMobileX(btn)
+        local b = clickable(btn)
+        if clickButton(b) then return true end   -- สั่งปุ่มตรงๆ ไม่แตะนิ้ว
+        return mouseClick(b)                      -- สำรอง (ไม่ทำตอนตัวละครกำลังเดินบนมือถือ)
+    end
+
     local function closePlacing(ghostName)
         for try = 1, 3 do
             if not alive then return end
-            if not pressKeyX() then return end   -- กดคีย์ X ทันที ไม่ต้องรอ
-            logf("กด X ปิดโหมดวาง (%s) ครั้งที่ %d", tostring(ghostName), try)
+            local mb = mobileButtonX()
+            local ok
+            if mb then
+                ok = pressMobileX(mb)            -- ระบบ 1: Mobile เปิดอยู่ -> กดปุ่ม ButtonX
+                if not ok then ok = pressKeyX() end
+            else
+                ok = pressKeyX()                 -- ระบบ 2: คีย์บอร์ด X
+            end
+            if not ok then return end
+            logf("กด X ปิดโหมดวาง (%s) ครั้งที่ %d [%s]", tostring(ghostName), try, mb and "มือถือ" or "คีย์บอร์ด")
             task.wait(0.25)
             if not currentGhost() then return end   -- โหมดวางปิดแล้ว จบเลย
         end
@@ -3177,6 +3201,83 @@ end
 local PT = PEX.Theme
 local new = PEX.New
 
+-- =====================================================================
+--  ตารางข้อความ: แก้ข้อความบนหน้าต่างทั้งหมดได้ที่นี่ที่เดียว (แก้แค่ข้อความในเครื่องหมาย "")
+-- =====================================================================
+ui.T = {
+    -- ชื่อแท็บ
+    tabMacro = "Macro", tabSaves = "Saves", tabEditor = "Editor", tabAuto = "Auto",
+    tabStats = "Stats", tabLog = "Log", tabExtras = "Extras", tabSettings = "Settings",
+
+    -- แท็บ Macro
+    recTitle = "Recording", recDesc = "บันทึกการวางและอัปเกรด",
+    recStart = "เริ่มบันทึก", recStop = "หยุดบันทึก",
+    nameTitle = "ชื่อบันทึก", namePlaceholder = "ว่าง = ตั้งชื่อให้เอง",
+    playTitle = "Playback", playDesc = "เล่นมาโครที่โหลดไว้",
+    loops = "จำนวนรอบ (1-", playRounds = "เล่นตามรอบ", playForever = "เล่นวนตลอด", stopAll = "หยุดทั้งหมด",
+    randTitle = "สุ่มตำแหน่ง", randDesc = "ขยับตำแหน่งวางนิดหน่อย",
+    accTitle = "ความแม่นยำตำแหน่ง", accExact = "วางตรงจุดเป๊ะ",
+    accFmt = "ความแม่นยำ %d%% (ขยับไม่เกิน ~%.2f Studs)",
+
+    -- แท็บ Saves
+    savesTitle = "Saved macros", savesDesc = "แตะชื่อเพื่อโหลด", savesList = "ไฟล์บันทึก",
+    savesRefresh = "รีเฟรช", savesDelete = "ลบที่เลือก",
+
+    -- แท็บ Editor
+    editTitle = "แก้ไขมาโคร", editDesc = "เปลี่ยนชื่อ / แก้ราคา / ลบแถว",
+    renameTitle = "ชื่อใหม่", renamePlaceholder = "พิมพ์ชื่อใหม่", renameBtn = "เปลี่ยนชื่อ",
+    waveGate = "รอเวฟตามที่ตั้ง", waveGateDesc = "ใส่เลขเวฟที่ช่องเวฟของแต่ละแถว",
+    waveTest = "ทดสอบอ่านเวฟ",
+    rowsTitle = "รายการที่บันทึก", rowsDesc = "แตะแถวเพื่อเลือก", rowsList = "รายการ",
+    rowsSave = "บันทึกการแก้ไข", rowsResetCost = "รีเซ็ตราคา",
+    rowsHelp = "แตะเลือกแถว แล้วใช้ปุ่มด้านล่างจัดการ | ช่องซ้าย = เวฟ | ช่องขวา = ราคา | ✕ = ลบ | แก้เสร็จกดบันทึก",
+    moveTitle = "จัดลำดับ", moveDesc = "เลื่อน ทำซ้ำ เพิ่มอัปเกรด/ขาย",
+    moveUp = "ขึ้น", moveDown = "ลง", moveCopy = "ซ้ำ",
+    addUpgrade = "เพิ่มอัปเกรด (ต่อท้ายแถวที่เลือก)", addSell = "เพิ่มขาย (ต่อท้ายแถวที่เลือก)",
+    targetTitle = "เปลี่ยนยูนิตเป้าหมาย (# ของแถววาง)", targetPlaceholder = "เลือกแถวอัปเกรด/ขายก่อน",
+
+    -- แท็บ Auto
+    replayTitle = "Auto PlayAgain", replayDesc = "เกมจบกด PlayAgain ให้",
+    replayToggle = "กด PlayAgain ออโต้", replayWait = "รอหลังกด PlayAgain", startDelay = "รอก่อนเริ่มวาง",
+    replayTest = "ทดสอบกด PlayAgain",
+    resumeTitle = "Auto Resume", resumeDesc = "เล่นต่อหลังย้ายเซิร์ฟ",
+    resumeToggle = "เล่นต่อหลังย้ายเซิร์ฟ", resumeToggleDesc = "ต้องใส่สคริปต์ใน autoexec",
+    skipTitle = "Auto Skip", skipDesc = "เปิด Auto Skip ให้", skipToggle = "เปิด Auto Skip ออโต้",
+    sumTitle = "Auto สุ่มตัว", sumDesc = "ตู้รีเซ็ตแล้วกลับลอบบี้ไปสุ่มตัว", sumToggle = "ออโต้สุ่มตัว",
+    speedTitle = "Game Speed", speedDesc = "ล็อกความเร็วเกม", speedToggle = "ล็อกความเร็ว", speedList = "ความเร็วเกม",
+
+    -- แท็บ Stats / Log
+    statsTitle = "Session", statsDesc = "สถิติรอบนี้", statsReset = "รีเซ็ตสถิติ",
+    logTitle = "Log", logDesc = "บันทึกการทำงาน", logCopy = "คัดลอกทั้งหมด", logClear = "ล้าง",
+
+    -- แท็บ Extras (ระบบเสริม)
+    extrasTitle = "ระบบเสริม", extrasDesc = "ของเสริม เปิด/ปิดได้",
+    extrasList = "• วางไม่จำกัดพื้นที่\n• แจ้งเตือนเกม\n• ความเป็นส่วนตัว\n• Anti-AFK\n• ลดกระตุก\n• Discord Webhook",
+    anyTitle = "วางไม่จำกัดพื้นที่", anyDesc = "วางได้ทุกจุด", anyToggle = "วางไม่จำกัดพื้นที่",
+    anyOn = "เปิดวางไม่จำกัดพื้นที่", anyOff = "ปิดวางไม่จำกัดพื้นที่แล้ว",
+    notifTitle = "แจ้งเตือนเกม", notifDesc = "เปิด/ปิดแจ้งเตือนในเกม", notifToggle = "แสดงแจ้งเตือนเกม",
+    privTitle = "ความเป็นส่วนตัว", privDesc = "ซ่อนชื่อและตัวละครของเรา",
+    hideName = "ซ่อนชื่อ", hideChar = "ซ่อนตัวละคร",
+    afkTitle = "Anti-AFK", afkDesc = "กันหลุดตอนไม่ขยับ", afkToggle = "เปิด Anti-AFK",
+    lagTitle = "ลดกระตุก", lagDesc = "ลดของในฉากให้เกมลื่นขึ้น", lagToggle = "เปิดลดกระตุก",
+    hookTitle = "Discord Webhook", hookDesc = "ส่งสรุปเข้า Discord", hookToggle = "ส่งเข้า Discord",
+    hookClear = "ล้างลิงก์", hookReset = "รีเซ็ตยอด", hookTest = "ส่งทดสอบ",
+
+    -- แท็บ Settings
+    whereTitle = "ตำแหน่งฟังก์ชัน", whereDesc = "ดูว่าอะไรอยู่แท็บไหน",
+    whereText = "Macro: บันทึก / เล่น / สุ่มตำแหน่ง\nSaves, Editor: จัดการมาโคร\nAuto: ระบบออโต้\nExtras: ระบบเสริม\nSettings: ตั้งค่าหลัก",
+    detTitle = "สถานะระบบ", detDesc = "ดูว่าสคริปต์ทำงานครบไหม",
+    genTitle = "ทั่วไป", genDesc = "ตั้งค่าหลัก",
+    onlyInGame = "ทำงานเฉพาะในเกม", onlyInGameDesc = "ปิดถ้าสคริปต์คิดว่าไม่ได้อยู่ในเกม",
+    eager = "ลองซื้อก่อนเงินครบ",
+    clickTitle = "การกดปุ่ม", clickDesc = "ตั้งค่าตอนสคริปต์กดปุ่ม",
+    safeClick = "กันจอยค้าง (มือถือ)", walkToPlace = "เดินไปจุดวางก่อน",
+    devTitle = "Developer", devDesc = "เครื่องมือดีบัก", sniff = "จด Log remote",
+    uiTitle = "หน้าต่าง", uiDesc = "ตั้งค่าหน้าต่าง Pex Hub",
+    stopKey = "ปุ่มลัดหยุดทั้งหมด", stopKeyDesc = "กดเพื่อหยุดทันที (Backspace = ล้างค่า)",
+    resetPos = "รีเซ็ตตำแหน่งหน้าต่าง", noFile = "อุปกรณ์นี้เซฟไฟล์ไม่ได้",
+}
+
 local win = PEX:CreateWindow({
     Title = "Pex Hub",
     Subtitle = "Tower Macro",
@@ -3248,16 +3349,16 @@ end
 -- =====================================================================
 --  TAB 1 : Macro
 -- =====================================================================
-local tMacro = win:AddTab({ Name = "Macro", Category = "Macro", Icon = "video", Color = PT.Accent })
+local tMacro = win:AddTab({ Name = ui.T.tabMacro, Category = "Macro", Icon = "video", Color = PT.Accent })
 
 local sRec = tMacro:Section({
-    Title = "Recording", Desc = "เริ่มบันทึกได้ตอนหน้าโหวตโหมดเปิดอยู่เท่านั้น",
+    Title = ui.T.recTitle, Desc = ui.T.recDesc,
     Icon = "circle-dot", Color = PT.Bad,
 })
 ui.loadedLabel = sRec:Label({ Text = "Loaded: —" })
 ui.voteLabel = sRec:Label({ Text = "โหวตโหมด: —" })
 ui.recordBtn = sRec:Action({
-    Text = "เริ่มบันทึก", Icon = "circle-dot", Color = PT.Bad,
+    Text = ui.T.recStart, Icon = "circle-dot", Color = PT.Bad,
     Callback = function()
         dbg("กดปุ่มบันทึก | บันทึกอยู่=%s เล่นอยู่=%s ในเกม=%s หน้าโหวตเปิด=%s", tostring(isRecording),
             tostring(isPlaying), tostring(inGame()), tostring(votingOpen()))
@@ -3270,36 +3371,36 @@ ui.recordBtn = sRec:Action({
         ui.refreshAll()
     end,
 })
-ui.nameBox = sRec:Input({ Title = "ชื่อบันทึก", Placeholder = "ว่าง = ตั้งอัตโนมัติ" })
+ui.nameBox = sRec:Input({ Title = ui.T.nameTitle, Placeholder = ui.T.namePlaceholder })
 
-local sPlay = tMacro:Section({ Title = "Playback", Desc = "เล่นมาโครที่โหลดไว้", Icon = "play", Color = PT.Good })
+local sPlay = tMacro:Section({ Title = ui.T.playTitle, Desc = ui.T.playDesc, Icon = "play", Color = PT.Good })
 ui.phaseLabel = sPlay:Label({ Text = "สถานะ: ว่าง", Color = PT.Text })
 ui.loopBox = sPlay:Input({
-    Title = "จำนวนรอบ (1-" .. MAX_LOOPS .. ")", Default = "1", Placeholder = "1", Width = 110,
+    Title = ui.T.loops .. MAX_LOOPS .. ")", Default = "1", Placeholder = "1", Width = 110,
     Callback = function(box) box.Text = tostring(getLoopCount()) end,
 })
 sPlay:Actions({
-    { Text = "เล่นตามรอบ", Icon = "play", Color = PT.Good, Callback = function() runLoops(getLoopCount()) end },
-    { Text = "เล่นวนตลอด", Icon = "infinity", Color = PT.Blue, Callback = function() runLoops(math.huge) end },
+    { Text = ui.T.playRounds, Icon = "play", Color = PT.Good, Callback = function() runLoops(getLoopCount()) end },
+    { Text = ui.T.playForever, Icon = "infinity", Color = PT.Blue, Callback = function() runLoops(math.huge) end },
 })
-sPlay:Action({ Text = "หยุดทั้งหมด", Icon = "square", Color = PT.Elem, Callback = function() stopAll() end })
+sPlay:Action({ Text = ui.T.stopAll, Icon = "square", Color = PT.Elem, Callback = function() stopAll() end })
 
 do
 local sPlace = tMacro:Section({
-    Title = "สุ่มตำแหน่งป้องกันการตรวจจับ", 
-    Desc = "สุ่มเบี่ยงเบนพิกัด X/Z เล็กน้อยขณะวาง เพื่อป้องกันระบบตรวจจับ | ความแม่นยำขั้นต่ำ 90%",
+    Title = ui.T.randTitle,
+    Desc = ui.T.randDesc,
     Icon = "map-pin", 
     Color = PT.Cyan,
 })
 local function placeAccText(v)
     v = math.clamp(tonumber(v) or 100, PLACE.MIN, 100)
     local r = (100 - v) / 100 * PLACE.STUDS
-    if r <= 0 then return "วางตำแหน่งตรงตามปกติ" end
-    return string.format("ความแม่นยำ %d%% (ค่าความคลาดเคลื่อนไม่เกิน ~%.2f Studs)", math.floor(v + 0.5), r)
+    if r <= 0 then return ui.T.accExact end
+    return string.format(ui.T.accFmt, math.floor(v + 0.5), r)
 end
 ui.placeAccLabel = sPlace:Label({ Text = placeAccText(CONFIG.PLACE_ACCURACY), Color = PT.Text })
 sPlace:Slider({
-    Title = "ความแม่นยำในการวางตำแหน่ง", 
+    Title = ui.T.accTitle,
     Min = PLACE.MIN, 
     Max = 100, 
     Step = 1, 
@@ -3314,7 +3415,7 @@ sPlace:Slider({
 end
 
 ui.setRecordUI = function(on)
-    ui.recordBtn:SetText(on and "หยุดบันทึก" or "เริ่มบันทึก")
+    ui.recordBtn:SetText(on and ui.T.recStop or ui.T.recStart)
     ui.recordBtn:SetColor(on and PT.Warn or PT.Bad)
     ui.recordBtn:SetIcon(on and "square" or "circle-dot")
 end
@@ -3336,9 +3437,9 @@ end
 -- =====================================================================
 --  TAB 2 : Saves
 -- =====================================================================
-local tSaves = win:AddTab({ Name = "Saves", Category = "Macro", Icon = "save", Color = PT.Blue })
-local sSaves = tSaves:Section({ Title = "Saved macros", Desc = "แตะชื่อเพื่อโหลดมาเล่น/แก้ไข", Icon = "folder-open", Color = PT.Blue })
-ui.saveList = sSaves:List({ Height = 170, Title = "ไฟล์บันทึก" })
+local tSaves = win:AddTab({ Name = ui.T.tabSaves, Category = "Macro", Icon = "save", Color = PT.Blue })
+local sSaves = tSaves:Section({ Title = ui.T.savesTitle, Desc = ui.T.savesDesc, Icon = "folder-open", Color = PT.Blue })
+ui.saveList = sSaves:List({ Height = 170, Title = ui.T.savesList })
 
 ui.doDelete = function(name)
     local ok = canFile and pcall(delfile, pathOf(name))
@@ -3356,9 +3457,9 @@ ui.doDelete = function(name)
 end
 
 sSaves:Actions({
-    { Text = "รีเฟรช", Icon = "refresh-cw", Color = PT.Elem, Callback = function() ui.refreshAll() end },
+    { Text = ui.T.savesRefresh, Icon = "refresh-cw", Color = PT.Elem, Callback = function() ui.refreshAll() end },
     {
-        Text = "ลบที่เลือก", Icon = "trash-2", Color = PT.Bad,
+        Text = ui.T.savesDelete, Icon = "trash-2", Color = PT.Bad,
         Callback = function()
             if isPlaying or isRecording then setStatus("หยุดก่อนจึงจะลบได้", "warn") return end
             if not selectedName then setStatus("ยังไม่ได้เลือกบันทึก", "warn") return end
@@ -3407,12 +3508,12 @@ end
 -- =====================================================================
 --  TAB 3 : Editor
 -- =====================================================================
-local tEdit = win:AddTab({ Name = "Editor", Category = "Macro", Icon = "pencil-ruler", Color = PT.Purple })
-local sEdit = tEdit:Section({ Title = "แก้ไขบันทึกที่โหลดอยู่", Desc = "เปลี่ยนชื่อ / แก้ราคา / ลบแถว", Icon = "pencil-ruler", Color = PT.Purple })
+local tEdit = win:AddTab({ Name = ui.T.tabEditor, Category = "Macro", Icon = "pencil-ruler", Color = PT.Purple })
+local sEdit = tEdit:Section({ Title = ui.T.editTitle, Desc = ui.T.editDesc, Icon = "pencil-ruler", Color = PT.Purple })
 ui.editInfo = sEdit:Label({ Text = "ยังไม่ได้โหลดบันทึก" })
-ui.renameBox = sEdit:Input({ Title = "ชื่อใหม่", Placeholder = "พิมพ์ชื่อแล้วกดเปลี่ยน" })
+ui.renameBox = sEdit:Input({ Title = ui.T.renameTitle, Placeholder = ui.T.renamePlaceholder })
 sEdit:Action({
-    Text = "เปลี่ยนชื่อบันทึก", Icon = "pencil", Color = PT.Blue,
+    Text = ui.T.renameBtn, Icon = "pencil", Color = PT.Blue,
     Callback = function()
         if isPlaying or isRecording then setStatus("หยุดก่อนจึงจะเปลี่ยนชื่อได้", "warn") return end
         if not selectedName or not canFile then notify("ยังไม่ได้เลือกบันทึก", PT.Warn) return end
@@ -3430,9 +3531,9 @@ sEdit:Action({
         end
     end,
 })
-cfgToggle(sEdit, "รอเวฟตามที่กำหนดตอนเล่น", "WAVE_GATE", nil, "ช่อง \"เวฟ\" ของแต่ละแถว: ใส่เลขเวฟที่ต้องการ (ว่าง/0 = ไม่รอเวฟ)")
+cfgToggle(sEdit, ui.T.waveGate, "WAVE_GATE", nil, ui.T.waveGateDesc)
 sEdit:Action({
-    Text = "ทดสอบอ่านเวฟ", Icon = "flask-conical", Color = PT.Blue,
+    Text = ui.T.waveTest, Icon = "flask-conical", Color = PT.Blue,
     Callback = function()
         local n, raw = getWave()
         if n then
@@ -3443,12 +3544,12 @@ sEdit:Action({
     end,
 })
 
-local sRows = tEdit:Section({ Title = "แอคชันที่บันทึก", Desc = "แตะแถวเพื่อเลือก", Icon = "layout-list", Color = PT.Cyan })
-ui.editListObj = sRows:List({ Height = 200, Title = "แอคชัน" })
+local sRows = tEdit:Section({ Title = ui.T.rowsTitle, Desc = ui.T.rowsDesc, Icon = "layout-list", Color = PT.Cyan })
+ui.editListObj = sRows:List({ Height = 200, Title = ui.T.rowsList })
 ui.editList = ui.editListObj.Frame
 sRows:Actions({
     {
-        Text = "บันทึกการแก้ไข", Icon = "save", Color = PT.Good,
+        Text = ui.T.rowsSave, Icon = "save", Color = PT.Good,
         Callback = function()
             if not selectedName then notify("ยังไม่ได้เลือกบันทึก", PT.Warn) return end
             local ok = saveMacro(selectedName, recordedActions, macroMeta)
@@ -3457,7 +3558,7 @@ sRows:Actions({
         end,
     },
     {
-        Text = "รีเซ็ตราคา", Icon = "eraser", Color = PT.Warn,
+        Text = ui.T.rowsResetCost, Icon = "eraser", Color = PT.Warn,
         Callback = function()
             for _, a in ipairs(recordedActions) do a.costExact = false end
             macroDirty = true
@@ -3465,9 +3566,9 @@ sRows:Actions({
         end,
     },
 })
-sRows:Label({ Text = "แตะแถวเพื่อเลือก แล้วใช้ปุ่มด้านล่างเลื่อน/ซ้ำ/แซกอัปเกรด/แซกขาย | ช่องซ้าย = เวฟที่จะทำ (ว่าง = ไม่รอเวฟ) | ช่องขวา = ราคา (แก้แล้วล็อก ✓ และปรับยูนิตชื่อเดียวกันตาม) | ✕ ลบ | แก้เสร็จกด \"บันทึกการแก้ไข\"" })
+sRows:Label({ Text = ui.T.rowsHelp })
 
-local sMove = tEdit:Section({ Title = "ปรับลำดับ / แซกแอคชัน", Desc = "เลื่อน ทำซ้ำ หรือเพิ่มอัปเกรด", Icon = "arrow-up-down", Color = PT.Orange })
+local sMove = tEdit:Section({ Title = ui.T.moveTitle, Desc = ui.T.moveDesc, Icon = "arrow-up-down", Color = PT.Orange })
 do
     local function editBlocked()
         if isPlaying or isRecording then
@@ -3509,7 +3610,7 @@ do
 
     sMove:Actions({
         {
-            Text = "ขึ้น", Icon = "arrow-up", Color = PT.Blue,
+            Text = ui.T.moveUp, Icon = "arrow-up", Color = PT.Blue,
             Callback = function()
                 if editBlocked() then return end
                 if not ui.editSel then notify("แตะเลือกแถวก่อน", PT.Warn) return end
@@ -3518,7 +3619,7 @@ do
             end,
         },
         {
-            Text = "ลง", Icon = "arrow-down", Color = PT.Blue,
+            Text = ui.T.moveDown, Icon = "arrow-down", Color = PT.Blue,
             Callback = function()
                 if editBlocked() then return end
                 if not ui.editSel then notify("แตะเลือกแถวก่อน", PT.Warn) return end
@@ -3527,7 +3628,7 @@ do
             end,
         },
         {
-            Text = "ซ้ำ", Icon = "copy", Color = PT.Elem,
+            Text = ui.T.moveCopy, Icon = "copy", Color = PT.Elem,
             Callback = function()
                 if editBlocked() then return end
                 local a = ui.editSel and recordedActions[ui.editSel]
@@ -3546,7 +3647,7 @@ do
     })
 
     sMove:Action({
-        Text = "แซกอัปเกรดยูนิตนี้ (ต่อท้ายแถวที่เลือก)", Icon = "plus", Color = PT.Good,
+        Text = ui.T.addUpgrade, Icon = "plus", Color = PT.Good,
         Callback = function()
             if editBlocked() then return end
             local sel = ui.editSel
@@ -3577,7 +3678,7 @@ do
 
     -- แซกแอคชัน "ขาย" ยูนิตของแถวที่เลือก (ใช้ Id เดียวกับตอนวาง) แล้วตั้งเวฟได้ที่ช่องเวฟของแถว
     sMove:Action({
-        Text = "แซกขายยูนิตนี้ (ต่อท้ายแถวที่เลือก)", Icon = "badge-dollar-sign", Color = PT.Bad,
+        Text = ui.T.addSell, Icon = "badge-dollar-sign", Color = PT.Bad,
         Callback = function()
             if editBlocked() then return end
             local sel = ui.editSel
@@ -3602,7 +3703,7 @@ do
     })
 
     ui.targetBox = sMove:Input({
-        Title = "เป้าหมายอัปเกรด/ขาย (# ของ Place)", Placeholder = "เลือกแถวอัปเกรดหรือขายก่อน",
+        Title = ui.T.targetTitle, Placeholder = ui.T.targetPlaceholder,
         Callback = function(box)
             if editBlocked() then box.Text = "" return end
             local n = tonumber(box.Text)
@@ -3793,14 +3894,14 @@ end
 -- =====================================================================
 --  TAB 4 : Auto  (PlayAgain / ย้ายเซิร์ฟ / AutoSkip)
 -- =====================================================================
-local tAuto = win:AddTab({ Name = "Auto", Category = "Automation", Icon = "repeat", Color = PT.Good })
+local tAuto = win:AddTab({ Name = ui.T.tabAuto, Category = "Automation", Icon = "repeat", Color = PT.Good })
 
-local sReplay = tAuto:Section({ Title = "Auto PlayAgain", Desc = "เมื่อเกมจบ กด PlayAgain ให้อัตโนมัติ", Icon = "repeat", Color = PT.Good })
-cfgToggle(sReplay, "กด PlayAgain อัตโนมัติ", "AUTO_REPLAY")
-ui.numSlider(sReplay, "รอหลังกด PlayAgain (เกมนับถอยหลัง ~5 วิ)", "REPLAY_WAIT", 5, 20, 0.5, " วิ")
-ui.numSlider(sReplay, "หน่วงก่อนเริ่มวาง", "START_DELAY", 0, 30, 0.5, " วิ")
+local sReplay = tAuto:Section({ Title = ui.T.replayTitle, Desc = ui.T.replayDesc, Icon = "repeat", Color = PT.Good })
+cfgToggle(sReplay, ui.T.replayToggle, "AUTO_REPLAY")
+ui.numSlider(sReplay, ui.T.replayWait, "REPLAY_WAIT", 5, 20, 0.5, " วิ")
+ui.numSlider(sReplay, ui.T.startDelay, "START_DELAY", 0, 30, 0.5, " วิ")
 sReplay:Action({
-    Text = "ทดสอบกด PlayAgain ตอนนี้", Icon = "flask-conical", Color = PT.Blue,
+    Text = ui.T.replayTest, Icon = "flask-conical", Color = PT.Blue,
     Callback = function()
         if not isGameOver() then notify("ยังไม่อยู่หน้าจบเกม", PT.Warn) return end
         local btn = gameUI("FinalUI", "Content", "PlayAgain")
@@ -3813,16 +3914,16 @@ sReplay:Action({
 })
 
 do
-local sResume = tAuto:Section({ Title = "Auto Resume", Desc = "เล่นต่อเองหลังเกมย้ายเซิร์ฟ", Icon = "refresh-cw", Color = PT.Purple })
-cfgToggle(sResume, "เล่นต่ออัตโนมัติหลังย้ายเซิร์ฟ", "AUTO_RESUME", function(v)
+local sResume = tAuto:Section({ Title = ui.T.resumeTitle, Desc = ui.T.resumeDesc, Icon = "refresh-cw", Color = PT.Purple })
+cfgToggle(sResume, ui.T.resumeToggle, "AUTO_RESUME", function(v)
     if v then ui.queueInfo = setupQueue() end
     if ui.resumeLabel then ui.resumeLabel.Text = "ย้ายเซิร์ฟ: " .. tostring(ui.queueInfo) end
-end, "PlayAgain แล้วเกมย้ายเซิร์ฟ สคริปต์ต้องรันใหม่เอง (ต้องวางสคริปต์ใน autoexec)")
+end, ui.T.resumeToggleDesc)
 ui.resumeLabel = sResume:Label({ Text = "ย้ายเซิร์ฟ: —", Color = PT.Text })
 end
 
-local sSkip = tAuto:Section({ Title = "Auto Skip Wave", Desc = "ให้สคริปต์เปิด Auto Skip ให้อัตโนมัติ", Icon = "play", Color = PT.Blue })
-cfgToggle(sSkip, "เปิด Auto Skip ให้อัตโนมัติ", "AUTO_SKIP", function(v)
+local sSkip = tAuto:Section({ Title = ui.T.skipTitle, Desc = ui.T.skipDesc, Icon = "play", Color = PT.Blue })
+cfgToggle(sSkip, ui.T.skipToggle, "AUTO_SKIP", function(v)
     AS.fail, AS.nextAt, AS.seen = 0, 0, 0
 end)
 ui.skipLabel = sSkip:Label({ Text = "สถานะ: —", Color = PT.Text })
@@ -3871,11 +3972,11 @@ do
 end
 
 local sSum = tAuto:Section({
-    Title = "Auto สุ่มตัว",
-    Desc = "ตู้รีเซ็ตแล้วรอเกมจบ กดปุ่ม Lobby ไปสุ่มตัว | ต้องกดเล่นลูปเองก่อน | เลือกตัว/ด่านที่ลอบบี้",
+    Title = ui.T.sumTitle,
+    Desc = ui.T.sumDesc,
     Icon = "gift", Color = PT.Purple,
 })
-cfgToggle(sSum, "ออโต้สุ่มตัวเมื่อตู้รีเซ็ต", "AUTO_SELECT_SUMMON", function(v)
+cfgToggle(sSum, ui.T.sumToggle, "AUTO_SELECT_SUMMON", function(v)
     TD.sumSlot = os.time() // 1800   -- เริ่มนับจากตอนนี้ (ไม่วิ่งไปลอบบี้ทันทีทั้งที่ตู้เพิ่งรีเซ็ตไปแล้ว)
     sumWriteSlot(TD.sumSlot)
     TD.sumLeaving, TD.sumRetryAt, TD.sumGoSince = false, 0, nil
@@ -4019,13 +4120,13 @@ end)
 end
 
 local sSpeed = tAuto:Section({
-    Title = "Game Speed", Desc = "เลือกความเร็ว แล้วสคริปต์ปรับให้อัตโนมัติ",
+    Title = ui.T.speedTitle, Desc = ui.T.speedDesc,
     Icon = "zap", Color = PT.Orange,
 })
-cfgToggle(sSpeed, "ล็อกความเร็วตามที่เลือก", "GAMESPEED_ON", function(v)
+cfgToggle(sSpeed, ui.T.speedToggle, "GAMESPEED_ON", function(v)
     GS.fail, GS.nextAt, GS.seen = 0, 0, 0
 end)
-ui.gsList = sSpeed:List({ Height = 120, Title = "ความเร็วเกม" })
+ui.gsList = sSpeed:List({ Height = 120, Title = ui.T.speedList })
 ui.gsSig = nil
 
 ui.refreshSpeedList = function(force)
@@ -4058,11 +4159,11 @@ end
 -- =====================================================================
 --  TAB 5 : Stats
 -- =====================================================================
-local tStats = win:AddTab({ Name = "Stats", Category = "Info", Icon = "bar-chart-3", Color = PT.Orange })
-local sStats = tStats:Section({ Title = "Session", Desc = "สถิติการเล่นรอบนี้", Icon = "bar-chart-3", Color = PT.Orange })
+local tStats = win:AddTab({ Name = ui.T.tabStats, Category = "Info", Icon = "bar-chart-3", Color = PT.Orange })
+local sStats = tStats:Section({ Title = ui.T.statsTitle, Desc = ui.T.statsDesc, Icon = "bar-chart-3", Color = PT.Orange })
 ui.statsLabel = sStats:Label({ Text = "", TextSize = 12, Color = PT.Text })
 sStats:Action({
-    Text = "รีเซ็ตสถิติ", Icon = "undo-2", Color = PT.Elem,
+    Text = ui.T.statsReset, Icon = "undo-2", Color = PT.Elem,
     Callback = function()
         for k in pairs(stats) do stats[k] = 0 end
         stats.sessionStart = nil
@@ -4074,12 +4175,12 @@ sStats:Action({
 -- =====================================================================
 local tLog = nil
 if OWN.is then   -- แท็บ Log: เฉพาะ owner
-tLog = win:AddTab({ Name = "Log", Category = "Info", Icon = "layout-list", Color = PT.Cyan })
-local sLog = tLog:Section({ Title = "Log", Desc = "ดูว่า Id ของยูนิตมาจากไหน / remote ที่เข้า-ออก", Icon = "layout-list", Color = PT.Cyan })
+tLog = win:AddTab({ Name = ui.T.tabLog, Category = "Info", Icon = "layout-list", Color = PT.Cyan })
+local sLog = tLog:Section({ Title = ui.T.logTitle, Desc = ui.T.logDesc, Icon = "layout-list", Color = PT.Cyan })
 ui.logLabel = sLog:Label({ Text = "(ยังไม่มี log)", TextSize = 11, Color = PT.Text })
 sLog:Actions({
     {
-        Text = "คัดลอกทั้งหมด", Icon = "copy", Color = PT.Blue,
+        Text = ui.T.logCopy, Icon = "copy", Color = PT.Blue,
         Callback = function()
             if setclipboard then
                 setclipboard(table.concat(logBuf, "\n"))
@@ -4090,7 +4191,7 @@ sLog:Actions({
         end,
     },
     {
-        Text = "ล้าง", Icon = "eraser", Color = PT.Elem,
+        Text = ui.T.logClear, Icon = "eraser", Color = PT.Elem,
         Callback = function()
             logBuf = {}
             logDirty = true
@@ -4103,43 +4204,43 @@ end
 --  TAB 7 : Settings
 -- =====================================================================
 -- แท็บ Extras = ระบบเสริม (ฟังก์ชันที่ไม่ใช่ตั้งค่าหลัก) แยกออกจาก Settings
-ui.tExtra = win:AddTab({ Name = "Extras", Category = "System", Icon = "puzzle", Color = PT.Orange })
+ui.tExtra = win:AddTab({ Name = ui.T.tabExtras, Category = "System", Icon = "puzzle", Color = PT.Orange })
 do
-    local sMap = ui.tExtra:Section({ Title = "ระบบเสริม", Desc = "ฟังก์ชันพิเศษ เปิด/ปิดแยกจากตั้งค่าหลัก", Icon = "puzzle", Color = PT.Orange })
-    sMap:Label({ Text = "• วางไม่จำกัดพื้นที่\n• แจ้งเตือนของเกม\n• ความเป็นส่วนตัว (ซ่อนชื่อ/ตัวละคร)\n• Anti-AFK\n• ลดกระตุก\n• Discord Webhook", TextSize = 12, Color = PT.Text })
+    local sMap = ui.tExtra:Section({ Title = ui.T.extrasTitle, Desc = ui.T.extrasDesc, Icon = "puzzle", Color = PT.Orange })
+    sMap:Label({ Text = ui.T.extrasList, TextSize = 12, Color = PT.Text })
 end
 
-local tSet = win:AddTab({ Name = "Settings", Category = "System", Icon = "settings", Color = PT.Pink })
+local tSet = win:AddTab({ Name = ui.T.tabSettings, Category = "System", Icon = "settings", Color = PT.Pink })
 do
-    local sWhere = tSet:Section({ Title = "ฟังก์ชันอยู่ตรงไหน", Desc = "Settings = ตั้งค่าหลักเท่านั้น", Icon = "map-pin", Color = PT.Blue })
-    sWhere:Label({ Text = "Macro: บันทึก / เล่น / สุ่มตำแหน่ง\nSaves / Editor: จัดการมาโคร\nAuto: PlayAgain / Resume / Skip / สุ่มตัว / ความเร็ว\nExtras: ระบบเสริม (วางไม่จำกัดพื้นที่, Anti-AFK, ลดกระตุก, ซ่อนชื่อ, Webhook)", TextSize = 12, Color = PT.Text })
+    local sWhere = tSet:Section({ Title = ui.T.whereTitle, Desc = ui.T.whereDesc, Icon = "map-pin", Color = PT.Blue })
+    sWhere:Label({ Text = ui.T.whereText, TextSize = 12, Color = PT.Text })
 end
 
 if OWN.is then   -- Detection: เฉพาะ owner
-    local sDet = tSet:Section({ Title = "Detection", Desc = "ตรวจว่าสคริปต์เห็น GUI/Remote ของเกมหรือยัง", Icon = "map-pin", Color = PT.Good })
+    local sDet = tSet:Section({ Title = ui.T.detTitle, Desc = ui.T.detDesc, Icon = "map-pin", Color = PT.Good })
     ui.detectLabel = sDet:Label({ Text = "—", TextSize = 12, Color = PT.Text })
 end
 
 -- Settings = ตั้งค่าหลักเท่านั้น | ระบบเสริมทั้งหมดอยู่แท็บ Extras
 -- กลุ่ม 1: การทำงานของสคริปต์
-local sGen = tSet:Section({ Title = "การทำงานของสคริปต์", Desc = "เงื่อนไขตอนเริ่มทำงาน / ตอนเล่นมาโคร", Icon = "settings", Color = PT.Blue })
+local sGen = tSet:Section({ Title = ui.T.genTitle, Desc = ui.T.genDesc, Icon = "settings", Color = PT.Blue })
 if OWN.is then   -- สวิตช์นี้เห็นเฉพาะรายชื่อ OWNER_NAMES (คนอื่นใช้ค่าเริ่มต้น = เปิดเสมอ)
-    cfgToggle(sGen, "ทำงานเฉพาะตอนอยู่ในเกม", "REQUIRE_VOTE_UI", nil, "ปิดถ้าสคริปต์ตรวจไม่เจอว่าอยู่ในเกม")
+    cfgToggle(sGen, ui.T.onlyInGame, "REQUIRE_VOTE_UI", nil, ui.T.onlyInGameDesc)
 end
-cfgToggle(sGen, "ลองยิงตอนเงินใกล้ถึง", "EAGER_ON")
+cfgToggle(sGen, ui.T.eager, "EAGER_ON")
 
 -- กลุ่ม: วางไม่จำกัดพื้นที่
 do
-local sAny = ui.tExtra:Section({ Title = "วางไม่จำกัดพื้นที่", Desc = "", Icon = "flag", Color = PT.Orange })
-cfgToggle(sAny, "วางตัวไม่จำกัดพื้นที่", "PLACE_ANYWHERE", function(v)
-    notify(v and "เปิดวางไม่จำกัดพื้นที่" or "ปิดวางไม่จำกัดพื้นที่แล้ว", v and PT.Good or PT.Warn)
+local sAny = ui.tExtra:Section({ Title = ui.T.anyTitle, Desc = ui.T.anyDesc, Icon = "flag", Color = PT.Orange })
+cfgToggle(sAny, ui.T.anyToggle, "PLACE_ANYWHERE", function(v)
+    notify(v and ui.T.anyOn or ui.T.anyOff, v and PT.Good or PT.Warn)
 end)
 end
 
 -- กลุ่ม 2: แจ้งเตือนของเกม (PlayerGui.GameUI.Notifications)
 do
-local sNotif = ui.tExtra:Section({ Title = "แจ้งเตือนของเกม", Desc = "เปิด/ปิดแจ้งเตือนที่เกมแสดงบนหน้าจอ (GameUI.Notifications)", Icon = "layout-list", Color = PT.Cyan })
-cfgToggle(sNotif, "แสดงแจ้งเตือนของเกม", "GAME_NOTIF", function(v)
+local sNotif = ui.tExtra:Section({ Title = ui.T.notifTitle, Desc = ui.T.notifDesc, Icon = "layout-list", Color = PT.Cyan })
+cfgToggle(sNotif, ui.T.notifToggle, "GAME_NOTIF", function(v)
     LAG.notifApply()
     if not gameUI("Notifications") then
         notify("ยังไม่พบแจ้งเตือนของเกม (จะมีผลเมื่อเกมโหลด GUI เสร็จ)", PT.Warn)
@@ -4149,11 +4250,11 @@ end
 
 -- กลุ่ม: ความเป็นส่วนตัว (เห็นทุกคน)
 do
-local sPriv = ui.tExtra:Section({ Title = "ความเป็นส่วนตัว", Desc = "ซ่อนชื่อและหน้าตาของตัวเอง (เห็นเฉพาะในเครื่องเรา)", Icon = "shield-check", Color = PT.Pink })
-cfgToggle(sPriv, "ซ่อนชื่อตัวเอง", "HIDE_NAME", function(v)
+local sPriv = ui.tExtra:Section({ Title = ui.T.privTitle, Desc = ui.T.privDesc, Icon = "shield-check", Color = PT.Pink })
+cfgToggle(sPriv, ui.T.hideName, "HIDE_NAME", function(v)
     LAG.priv.nameSet(v)
 end)
-cfgToggle(sPriv, "ซ่อนตัวละคร (เป็น NOOB)", "NOOB_MODE", function(v)
+cfgToggle(sPriv, ui.T.hideChar, "NOOB_MODE", function(v)
     LAG.priv.noobSet(v)
 end)
 if CONFIG.HIDE_NAME then task.spawn(function() pcall(LAG.priv.nameSet, true) end) end
@@ -4162,19 +4263,19 @@ end
 
 -- กลุ่ม 3: Anti-AFK
 do
-local sAfk = ui.tExtra:Section({ Title = "Anti-AFK", Desc = "กันถูกเตะเมื่อไม่ได้ขยับ", Icon = "shield-check", Color = PT.Good })
-cfgToggle(sAfk, "เปิด Anti-AFK", "ANTI_AFK")
+local sAfk = ui.tExtra:Section({ Title = ui.T.afkTitle, Desc = ui.T.afkDesc, Icon = "shield-check", Color = PT.Good })
+cfgToggle(sAfk, ui.T.afkToggle, "ANTI_AFK")
 end
 
 -- กลุ่ม 4: การกดปุ่มของสคริปต์ (ย้ายมาจากแท็บ Auto > Game Speed)  เห็นเฉพาะรายชื่อ OWNER_NAMES (คนอื่นใช้ค่าเริ่มต้น = เปิดเสมอ)
 if OWN.is then
-local sClick = tSet:Section({ Title = "การกดปุ่ม (มือถือ)", Desc = "วิธีที่สคริปต์กดปุ่มในเกม", Icon = "play", Color = PT.Orange })
-cfgToggle(sClick, "กันเดินไม่ได้ (มือถือ)", "SAFE_CLICK")
-cfgToggle(sClick, "เดินไปที่จุดวางก่อนวาง", "WALK_TO_PLACE")
+local sClick = tSet:Section({ Title = ui.T.clickTitle, Desc = ui.T.clickDesc, Icon = "play", Color = PT.Orange })
+cfgToggle(sClick, ui.T.safeClick, "SAFE_CLICK")
+cfgToggle(sClick, ui.T.walkToPlace, "WALK_TO_PLACE")
 end
 
-local sLag = ui.tExtra:Section({ Title = "ลดกระตุก", Desc = "ย้ายของที่ไม่จำเป็นออกจากฉากชั่วคราว (ไม่ได้ลบจริง ปิดแล้วเอากลับที่เดิม)", Icon = "gauge", Color = PT.Good })
-cfgToggle(sLag, "โหมดลดกระตุก", "ANTI_LAG", function(v)
+local sLag = ui.tExtra:Section({ Title = ui.T.lagTitle, Desc = ui.T.lagDesc, Icon = "gauge", Color = PT.Good })
+cfgToggle(sLag, ui.T.lagToggle, "ANTI_LAG", function(v)
     setAntiLag(v)
 end)
 if CONFIG.ANTI_LAG then
@@ -4185,8 +4286,8 @@ if CONFIG.ANTI_LAG then
     end)
 end
 
-local sHook = ui.tExtra:Section({ Title = "Discord Webhook", Desc = "ส่งแจ้งเตือนเข้า Discord", Icon = "send", Color = PT.Purple, Collapsible = true, Collapsed = true })
-cfgToggle(sHook, "ส่งแจ้งเตือนเข้า Discord", "WEBHOOK_ON")
+local sHook = ui.tExtra:Section({ Title = ui.T.hookTitle, Desc = ui.T.hookDesc, Icon = "send", Color = PT.Purple, Collapsible = true, Collapsed = true })
+cfgToggle(sHook, ui.T.hookToggle, "WEBHOOK_ON")
 ui.urlBox = sHook:Input({
     Title = "Webhook URL", Default = CONFIG.WEBHOOK_URL, Placeholder = "https://discord.com/api/webhooks/...",
     Callback = function(box)
@@ -4195,7 +4296,7 @@ ui.urlBox = sHook:Input({
     end,
 })
 sHook:Action({
-    Text = "ล้างลิงก์ Webhook", Icon = "rotate-ccw", Color = PT.Orange,
+    Text = ui.T.hookClear, Icon = "rotate-ccw", Color = PT.Orange,
     Callback = function()
         CONFIG.WEBHOOK_URL = ""
         RPT.reset(false)
@@ -4204,14 +4305,14 @@ sHook:Action({
     end,
 })
 sHook:Action({
-    Text = "รีเซ็ตยอด Coin / รอบ / เวลา", Icon = "trash", Color = PT.Bad,
+    Text = ui.T.hookReset, Icon = "trash", Color = PT.Bad,
     Callback = function()
         RPT.reset(true)
         notify("ล้างยอดสะสมแล้ว", PT.Good, nil, "check")
     end,
 })
 sHook:Action({
-    Text = "ส่งข้อความทดสอบ", Icon = "send", Color = PT.Blue,
+    Text = ui.T.hookTest, Icon = "send", Color = PT.Blue,
     Callback = function()
         local sent = sendWebhook("ทดสอบ Pex Hub", "เชื่อมต่อ Webhook สำเร็จ", true)
         notify(sent and "ส่งแล้ว (เช็กใน Discord)" or "ส่งไม่ได้ (ยังไม่ได้ใส่ลิงก์ หรืออุปกรณ์นี้ส่งไม่ได้)", sent and PT.Good or PT.Bad, nil, sent and "send" or "x")
@@ -4219,18 +4320,18 @@ sHook:Action({
 })
 
 if OWN.is then   -- Developer: เฉพาะ owner
-    local sDev = tSet:Section({ Title = "Developer", Desc = "เครื่องมือสำหรับหา Id / ดีบัก", Icon = "flask-conical", Color = PT.Purple })
-    cfgToggle(sDev, "จด Log remote (ไว้หา Id)", "SNIFFER", nil, "จดเฉพาะช่วงไม่กี่วินาทีหลังวาง/อัปเกรด/โหวต")
+    local sDev = tSet:Section({ Title = ui.T.devTitle, Desc = ui.T.devDesc, Icon = "flask-conical", Color = PT.Purple })
+    cfgToggle(sDev, ui.T.sniff, "SNIFFER")
 end
 
-local sUi = tSet:Section({ Title = "Interface", Desc = "หน้าต่าง Pex Hub", Icon = "layout-list", Color = PT.Orange })
+local sUi = tSet:Section({ Title = ui.T.uiTitle, Desc = ui.T.uiDesc, Icon = "layout-list", Color = PT.Orange })
 do
     local okK, stopKey = pcall(function()
         if CONFIG.STOP_KEY ~= "" then return Enum.KeyCode[CONFIG.STOP_KEY] end
         return nil
     end)
     sUi:Keybind({
-        Title = "ปุ่มลัด: หยุดทั้งหมด", Desc = "กดปุ่มนี้เพื่อหยุดบันทึก/เล่นทันที (Backspace = ล้างค่า)",
+        Title = ui.T.stopKey, Desc = ui.T.stopKeyDesc,
         Default = okK and stopKey or nil,
         Callback = function() stopAll() end,
         Changed = function(k)
@@ -4240,11 +4341,11 @@ do
     })
 end
 sUi:Action({
-    Text = "รีเซ็ตตำแหน่งหน้าต่าง", Icon = "map-pin", Color = PT.Elem,
+    Text = ui.T.resetPos, Icon = "map-pin", Color = PT.Elem,
     Callback = function() win:ResetPosition() end,
 })
 if not canFile then
-    sUi:Label({ Text = "อุปกรณ์นี้เซฟ/โหลดไฟล์ไม่ได้ (เล่นได้เฉพาะที่บันทึกไว้ตอนนี้)", Color = PT.Warn })
+    sUi:Label({ Text = ui.T.noFile, Color = PT.Warn })
 end
 
 -- =====================================================================
@@ -4351,7 +4452,7 @@ ui.refreshAll()
 setQuiet("พร้อมใช้งาน")
 
 if not (netFolder and modeVoteRE and towerAddRE and towerUpgradeRE) then
-    notify(OWN.is and "ระบบบางส่วนยังไม่พร้อม (ดู Settings > Detection)" or "ระบบยังไม่พร้อม ลองเข้าเกมใหม่อีกครั้ง", PT.Bad, 6, "x")
+    notify(OWN.is and "ระบบบางส่วนยังไม่พร้อม (ดู Settings > สถานะระบบ)" or "ระบบยังไม่พร้อม ลองเข้าเกมใหม่อีกครั้ง", PT.Bad, 6, "x")
 end
 
 task.spawn(tryResume)
