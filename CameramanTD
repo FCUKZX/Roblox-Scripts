@@ -165,10 +165,10 @@ local DEFAULTS = {
     EAGER_ON = false,        -- เปิด = เงินใกล้ถึงก็ลองซื้อเลย | ปิด = รอเงินครบก่อนเท่านั้น
     EAGER_PERCENT = 90,     -- เงินถึงกี่ % ของราคา แล้วเริ่ม "ลองยิงเลย"
     PROBE_INTERVAL = 0.7,   -- ระหว่างรอเงิน ลองยิงซ้ำทุกกี่วินาที
-    START_DELAY = 2,        -- วินาทีรอหลังหน้าโหวตโหมดปิด ก่อนเริ่มวางยูนิต
+    START_DELAY = 1,        -- วินาทีรอหลังหน้าโหวตโหมดปิด ก่อนเริ่มวางยูนิต
     PLACE_RETRIES = 5,      -- วางไม่ติด ลองซ้ำกี่ครั้ง
     UPGRADE_RETRIES = 5,    -- อัปเกรดไม่ติด ลองซ้ำกี่ครั้ง
-    RETRY_DELAY = 0.3,      -- เว้นก่อนลองใหม่ (วิ)
+    RETRY_DELAY = 0.15,     -- เว้นก่อนลองใหม่ (วิ)
     MONEY_TIMEOUT = 90,     -- รอเงินสูงสุดต่อแอคชัน (วิ) เกินแล้วลองยิงเลย
     UNKNOWN_COST_WAIT = 25, -- แอคชันที่ยังไม่รู้ราคา: ลองซ้ำนานสุดกี่วินาที
     COST_MARGIN = 0,        -- เผื่อเงินเพิ่มตอนรอ (บวกเข้าราคา)
@@ -207,13 +207,15 @@ local DEFAULTS = {
     WALK_TO_PLACE = false,  -- (ส่วนที่ซ่อน) เปิด = ก่อนวางยูนิต ตัวละครเดินไปใกล้ตำแหน่งวางให้ห่างไม่เกิน PLACE.RANGE (8) ก่อน
     AUTO_SELECT_SUMMON = false, -- ปุ่มเดียวกับในลอบบี้: ตู้รีเซ็ตแล้วรอเกมจบ กดปุ่ม Lobby ไปสุ่มตัวที่เลือก แล้วกลับมาเล่นต่อ
     SUMMON_WAVE_MAX = 10,       -- (เลิกใช้แล้ว: ต้องรอเกมจบแล้วกดปุ่ม Lobby เสมอ เก็บไว้กันไฟล์เซฟเก่าพัง)
+    SNAP_BACK = false,       -- เปิด = ลากหน้าต่างไปแล้วปล่อย จะเด้งกลับตำแหน่งเดิม
+    NOSKIP_WAVES = {},      -- รายการเวฟที่ไม่ให้ Auto Skip ทำงาน (เช่น {10, 25})
 }
 -- มีแค่ค่าเหล่านี้ที่เซฟ/โหลดจากไฟล์ (ค่าอื่นล็อกตาม DEFAULTS เสมอ)
 local USER_KEYS = {
     "EAGER_ON", "START_DELAY", "AUTO_REPLAY", "REPLAY_WAIT", "AUTO_RESUME", "REQUIRE_VOTE_UI", "SNIFFER",
     "ANTI_AFK", "WEBHOOK_ON", "WEBHOOK_URL", "STOP_KEY", "AUTO_SKIP", "GAMESPEED_ON", "GAMESPEED_PICK",
     "WAVE_GATE", "ANTI_LAG", "PLACE_ACCURACY", "SAFE_CLICK", "GAME_NOTIF", "WALK_TO_PLACE",
-    "HIDE_NAME", "NOOB_MODE", "AUTO_SELECT_SUMMON", "SUMMON_WAVE_MAX", "PLACE_ANYWHERE",
+    "HIDE_NAME", "NOOB_MODE", "AUTO_SELECT_SUMMON", "SUMMON_WAVE_MAX", "PLACE_ANYWHERE", "SNAP_BACK",
 }
 -- ค่าที่ปรับได้เฉพาะบัญชีในรายชื่อ OWNER_NAMES (UI ของมันถูกซ่อน) คนนอกรายชื่อล็อกเป็นค่าเริ่มต้นเสมอ ไม่โหลดจากไฟล์
 local OWNER_ONLY_KEYS = { REQUIRE_VOTE_UI = true, SAFE_CLICK = true, SNIFFER = true, WALK_TO_PLACE = true }
@@ -235,6 +237,17 @@ do
             end
         end
     end
+end
+
+do
+    local clean = {}
+    if type(CONFIG.NOSKIP_WAVES) == "table" then
+        for _, n in ipairs(CONFIG.NOSKIP_WAVES) do
+            n = tonumber(n)
+            if n and n > 0 then clean[#clean + 1] = math.floor(n) end
+        end
+    end
+    CONFIG.NOSKIP_WAVES = clean
 end
 
 CONFIG.WEBHOOK_ON = true -- เปิดแจ้งเตือนดิสอัตโนมัติทุกครั้งที่รันสคริปต์ (ปิดชั่วคราวได้ในหน้า Settings)
@@ -757,6 +770,19 @@ local function spendSince(t0, minDrop)
 end
 
 -- ========== GUI helpers ==========
+
+-- ตรวจอุปกรณ์: มือถือ/แท็บเล็ต (จอสัมผัสและไม่มีคีย์บอร์ด) หรือผู้ใช้เพิ่งแตะจอ = "แบบมือถือ"
+-- คอม (มีคีย์บอร์ด/เมาส์) = ใช้ได้ทั้งแบบคอมและแบบมือถือ
+local PLAT = {}
+function PLAT.mobile()
+    local ok, r = pcall(function()
+        local uis = game:GetService("UserInputService")
+        if uis.TouchEnabled and not uis.KeyboardEnabled then return true end
+        return uis:GetLastInputType() == Enum.UserInputType.Touch
+    end)
+    return ok and r == true
+end
+
 local function gameUI(...)
     local node = playerGui:FindFirstChild("GameUI")
     for _, n in ipairs({ ... }) do
@@ -883,8 +909,7 @@ end
 -- วิธี 2: จำลองเมาส์คลิกตรงกลางปุ่ม
 local function mouseClick(btn)
     if not (VirtualInputManager and btn) then return false end
-    -- มือถือ: กำลังเดินอยู่ ห้ามจำลองเมาส์ (จะทำให้เดินไม่ได้) -> คืน false ให้ผู้เรียกไปลองใหม่รอบหน้า
-    if CONFIG.SAFE_CLICK and mouseWouldBreakMove() then return false end
+    if PLAT.mobile() then return false end   -- มือถือ: ห้ามจำลองเมาส์ (รบกวนจอย/นิ้ว)
     local ok = pcall(function()
         local pos, size = btn.AbsolutePosition, btn.AbsoluteSize
         -- ScreenGui ที่ IgnoreGuiInset = true พิกัดเป็นพิกัดจอจริงอยู่แล้ว ห้ามบวก inset (ไม่งั้นคลิกเลื่อนลงไปโดนปุ่มข้างเคียง)
@@ -1621,7 +1646,7 @@ local function waitUntilAffordable(spec, lastFireT)
             lastNotice = now
             setQuiet(string.format("%s | รอเงิน %s/%s", spec.label, fmtNum(m), fmtNum(spec.cost)))
         end
-        task.wait(0.1)
+        task.wait(0.05)
     end
 end
 
@@ -1838,8 +1863,9 @@ do
     --  ใช้ VirtualInputManager:SendKeyEvent (คีย์บอร์ดเท่านั้น) ไม่แตะนิ้ว/จอยเดิน -> เล่นมือถือได้ปกติ
     -- =====================================================================
     local function pressKeyX()
-        if not VirtualInputManager then return false end
-        local ok = pcall(function()
+    if not VirtualInputManager then return false end
+    if PLAT.mobile() then return false end   -- มือถือใช้ปุ่ม ButtonX บนจอแทน
+    local ok = pcall(function()
             VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.X, false, game)
             task.wait(0.05)
             VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.X, false, game)
@@ -2179,7 +2205,7 @@ local function waitForWave(action, active, label, i, total)
                 setQuiet(string.format("%s | #%d/%d รอเวฟ %d (ตอนนี้เวฟ %d)", label, i, total, need, cur))
             end
         end
-        task.wait(0.25)
+        task.wait(0.15)
     end
 end
 
@@ -2218,7 +2244,7 @@ local function playActions(active, label)
             end
         end
         if st == "aborted" or st == "gameover" then return st end
-        task.wait(0.05)
+        task.wait()
     end
     return "done"
 end
@@ -2236,7 +2262,7 @@ local function waitRoundStart(active, label)
             return "started"
         end
         setQuiet(string.format("รอบ %s | รอหน้าโหวตโหมด", label))
-        task.wait(0.2)
+        task.wait(0.1)
     end
     if not active() then return "aborted" end
 
@@ -2252,7 +2278,7 @@ local function waitRoundStart(active, label)
             logf("โหวตโหมด: %s (ครั้งที่ %d)", short(vote[1], 0), voteTries)
             setQuiet(string.format("รอบ %s | โหวตโหมด: %s", label, TD.voteText(vote)))
         end
-        task.wait(0.2)
+        task.wait(0.1)
     end
     if not active() then return "aborted" end
 
@@ -2294,7 +2320,7 @@ local function goPlayAgain(active, label, completed, total, forever)
         return active() and "ok" or "aborted"
     end
 
-    task.wait(0.6)
+    task.wait(0.3)
     saveResume(completed, total, forever)   -- เซฟก่อนกด เพราะเซิร์ฟที่ย้ายไปต้องรู้ว่าเล่นถึงไหนแล้ว
 
     local tries, attempt = 0, 0
@@ -2442,7 +2468,7 @@ local function runLoops(total, startCompleted, waitForGame)
                     -- C) รอเกมจบ (AutoSkip จะข้ามเวฟให้เอง)
                     while active() and not isGameOver() do
                         setQuiet(string.format("รอบ %s | วางครบแล้ว รอเกมจบ", label))
-                        task.wait(0.3)
+                        task.wait(0.15)
                     end
                     if not active() then break end
 
@@ -2546,6 +2572,18 @@ end
 
 -- ----- AutoSkip: UIStroke โซนแดง = ปิด / ไม่แดง = เปิด -----
 local AS = { fail = 0, nextAt = 0, seen = 0 }
+
+-- เวฟปัจจุบันอยู่ในรายการ "ไม่ข้าม" ไหม
+function AS.blocked()
+    local list = CONFIG.NOSKIP_WAVES
+    if type(list) ~= "table" or #list == 0 then return false end
+    local w = getWave()
+    if not w then return false end
+    for _, n in ipairs(list) do
+        if n == w then return true end
+    end
+    return false
+end
 
 local function skipZone()
     local btn = gameUI("Stats", "AutoSkip", "Button")
@@ -3243,6 +3281,7 @@ ui.T = {
     resumeTitle = "Auto Resume", resumeDesc = "เล่นต่อหลังย้ายเซิร์ฟ",
     resumeToggle = "เล่นต่อหลังย้ายเซิร์ฟ", resumeToggleDesc = "ต้องใส่สคริปต์ใน autoexec",
     skipTitle = "Auto Skip", skipDesc = "เปิด Auto Skip ให้", skipToggle = "เปิด Auto Skip ออโต้",
+    noSkipList = "เวฟที่ไม่ข้าม", noSkipAdd = "เพิ่มเวฟที่ไม่ข้าม", noSkipEmpty = "ยังไม่มีเวฟที่ตั้งไว้ (ข้ามทุกเวฟ)",
     sumTitle = "Auto สุ่มตัว", sumDesc = "ตู้รีเซ็ตแล้วกลับลอบบี้ไปสุ่มตัว", sumToggle = "ออโต้สุ่มตัว",
     speedTitle = "Game Speed", speedDesc = "ล็อกความเร็วเกม", speedToggle = "ล็อกความเร็ว", speedList = "ความเร็วเกม",
 
@@ -3275,6 +3314,7 @@ ui.T = {
     devTitle = "Developer", devDesc = "เครื่องมือดีบัก", sniff = "จด Log remote",
     uiTitle = "หน้าต่าง", uiDesc = "ตั้งค่าหน้าต่าง Pex Hub",
     stopKey = "ปุ่มลัดหยุดทั้งหมด", stopKeyDesc = "กดเพื่อหยุดทันที (Backspace = ล้างค่า)",
+    snapBack = "คืนตำแหน่งหน้าต่างอัตโนมัติ", snapBackDesc = "ลากแล้วปล่อย หน้าต่างจะกลับที่เดิม",
     resetPos = "รีเซ็ตตำแหน่งหน้าต่าง", noFile = "อุปกรณ์นี้เซฟไฟล์ไม่ได้",
 }
 
@@ -3288,7 +3328,24 @@ local win = PEX:CreateWindow({
         shutdown()
     end,
 })
+
 ui.win = win
+do
+    local origClose = win.Close
+    win.Close = function(self, force)
+        if force then return origClose(self) end
+        win:Dialog({
+            Title = "ปิด Pex Hub?",
+            Text = "สคริปต์จะหยุดทำงานทั้งหมด",
+            Dismissable = true,
+            Buttons = {
+                { Text = "ยกเลิก" },
+                { Text = "ปิด", Icon = "x", Color = PT.Bad, Callback = function() origClose(win) end },
+            },
+        })
+    end
+end
+
 ui.dot = win.StatusDot
 ui.notify = function(text, color, dur, icon)
     win:Notify({ Text = tostring(text), Color = color, Duration = dur or 2.4, Icon = icon })
@@ -3880,12 +3937,27 @@ ui.refreshEditor = function()
         PEX.Corner(del, 5)
         del.Activated:Connect(function()
             if isPlaying or isRecording then return end
-            removeAction(i)
-            if ui.editSel then
-                if ui.editSel == i then ui.editSel = nil
-                elseif ui.editSel > i then ui.editSel = ui.editSel - 1 end
-            end
-            ui.refreshAll()
+                win:Dialog({
+                Title = "ลบแถวนี้?", Text = desc, Dismissable = true,
+                Buttons = {
+                    { Text = "ยกเลิก" },
+                    {
+                    Text = "ลบ", Icon = "trash-2", Color = PT.Bad,
+                    Callback = function()
+                        if isPlaying or isRecording then return end
+                        local k
+                        for idx, x in ipairs(recordedActions) do if x == a then k = idx break end end
+                        if not k then return end
+                            removeAction(k)
+                            if ui.editSel then
+                                if ui.editSel == k then ui.editSel = nil
+                                elseif ui.editSel > k then ui.editSel = ui.editSel - 1 end
+                            end
+                            ui.refreshAll()
+                        end,
+                    },
+                },
+            })
         end)
     end
     task.defer(function() ui.editList.CanvasPosition = keepPos end)
@@ -3927,6 +3999,81 @@ cfgToggle(sSkip, ui.T.skipToggle, "AUTO_SKIP", function(v)
     AS.fail, AS.nextAt, AS.seen = 0, 0, 0
 end)
 ui.skipLabel = sSkip:Label({ Text = "สถานะ: —", Color = PT.Text })
+ui.noSkipList = sSkip:List({ Height = 130, Title = ui.T.noSkipList })
+
+ui.refreshNoSkip = function()
+    local sf = ui.noSkipList.Frame
+    ui.noSkipList:Clear()
+    local list = CONFIG.NOSKIP_WAVES
+    if #list == 0 then
+        ui.noSkipList:Note(ui.T.noSkipEmpty)
+        return
+    end
+    for i, w in ipairs(list) do
+        local f = new("Frame", {
+            Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = PT.Elem, BorderSizePixel = 0, LayoutOrder = i,
+        }, sf)
+        PEX.Corner(f, 7)
+        new("TextLabel", {
+            Size = UDim2.new(0.5, 0, 1, 0), BackgroundTransparency = 1, Text = "  ไม่ข้ามเวฟ",
+            TextColor3 = PT.Text, Font = Enum.Font.Gotham, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left,
+        }, f)
+        local box = new("TextBox", {
+            Size = UDim2.new(0.3, 0, 0, 22), Position = UDim2.new(0.52, 0, 0.5, -11),
+            BackgroundColor3 = PT.Card, TextColor3 = PT.Text, Font = Enum.Font.GothamMedium, TextSize = 11,
+            Text = tostring(w), ClearTextOnFocus = false,
+        }, f)
+        PEX.Corner(box, 5)
+        box.FocusLost:Connect(function()
+            local n = tonumber((box.Text:gsub(",", "")):match("%d+"))
+            if n and n > 0 then
+                list[i] = math.floor(n)
+                ui.saveSoon()
+            end
+            box.Text = tostring(list[i])
+        end)
+        local del = new("TextButton", {
+            Size = UDim2.fromOffset(26, 22), Position = UDim2.new(1, -32, 0.5, -11),
+            BackgroundColor3 = PT.Bad, Text = "✕", TextColor3 = Color3.new(1, 1, 1),
+            Font = Enum.Font.GothamBold, TextSize = 11, AutoButtonColor = true,
+        }, f)
+        PEX.Corner(del, 5)
+        del.Activated:Connect(function()
+            win:Dialog({
+                Title = "ลบเวฟนี้?", Text = "เอาเวฟ " .. tostring(list[i]) .. " ออกจากรายการที่ไม่ข้าม", Dismissable = true,
+                Buttons = {
+                    { Text = "ยกเลิก" },
+                    {
+                        Text = "ลบ", Icon = "trash-2", Color = PT.Bad,
+                        Callback = function()
+                            if list[i] ~= nil then table.remove(list, i) end
+                            ui.saveSoon()
+                            ui.refreshNoSkip()
+                        end,
+                    },
+                },
+            })
+        end)
+    end
+end
+sSkip:Action({
+    Text = ui.T.noSkipAdd, Icon = "plus", Color = PT.Good,
+    Callback = function()
+        local list = CONFIG.NOSKIP_WAVES
+        local nextW
+        if #list > 0 then
+            nextW = 0
+            for _, n in ipairs(list) do nextW = math.max(nextW, n) end
+            nextW = nextW + 1
+        else
+            nextW = getWave() or 1
+        end
+        list[#list + 1] = nextW
+        ui.saveSoon()
+        ui.refreshNoSkip()
+    end,
+})
+ui.refreshNoSkip()
 
 -- ---------- Auto สุ่มตัวกำหนดเอง (ปุ่มเดียวกับในลอบบี้) ----------
 -- ทุกครึ่งชั่วโมง (:00 / :30) ตู้รีเซ็ต -> สคริปต์พาไปลอบบี้ -> สุ่มตัวที่เลือก -> กลับมาเล่นมาโครต่อ
@@ -4340,6 +4487,7 @@ do
         end,
     })
 end
+cfgToggle(sUi, ui.T.snapBack, "SNAP_BACK", nil, ui.T.snapBackDesc)
 sUi:Action({
     Text = ui.T.resetPos, Icon = "map-pin", Color = PT.Elem,
     Callback = function() win:ResetPosition() end,
@@ -4375,6 +4523,7 @@ task.spawn(function()
                 if type(k) == "string" and k:match("^Slot%d+$") and type(v) == "string" then slots = slots + 1 end
             end
             ui.detectLabel.Text = table.concat({
+                "อุปกรณ์: " .. (PLAT.mobile() and "มือถือ" or "คอม"),
                 "สถานะ: " .. (inGame() and "อยู่ในเกม" or "ลอบบี้ / ยังไม่อยู่ในเกม"),
                 "หน้าโหวต/จบเกม: " .. mark(gameUI("GamemodeVoting") or gameUI("FinalUI")),
                 "ความเร็วเกม: " .. mark(spd),
@@ -4409,7 +4558,7 @@ task.spawn(function()
         task.wait(0.25)
         local zone, btn = skipZone()
         if zone and btn and guiVisible(btn) and inGame() then
-            local want = CONFIG.AUTO_SKIP and "on" or "red"
+            local want = (CONFIG.AUTO_SKIP and not AS.blocked()) and "on" or "red"
             if zone ~= want then
                 AS.seen = AS.seen + 1
                 if AS.seen >= 2 and os.clock() >= AS.nextAt then
@@ -4425,6 +4574,17 @@ task.spawn(function()
         end
     end
 end)
+
+track(game:GetService("UserInputService").InputEnded:Connect(function(input)
+    if not alive or not CONFIG.SNAP_BACK then return end
+    local t = input.UserInputType
+    if t ~= Enum.UserInputType.MouseButton1 and t ~= Enum.UserInputType.Touch then return end
+    task.delay(0.1, function()
+        if alive and CONFIG.SNAP_BACK and win.State == "open" and (win.OX ~= 0 or win.OY ~= 0) then
+            win:ResetPosition()
+        end
+    end)
+end))
 
 -- (4) Game Speed: เช็กทุก 0.4 วิ เผื่อเกมรีเซ็ตความเร็วตอนเริ่มรอบใหม่
 task.spawn(function()
