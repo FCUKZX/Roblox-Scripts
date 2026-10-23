@@ -216,6 +216,7 @@ local USER_KEYS = {
     "ANTI_AFK", "WEBHOOK_ON", "WEBHOOK_URL", "STOP_KEY", "AUTO_SKIP", "GAMESPEED_ON", "GAMESPEED_PICK",
     "WAVE_GATE", "ANTI_LAG", "PLACE_ACCURACY", "SAFE_CLICK", "GAME_NOTIF", "WALK_TO_PLACE",
     "HIDE_NAME", "NOOB_MODE", "AUTO_SELECT_SUMMON", "SUMMON_WAVE_MAX", "PLACE_ANYWHERE", "SNAP_BACK",
+    "NOSKIP_WAVES",   -- เวฟที่ไม่ให้ Auto Skip ทำงาน (เซฟตอนเพิ่ม/แก้/ลบ)
 }
 -- ค่าที่ปรับได้เฉพาะบัญชีในรายชื่อ OWNER_NAMES (UI ของมันถูกซ่อน) คนนอกรายชื่อล็อกเป็นค่าเริ่มต้นเสมอ ไม่โหลดจากไฟล์
 local OWNER_ONLY_KEYS = { REQUIRE_VOTE_UI = true, SAFE_CLICK = true, SNIFFER = true, WALK_TO_PLACE = true }
