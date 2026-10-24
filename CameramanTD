@@ -1797,9 +1797,11 @@ do
     local UIS = game:GetService("UserInputService")
     local pending, lastFire = nil, -100
 
-    local function colorBad(c)   -- เทียบกับ Color3.fromRGB(154, 0, 0)
-        return typeof(c) == "Color3"
-            and math.abs(c.R * 255 - 154) < 1.5 and c.G * 255 < 1.5 and c.B * 255 < 1.5
+    local function colorBad(c)   -- อยู่ในกลุ่มสีแดง (เข้มหรืออ่อนก็นับ)
+        if typeof(c) ~= "Color3" then return false end
+        local h, s, v = c:ToHSV()
+        local red = (h <= 0.05 or h >= 0.95)   -- โทนสีแดง
+        return red and s >= 0.5 and v >= 0.25
     end
 
     local function findHighlight(g)
