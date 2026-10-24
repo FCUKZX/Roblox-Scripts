@@ -2120,7 +2120,7 @@ function UI:CreateWindow(opts)
         Size = UDim2.fromOffset(38, 38), Position = UDim2.fromOffset(14, 15), BackgroundColor3 = Color3.new(0, 0, 0), BorderSizePixel = 0, ClipsDescendants = true,
     }, head)
     corner(logo, 11)
-    iconLabel(logo, opts.Icon or 95338661062378, 38, WHITE, nil, CENTER)
+    iconLabel(logo, opts.Icon or 70506555218420, 38, WHITE, nil, CENTER)
     local tl = label(head, {
         Text = self.Title, Font = F_BOLD, TextSize = 15, Position = UDim2.fromOffset(62, 15), Size = UDim2.new(1, -70, 0, 20),
         TextTruncate = Enum.TextTruncate.AtEnd,
