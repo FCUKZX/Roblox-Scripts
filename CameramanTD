@@ -3324,7 +3324,6 @@ ui.T = {
 local win = PEX:CreateWindow({
     Title = "Pex Hub",
     Subtitle = "Tower Macro",
-    Icon = "zap",
     Name = "PexHubTD",
     OnClose = function()
         if alive then clearResume() end   -- ผู้ใช้กดปิดเอง = ยกเลิกการเล่นต่อหลังย้ายเซิร์ฟ
