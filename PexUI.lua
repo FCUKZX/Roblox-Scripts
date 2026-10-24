@@ -2117,10 +2117,10 @@ function UI:CreateWindow(opts)
 
     local head = new("Frame", { Size = UDim2.new(1, 0, 0, 68), BackgroundTransparency = 1, Active = true }, sidebar)
     local logo = new("Frame", {
-        Size = UDim2.fromOffset(38, 38), Position = UDim2.fromOffset(14, 15), BackgroundColor3 = T.Accent, BorderSizePixel = 0,
+        Size = UDim2.fromOffset(38, 38), Position = UDim2.fromOffset(14, 15), BackgroundColor3 = Color3.new(0, 0, 0), BorderSizePixel = 0, ClipsDescendants = true,
     }, head)
     corner(logo, 11)
-    iconLabel(logo, opts.Icon or "zap", 22, WHITE, nil, CENTER)
+    iconLabel(logo, opts.Icon or 95338661062378, 38, WHITE, nil, CENTER)
     local tl = label(head, {
         Text = self.Title, Font = F_BOLD, TextSize = 15, Position = UDim2.fromOffset(62, 15), Size = UDim2.new(1, -70, 0, 20),
         TextTruncate = Enum.TextTruncate.AtEnd,
@@ -2294,7 +2294,7 @@ function UI:CreateWindow(opts)
     self._edgeCorner = corner(edge, 13)
     self._edgeStroke = stroke(edge, T.Line, 1.5, 0)
     self._holder = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Visible = false, ZIndex = 55 }, win)
-    self._bubbleIcon = iconLabel(self._holder, opts.Icon or "zap", 28, WHITE, nil, CENTER)
+    self._bubbleIcon = iconLabel(self._holder, opts.Icon or 95338661062378, 40, WHITE, nil, CENTER)
     self._bubbleIcon.ImageTransparency = 1
     self._hit = new("TextButton", {
         Text = "", AutoButtonColor = false, BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 100, Visible = false,
