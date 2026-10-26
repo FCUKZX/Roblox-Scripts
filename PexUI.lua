@@ -1764,6 +1764,14 @@ function Window:Minimize()
     tween(self._coverCorner, { CornerRadius = UDim.new(0, B / 2) }, 0.45, Enum.EasingStyle.Quint)
     tween(self._clipCorner, { CornerRadius = UDim.new(0, B / 2) }, 0.45, Enum.EasingStyle.Quint)
     tween(self._bubbleIcon, { ImageTransparency = 0 }, 0.25)
+    tween(self._blackCorner, { CornerRadius = UDim.new(0, B / 2) }, 0.45, Enum.EasingStyle.Quint)
+    -- ให้แสงม่วงกวาดจบก่อน แล้วค่อยเฟดเป็นสีดำ
+    task.delay(0.3, function()
+        if self.State == "bubble" and not self._destroyed then
+            self.Win.BackgroundColor3 = Color3.new(0, 0, 0)
+            tween(self._black, { BackgroundTransparency = 0 }, 0.25, Enum.EasingStyle.Sine)
+        end
+    end)
     task.delay(0.3, function()
         if self.State == "bubble" and not self._destroyed then self.Canvas.Visible = false end
     end)
@@ -1776,6 +1784,8 @@ function Window:Restore()
     local ap, as, dp = self.Win.AbsolutePosition, self.Win.AbsoluteSize, self.Dock.AbsolutePosition
     local bubbleC = Vector2.new(ap.X + as.X / 2 - dp.X, ap.Y + as.Y / 2 - dp.Y)
     self._hit.Visible = false
+    tween(self._black, { BackgroundTransparency = 1 }, 0.12, Enum.EasingStyle.Sine)
+    tween(self._blackCorner, { CornerRadius = UDim.new(0, 14) }, 0.45, Enum.EasingStyle.Quint)
     self:_aimGradient(bubbleC, Vector2.new(m.VP.X / 2 + self.OX, m.VP.Y / 2 + self.OY))
     -- เริ่มพร้อมกันทันที: หน้าต่างขยาย + แสงม่วงถอยกลับไปทางปุ่ม เผยเมนูพร้อมกัน
     self._sweep.Value = 1
@@ -2116,8 +2126,9 @@ function UI:CreateWindow(opts)
     new("Frame", { Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new(1, -1, 0, 0), BackgroundColor3 = T.Line, BorderSizePixel = 0 }, sidebar)
 
     local head = new("Frame", { Size = UDim2.new(1, 0, 0, 68), BackgroundTransparency = 1, Active = true }, sidebar)
+    -- โลโก้: พื้นหลังโปร่งใส (ถ้าภาพมีพื้นดำฝังในไฟล์ ต้องใช้ PNG โปร่งใส)
     local logo = new("Frame", {
-        Size = UDim2.fromOffset(38, 38), Position = UDim2.fromOffset(14, 15), BackgroundColor3 = Color3.new(0, 0, 0), BorderSizePixel = 0, ClipsDescendants = true,
+        Size = UDim2.fromOffset(38, 38), Position = UDim2.fromOffset(14, 15), BackgroundTransparency = 1, BorderSizePixel = 0, ClipsDescendants = true,
     }, head)
     corner(logo, 11)
     iconLabel(logo, opts.Icon or 70506555218420, 38, WHITE, nil, CENTER)
@@ -2293,6 +2304,12 @@ function UI:CreateWindow(opts)
     }, win)
     self._edgeCorner = corner(edge, 13)
     self._edgeStroke = stroke(edge, T.Line, 1.5, 0)
+    -- เลเยอร์สีดำของวงกลมตอนนิ่ง (อยู่เหนือการ์ดสีม่วง ใต้ไอคอน)
+    self._black = new("Frame", {
+        Name = "BubbleBlack", Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0),
+        BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 51,
+    }, win)
+    self._blackCorner = corner(self._black, 14)
     self._holder = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Visible = false, ZIndex = 55 }, win)
     self._bubbleIcon = iconLabel(self._holder, opts.Icon or 95338661062378, 40, WHITE, nil, CENTER)
     self._bubbleIcon.ImageTransparency = 1
@@ -2376,7 +2393,7 @@ function UI:CreateWindow(opts)
             if self._winTween then self._winTween:Cancel() end
             local ap, as, dp = win.AbsolutePosition, win.AbsoluteSize, dock.AbsolutePosition
             cx, cy = ap.X + as.X / 2 - dp.X, ap.Y + as.Y / 2 - dp.Y
-            tween(self._cover, { BackgroundColor3 = Color3.fromRGB(205, 205, 220) }, 0.1)
+            tween(self._black, { BackgroundColor3 = Color3.fromRGB(44, 44, 54) }, 0.1)
         end,
         Move = function(dx, dy)
             local vp = self.M.VP
@@ -2384,7 +2401,7 @@ function UI:CreateWindow(opts)
             win.Position = UDim2.fromOffset(clamp(cx + dx, R, vp.X - R), clamp(cy + dy, R, vp.Y - R))
         end,
         End = function(moved)
-            tween(self._cover, { BackgroundColor3 = WHITE }, 0.2)
+            tween(self._black, { BackgroundColor3 = Color3.new(0, 0, 0) }, 0.2)
             if not moved then
                 self:Restore()
                 return
@@ -2424,7 +2441,9 @@ function UI:CreateWindow(opts)
         self._hit.Visible = true
         self:_clipOn()
         self.Canvas.Visible = false
-        win.BackgroundColor3 = T.Accent
+        win.BackgroundColor3 = Color3.new(0, 0, 0)          -- เดิมเป็น T.Accent
+        self._blackCorner.CornerRadius = UDim.new(0, B / 2)
+        self._black.BackgroundTransparency = 0
         self._corner.CornerRadius = UDim.new(0, B / 2)
         self._coverCorner.CornerRadius = UDim.new(0, B / 2)
         self._clipCorner.CornerRadius = UDim.new(0, B / 2)
