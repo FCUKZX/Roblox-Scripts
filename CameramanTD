@@ -1861,51 +1861,86 @@ end
 --   1) ครั้งแรก: สุ่มเลื่อนตามความแม่นยำ แต่ต้องไม่ชิดยูนิตอื่น (ห่าง >= CLEAR) และไม่ใช่จุดที่เคยวางไม่ติด
 --   2) ถ้าที่บันทึกไว้เบียดยูนิตอื่น / เคยวางไม่ติด -> ขยายวงสุ่มออกไปเรื่อยๆ หาจุดที่ว่างจริง
 --   tried = รายการ { dx, dz } ที่ยิงแล้ววางไม่ติดในแอคชันนี้
+
 function PLACE.choose(base, tried)
     local occ = PLACE.occupied()
 
     local function score(dx, dz)
         local p = Vector3.new(base.X + dx, base.Y, base.Z + dz)
-        if PLACE.nearBad(p) then return -1 end
-        for _, f in ipairs(tried) do
-            if math.sqrt((dx - f[1]) ^ 2 + (dz - f[2]) ^ 2) < PLACE.SAME then return -1 end
+
+        if PLACE.nearBad(p) then
+            return -1
         end
+
+        for _, f in ipairs(tried) do
+            local ddx = dx - f[1]
+            local ddz = dz - f[2]
+
+            if math.sqrt(ddx * ddx + ddz * ddz) < PLACE.SAME then
+                return -1
+            end
+        end
+
         local best = math.huge
+
         for _, o in ipairs(occ) do
             local d = PLACE.flat(p, o)
-            if d < best then best = d end
-        end
-        -- ถ้าหาจุดที่มีระยะห่างตามเกณฑ์ไม่ได้ อย่าฝืนใช้จุดที่อาจวางไม่ได้
-        if bestScore < PLACE.CLEAR then
-            return nil, nil
+            if d < best then
+                best = d
+            end
         end
 
-        return bestX, bestZ
+        -- คืนระยะห่างจากยูนิตที่ใกล้ที่สุด
+        return best
     end
 
-    -- ขั้น 1: เลื่อนเล็กน้อยตามความแม่นยำ (เฉพาะครั้งแรกที่ยังไม่เคยพลาด)
+    -- ลองขยับเล็กน้อยก่อน
     if #tried == 0 then
         for _ = 1, 25 do
             local dx, dz = PLACE.offset(1)
-            if score(dx, dz) >= PLACE.CLEAR then return dx, dz end
+            if score(dx, dz) >= PLACE.CLEAR then
+                return dx, dz
+            end
         end
     end
 
-    -- ขั้น 2: ขยายวงสุ่มตามจำนวนครั้งที่พลาด
-    local reach = math.clamp(PLACE.ESC_MIN + PLACE.ESC_GROW * #tried, PLACE.ESC_MIN, PLACE.ESC_MAX)
+    -- ขยายวงค้นหาเมื่อจุดเดิมวางไม่ติด
+    local reach = math.clamp(
+        PLACE.ESC_MIN + PLACE.ESC_GROW * #tried,
+        PLACE.ESC_MIN,
+        PLACE.ESC_MAX
+    )
+
     local rMin = (#tried == 0) and 0.5 or PLACE.ESC_MIN
-    local bestX, bestZ, bestScore = 0, 0, -2
-    for i = 1, 100 do
-        local lim = (i > 50) and math.min(reach * 1.6, PLACE.ESC_MAX * 1.5) or reach   -- หาไม่เจอ ขยายวงเพิ่ม
-        local r = rMin + (math.max(lim, rMin) - rMin) * PLACE.rng:NextNumber()
+    local bestX, bestZ = nil, nil
+    local bestScore = -1
+
+    for i = 1, 150 do
+        local lim = (i > 75)
+            and math.min(reach * 1.6, PLACE.ESC_MAX * 1.5)
+            or reach
+
+        local r = rMin + (math.max(lim, rMin) - rMin)
+            * PLACE.rng:NextNumber()
+
         local th = PLACE.rng:NextNumber() * math.pi * 2
-        local x, z = math.cos(th) * r, math.sin(th) * r
-        local s = score(x, z)
-        if s >= PLACE.CLEAR then return x, z end
-        if s > bestScore then bestX, bestZ, bestScore = x, z, s end
+        local dx = math.cos(th) * r
+        local dz = math.sin(th) * r
+        local s = score(dx, dz)
+
+        if s >= PLACE.CLEAR then
+            return dx, dz
+        end
+
+        if s > bestScore then
+            bestX, bestZ, bestScore = dx, dz, s
+        end
     end
-    return bestX, bestZ   -- ไม่มีจุดว่างพอ ใช้จุดที่ห่างยูนิตอื่นมากที่สุดเท่าที่สุ่มได้
+
+    -- ไม่พบจุดที่ผ่านเกณฑ์ ให้ระบบ retry แทนการใช้จุดที่เสี่ยง
+    return nil, nil
 end
+
 
 -- =====================================================================
 --  วางไม่จำกัดพื้นที่ (CONFIG.PLACE_ANYWHERE)  ปรับตัวเลขได้ที่ตาราง ANY ด้านล่าง
