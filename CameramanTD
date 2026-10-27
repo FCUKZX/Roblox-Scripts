@@ -166,7 +166,7 @@ local DEFAULTS = {
     EAGER_PERCENT = 90,     -- เงินถึงกี่ % ของราคา แล้วเริ่ม "ลองยิงเลย"
     PROBE_INTERVAL = 0.7,   -- ระหว่างรอเงิน ลองยิงซ้ำทุกกี่วินาที
     START_DELAY = 1,        -- วินาทีรอหลังหน้าโหวตโหมดปิด ก่อนเริ่มวางยูนิต
-    PLACE_RETRIES = 5,      -- วางไม่ติด ลองซ้ำกี่ครั้ง
+    PLACE_RETRIES = 5,      -- (ไม่ใช้แล้ว) วางไม่ติดจะขยับไปจุดใหม่จนกว่าจะวางติด
     UPGRADE_RETRIES = 5,    -- อัปเกรดไม่ติด ลองซ้ำกี่ครั้ง
     RETRY_DELAY = 0.15,     -- เว้นก่อนลองใหม่ (วิ)
     MONEY_TIMEOUT = 90,     -- รอเงินสูงสุดต่อแอคชัน (วิ) เกินแล้วลองยิงเลย
@@ -257,6 +257,11 @@ CONFIG.WEBHOOK_ON = true -- เปิดแจ้งเตือนดิสอ�
 --   ระยะเลื่อนสูงสุด (สตั๊ด) = (100 - ความแม่น) / 100 * STUDS
 --   เช่น 95% = เลื่อนไม่เกิน 0.5 สตั๊ด / 90% = ไม่เกิน 1 สตั๊ด  (อยากให้เลื่อนมากขึ้น เพิ่มเลข STUDS)
 local PLACE = { MIN = 90, STUDS = 10, rng = Random.new() }
+-- วางไม่ติด -> สุ่มขยับออกจากจุดเดิม แล้วจำทุกจุดที่วางไม่ติดไว้ ห้ามกลับไปจุดนั้นอีก (วนจนกว่าจะวางติด)
+PLACE.ESC_MIN  = 1.5   -- ขยับออกอย่างน้อยกี่สตั๊ด
+PLACE.ESC_MAX  = 8     -- ขยับไกลสุดกี่สตั๊ด
+PLACE.ESC_GROW = 0.5   -- ทุกจุดที่วางไม่ติด 1 จุด ระยะขยับสูงสุดเพิ่มกี่สตั๊ด
+PLACE.SAME     = 1.0   -- ระยะที่ถือว่าเป็น "จุดเดิม" ที่เคยวางไม่ติด (จะไม่สุ่มไปในวงนี้)
 CONFIG.PLACE_ACCURACY = math.clamp(tonumber(CONFIG.PLACE_ACCURACY) or DEFAULTS.PLACE_ACCURACY, PLACE.MIN, 100)
 if not OWN.is then   -- คนนอกรายชื่อ: ล็อกค่าที่ซ่อนไว้เป็นค่าเริ่มต้น + ไม่จด Log remote
     for k in pairs(OWNER_ONLY_KEYS) do CONFIG[k] = DEFAULTS[k] end
@@ -1651,12 +1656,15 @@ local function waitUntilAffordable(spec, lastFireT)
     end
 end
 
--- spec = { label, cost, unknown, maxAttempts, statKey, active, attempt = function(t0) -> ok, extra }
+-- spec = { label, cost, unknown, maxAttempts, untilPlaced, statKey, active, attempt = function(t0) -> ok, extra }
+--   untilPlaced = true -> ไม่จำกัดจำนวนครั้ง วนจนวางติด (หยุดเมื่อกดหยุด / จบเกม / ออกจากเกม)
 -- คืน "ok", extra | "failed" | "aborted" | "gameover"
 local function runWithRetry(spec)
     local startT, attempts, lastFireT = os.clock(), 0, -math.huge
     while true do
-        if spec.unknown then
+        if spec.untilPlaced then
+            if isGameOver() or not inGame() then return "gameover" end
+        elseif spec.unknown then
             if attempts > 0 and os.clock() - startT > CONFIG.UNKNOWN_COST_WAIT then break end
         elseif attempts >= spec.maxAttempts then
             break
@@ -1776,6 +1784,27 @@ function PLACE.offset(scale)
     local r = maxR * (0.4 + 0.6 * PLACE.rng:NextNumber())   -- เลื่อนอย่างน้อย 40% ของระยะสูงสุด ไม่เกินระยะสูงสุด
     local th = PLACE.rng:NextNumber() * math.pi * 2
     return math.cos(th) * r, math.sin(th) * r
+end
+
+-- ขยับออกหลังวางไม่ติด: สุ่มจุดใหม่รอบจุดที่บันทึกไว้ (ระยะ ESC_MIN ถึงระยะที่ขยายตามจำนวนจุดที่ล้มเหลว)
+--   failed = รายการ { dx, dz } ของจุดที่วางไม่ติด (เทียบกับจุดที่บันทึกไว้)
+--   ห้ามอยู่ในวงรัศมี SAME รอบจุดที่เคยวางไม่ติด  คืน dx, dz
+function PLACE.escape(failed)
+    local reach = math.clamp(PLACE.ESC_MIN + PLACE.ESC_GROW * #failed, PLACE.ESC_MIN, PLACE.ESC_MAX)
+    local bestX, bestZ, bestGap = 0, 0, -1
+    for _ = 1, 60 do
+        local r = PLACE.ESC_MIN + (reach - PLACE.ESC_MIN) * PLACE.rng:NextNumber()
+        local th = PLACE.rng:NextNumber() * math.pi * 2
+        local x, z = math.cos(th) * r, math.sin(th) * r
+        local gap = math.huge
+        for _, f in ipairs(failed) do
+            gap = math.min(gap, math.sqrt((x - f[1]) ^ 2 + (z - f[2]) ^ 2))
+        end
+        if gap >= PLACE.SAME then return x, z end
+        if gap > bestGap then bestX, bestZ, bestGap = x, z, gap end
+    end
+    -- สุ่มไม่เจอช่องว่างเลย (จุดที่ล้มเหลวเยอะมาก) ใช้จุดที่ห่างจากจุดที่เคยพลาดมากที่สุดที่สุ่มได้
+    return bestX, bestZ
 end
 
 -- =====================================================================
@@ -2007,6 +2036,7 @@ local function playPlace(action, i, total, active, label)
     local cost, _, unknown = costInfo(action)
     local minDrop = math.max(1, (action.cost or 0) * 0.5)
     local firstT
+    local failed = {}   -- จุดที่ยิง TowerAdd แล้วยูนิตไม่โผล่ เก็บเป็น { dx, dz } เทียบกับจุดที่บันทึกไว้ (ห้ามกลับไปจุดเหล่านี้)
 
     -- ก่อนวาง: เอา Id ของยูนิตที่ชื่อตรงกับที่บันทึกไว้ จาก Slot ของผู้เล่นมาใส่
     local liveId, liveSlot = resolveUnitId(action.name, active)
@@ -2023,7 +2053,8 @@ local function playPlace(action, i, total, active, label)
 
     return runWithRetry({
         label = string.format("%s | #%d/%d วาง %s", label, i, total, tostring(action.name)),
-        cost = cost, unknown = unknown, maxAttempts = CONFIG.PLACE_RETRIES,
+        cost = cost, unknown = unknown,
+        untilPlaced = true,   -- วนจนวางติด (ไม่จำกัดจำนวนครั้ง)
         statKey = "placed", active = active,
         attempt = function(t0, n, probing)
             firstT = firstT or t0
@@ -2038,13 +2069,14 @@ local function playPlace(action, i, total, active, label)
                 if typeof(tp) == "Vector3" and PLACE.walk(tp, active) then t0 = os.clock() end
             end
 
-            -- เลื่อนตำแหน่ง X/Z นิดหน่อย  วางไม่ติดซ้ำๆ (ครั้งที่ 3 ขึ้นไป) = ลดระยะเลื่อนลง แล้วกลับมาตรงเป๊ะ
-            local scale = 1
-            if not probing then
-                n = n or 1
-                if n >= 4 then scale = 0 elseif n == 3 then scale = 0.5 end
+            -- ครั้งแรก: สุ่มเลื่อนนิดหน่อยตามความแม่นยำที่ตั้งไว้
+            -- วางไม่ติดแล้ว: สุ่มขยับออกไปจุดใหม่ ที่ไม่ซ้ำกับจุดที่เคยวางไม่ติด (โพรบเงินไม่นับเป็นจุดที่ล้มเหลว)
+            local dx, dz
+            if probing or #failed == 0 then
+                dx, dz = PLACE.offset(1)
+            else
+                dx, dz = PLACE.escape(failed)
             end
-            local dx, dz = PLACE.offset(scale)
             local cf, pos = action.cframe, action.pos
             if dx ~= 0 or dz ~= 0 then
                 local off = Vector3.new(dx, 0, dz)
@@ -2060,7 +2092,13 @@ local function playPlace(action, i, total, active, label)
                 logf("ยิง TowerAdd ไม่ได้: %s", tostring(err))
                 return false
             end
-            return awaitPlaced(action, firstT, active, minDrop, t0)
+            local placed, id = awaitPlaced(action, firstT, active, minDrop, t0)
+            if not placed and not probing then
+                failed[#failed + 1] = { dx, dz }
+                logf("วาง %s ไม่ติดที่ X%+.2f Z%+.2f -> จำจุดนี้ไว้ (%d จุด) แล้วขยับไปจุดใหม่",
+                    tostring(action.name), dx, dz, #failed)
+            end
+            return placed, id
         end,
     })
 end
