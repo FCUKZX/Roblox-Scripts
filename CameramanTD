@@ -1861,8 +1861,8 @@ end
 --   1) ครั้งแรก: สุ่มเลื่อนตามความแม่นยำ แต่ต้องไม่ชิดยูนิตอื่น (ห่าง >= CLEAR) และไม่ใช่จุดที่เคยวางไม่ติด
 --   2) ถ้าที่บันทึกไว้เบียดยูนิตอื่น / เคยวางไม่ติด -> ขยายวงสุ่มออกไปเรื่อยๆ หาจุดที่ว่างจริง
 --   tried = รายการ { dx, dz } ที่ยิงแล้ววางไม่ติดในแอคชันนี้
-
 function PLACE.choose(base, tried)
+    tried = tried or {}
     local occ = PLACE.occupied()
 
     local function score(dx, dz)
@@ -1873,24 +1873,22 @@ function PLACE.choose(base, tried)
         end
 
         for _, f in ipairs(tried) do
-            local ddx = dx - f[1]
-            local ddz = dz - f[2]
-
+            local tx, tz = tonumber(f[1]) or 0, tonumber(f[2]) or 0
+            local ddx, ddz = dx - tx, dz - tz
             if math.sqrt(ddx * ddx + ddz * ddz) < PLACE.SAME then
                 return -1
             end
         end
 
         local best = math.huge
-
-        for _, o in ipairs(occ) do
-            local d = PLACE.flat(p, o)
-            if d < best then
-                best = d
+        for _, occupiedPos in ipairs(occ) do
+            local distance = PLACE.flat(p, occupiedPos)
+            if distance < best then
+                best = distance
             end
         end
 
-        -- คืนระยะห่างจากยูนิตที่ใกล้ที่สุด
+        -- คืนระยะห่างจากยูนิตที่ใกล้ที่สุด (ถ้าไม่มียูนิตจะเป็น math.huge)
         return best
     end
 
@@ -1910,37 +1908,29 @@ function PLACE.choose(base, tried)
         PLACE.ESC_MIN,
         PLACE.ESC_MAX
     )
-
     local rMin = (#tried == 0) and 0.5 or PLACE.ESC_MIN
-    local bestX, bestZ = nil, nil
-    local bestScore = -1
+    local bestX, bestZ, bestScore = nil, nil, -1
 
     for i = 1, 150 do
         local lim = (i > 75)
             and math.min(reach * 1.6, PLACE.ESC_MAX * 1.5)
             or reach
+        local r = rMin + (math.max(lim, rMin) - rMin) * PLACE.rng:NextNumber()
+        local theta = PLACE.rng:NextNumber() * math.pi * 2
+        local dx, dz = math.cos(theta) * r, math.sin(theta) * r
+        local candidateScore = score(dx, dz)
 
-        local r = rMin + (math.max(lim, rMin) - rMin)
-            * PLACE.rng:NextNumber()
-
-        local th = PLACE.rng:NextNumber() * math.pi * 2
-        local dx = math.cos(th) * r
-        local dz = math.sin(th) * r
-        local s = score(dx, dz)
-
-        if s >= PLACE.CLEAR then
+        if candidateScore >= PLACE.CLEAR then
             return dx, dz
         end
-
-        if s > bestScore then
-            bestX, bestZ, bestScore = dx, dz, s
+        if candidateScore > bestScore then
+            bestX, bestZ, bestScore = dx, dz, candidateScore
         end
     end
 
-    -- ไม่พบจุดที่ผ่านเกณฑ์ ให้ระบบ retry แทนการใช้จุดที่เสี่ยง
+    -- ไม่มีจุดที่ผ่านเกณฑ์ ให้ retry แทนการยิงตำแหน่งที่เสี่ยง
     return nil, nil
 end
-
 
 -- =====================================================================
 --  วางไม่จำกัดพื้นที่ (CONFIG.PLACE_ANYWHERE)  ปรับตัวเลขได้ที่ตาราง ANY ด้านล่าง
@@ -2224,17 +2214,29 @@ local function playPlace(action, i, total, active, label)
                 dx, dz = PLACE.offset(1)
             end
             local cf, pos = action.cframe, action.pos
--- ถ้าหาจุดวางที่ผ่านเกณฑ์ไม่ได้ ให้รอบถัดไปลองใหม่
-if dx == nil or dz == nil then
-    logf(
-        "วาง %s: ยังหาจุดที่ห่างจากยูนิตอื่นพอไม่ได้ จะลองใหม่",
-        tostring(action.name)
-    )
-    return false
-end
 
--- ใช้ตำแหน่งที่ส่งไปวางจริงในการตรวจจับผล
-local checkAction = {
+            -- ถ้าหาจุดวางที่ผ่านเกณฑ์ไม่ได้ ให้รอบถัดไปลองใหม่
+            if dx == nil or dz == nil then
+                logf(
+                    "วาง %s: ยังหาจุดที่ห่างจากยูนิตอื่นพอไม่ได้ จะลองใหม่",
+                    tostring(action.name)
+                )
+                return false
+            end
+
+            -- สำคัญ: นำ offset ที่คำนวณได้ไปใช้กับตำแหน่งที่จะส่งจริง
+            local offset = Vector3.new(dx, 0, dz)
+            if typeof(cf) == "CFrame" then
+                cf = cf + offset
+            end
+            if typeof(pos) == "Vector3" then
+                pos = pos + offset
+            elseif typeof(pos) ~= "Vector3" and typeof(cf) == "CFrame" then
+                pos = cf.Position
+            end
+
+            -- ใช้ตำแหน่งที่ส่งไปวางจริงในการตรวจจับผล
+            local checkAction = {
     name = action.name,
     unitId = action.unitId,
     pos = pos or (typeof(cf) == "CFrame" and cf.Position or nil),
