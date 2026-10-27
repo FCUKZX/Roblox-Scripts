@@ -1875,7 +1875,12 @@ function PLACE.choose(base, tried)
             local d = PLACE.flat(p, o)
             if d < best then best = d end
         end
-        return best
+        -- ถ้าหาจุดที่มีระยะห่างตามเกณฑ์ไม่ได้ อย่าฝืนใช้จุดที่อาจวางไม่ได้
+        if bestScore < PLACE.CLEAR then
+            return nil, nil
+        end
+
+        return bestX, bestZ
     end
 
     -- ขั้น 1: เลื่อนเล็กน้อยตามความแม่นยำ (เฉพาะครั้งแรกที่ยังไม่เคยพลาด)
@@ -2184,32 +2189,64 @@ local function playPlace(action, i, total, active, label)
                 dx, dz = PLACE.offset(1)
             end
             local cf, pos = action.cframe, action.pos
-            if dx ~= 0 or dz ~= 0 then
-                local off = Vector3.new(dx, 0, dz)
-                if typeof(cf) == "CFrame" then cf = cf + off end
-                if typeof(pos) == "Vector3" then pos = pos + off end
-                logf("วาง %s เลื่อน X%+.2f Z%+.2f", tostring(action.name), dx, dz)
-            end
+-- ถ้าหาจุดวางที่ผ่านเกณฑ์ไม่ได้ ให้รอบถัดไปลองใหม่
+if dx == nil or dz == nil then
+    logf(
+        "วาง %s: ยังหาจุดที่ห่างจากยูนิตอื่นพอไม่ได้ จะลองใหม่",
+        tostring(action.name)
+    )
+    return false
+end
 
-            local ok, err = fire(towerAddRE, {
-                UnitId = action.unitId, CFrame = cf,
-                Name = action.name, Pos = pos,
-            })
-            if not ok then
-                logf("ยิง TowerAdd ไม่ได้: %s", tostring(err))
-                return false
-            end
+-- ใช้ตำแหน่งที่ส่งไปวางจริงในการตรวจจับผล
+local checkAction = {
+    name = action.name,
+    unitId = action.unitId,
+    pos = pos or (typeof(cf) == "CFrame" and cf.Position or nil),
+    cframe = cf,
+}
 
-            local placed, id = awaitPlaced(action, firstT, active, minDrop, t0)
-            if not placed and not probing and active() then
-                failed[#failed + 1] = { dx, dz }
-                if typeof(base) == "Vector3" then
-                    PLACE.markBad(Vector3.new(base.X + dx, base.Y, base.Z + dz))   -- จำจุดจริงในโลก ยูนิตอื่นก็ไม่ไปจุดนี้
-                end
-                logf("วาง %s ไม่ติดที่ X%+.2f Z%+.2f -> จำจุดนี้ไว้ (%d จุด) แล้วขยับไปจุดใหม่",
-                    tostring(action.name), dx, dz, #failed)
-            end
-            return placed, id
+local fireTime = os.clock()
+
+local ok, err = fire(towerAddRE, {
+    UnitId = action.unitId,
+    CFrame = cf,
+    Name = action.name,
+    Pos = pos,
+})
+
+if not ok then
+    logf("ยิง TowerAdd ไม่ได้: %s", tostring(err))
+    return false
+end
+
+-- ตรวจเฉพาะยูนิตที่เกิดหลังการลองวางรอบนี้
+local placed, id = awaitPlaced(
+    checkAction,
+    fireTime,
+    active,
+    minDrop,
+    fireTime
+)
+
+if not placed and not probing and active() then
+    failed[#failed + 1] = { dx, dz }
+
+    if typeof(base) == "Vector3" then
+        PLACE.markBad(
+            Vector3.new(base.X + dx, base.Y, base.Z + dz)
+        )
+    end
+
+    logf(
+        "วาง %s ไม่สำเร็จที่ X%+.2f Z%+.2f -> จะลองจุดใหม่",
+        tostring(action.name),
+        dx,
+        dz
+    )
+end
+
+return placed, id
         end,
     })
 end
