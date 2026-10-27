@@ -20,7 +20,7 @@
 --   (Teleport ตรงๆ ไม่ได้ ต้องกดปุ่ม Lobby ตอนเกมจบเท่านั้น | จำว่าตู้รีเซ็ตแล้วลงไฟล์ ย้ายเซิร์ฟแล้วก็ไม่ลืม)
 --   ตั้งตัว/ด่านที่สคริปต์ลอบบี้ (CameramanLobby.lua)
 --
--- [แพตช์] วางยูนิตไม่ติด -> สุ่มจุดใหม่ที่ "ไม่ชิดยูนิตอื่น" (เช็กจาก workspace.Game.Towers) + จำจุดที่วางไม่ติด
+-- [แพตช์] วางยูนิตไม่ติด -> ยิงซ้ำที่ตำแหน่งเดิมที่บันทึกไว้ (ไม่มีการสุ่มตำแหน่งแล้ว)
 --         + รอผลวางนานขึ้น + เช็กยูนิตที่วางติดช้าก่อนยิงซ้ำ + พลาดครบ PLACE.MAX_TRY ครั้งจะข้ามยูนิตนั้น
 
 -- =====================================================================
@@ -202,7 +202,6 @@ local DEFAULTS = {
     ANTI_LAG = false,       -- โหมดลดกระตุก (จำค่าไว้ เปิดเองตอนเข้าเกม)
     GAME_NOTIF = true,      -- แจ้งเตือนของเกม (GameUI.Notifications): เปิด = แสดงตามปกติ | ปิด = ซ่อน (จำค่าไว้)
     GAMESPEED_PICK = "",    -- ชื่อปุ่มความเร็วที่เลือก (ตรงกับชื่อใน GameUI.GameSpeeds เช่น "1.5")
-    PLACE_ACCURACY = 95,    -- ความแม่นตำแหน่งตอนวาง (%) ปรับได้ 90-100 (100 = ตรงเป๊ะ / ต่ำกว่า 90 ไม่ได้)
     PLACE_ANYWHERE = false, -- วางไม่จำกัดพื้นที่: จุดแดงวางไม่ได้ -> กดสองรอบติด สคริปต์ยิง TowerAdd ด้วยตำแหน่งของ "รอบแรก" ให้เอง
     SAFE_CLICK = true,      -- มือถือ: ไม่จำลองเมาส์ตอนตัวละครกำลังเดิน (กันเดินไม่ได้หลังสคริปต์กดปุ่ม)
     HIDE_NAME = false,      -- ซ่อนชื่อตัวเอง (Name + DisplayName) ทุกที่ในเกม -> แสดงเป็น "ถูกซ่อน"
@@ -217,7 +216,7 @@ local DEFAULTS = {
 local USER_KEYS = {
     "EAGER_ON", "START_DELAY", "AUTO_REPLAY", "REPLAY_WAIT", "AUTO_RESUME", "REQUIRE_VOTE_UI", "SNIFFER",
     "ANTI_AFK", "WEBHOOK_ON", "WEBHOOK_URL", "STOP_KEY", "AUTO_SKIP", "GAMESPEED_ON", "GAMESPEED_PICK",
-    "WAVE_GATE", "ANTI_LAG", "PLACE_ACCURACY", "SAFE_CLICK", "GAME_NOTIF", "WALK_TO_PLACE",
+    "WAVE_GATE", "ANTI_LAG", "SAFE_CLICK", "GAME_NOTIF", "WALK_TO_PLACE",
     "HIDE_NAME", "NOOB_MODE", "AUTO_SELECT_SUMMON", "SUMMON_WAVE_MAX", "PLACE_ANYWHERE", "SNAP_BACK",
     "NOSKIP_WAVES",   -- เวฟที่ไม่ให้ Auto Skip ทำงาน (เซฟตอนเพิ่ม/แก้/ลบ)
 }
@@ -256,16 +255,8 @@ end
 
 CONFIG.WEBHOOK_ON = true -- เปิดแจ้งเตือนดิสอัตโนมัติทุกครั้งที่รันสคริปต์ (ปิดชั่วคราวได้ในหน้า Settings)
 
--- ความแม่นตำแหน่งวาง: ต่ำสุด 90% เสมอ (กันแก้ไฟล์เซฟให้ต่ำกว่านี้)
---   ระยะเลื่อนสูงสุด (สตั๊ด) = (100 - ความแม่น) / 100 * STUDS
---   เช่น 95% = เลื่อนไม่เกิน 0.5 สตั๊ด / 90% = ไม่เกิน 1 สตั๊ด  (อยากให้เลื่อนมากขึ้น เพิ่มเลข STUDS)
-local PLACE = { MIN = 90, STUDS = 10, rng = Random.new() }
--- วางไม่ติด -> สุ่มขยับออกจากจุดเดิม แล้วจำทุกจุดที่วางไม่ติดไว้ ห้ามกลับไปจุดนั้นอีก (วนจนกว่าจะวางติด)
-PLACE.ESC_MIN  = 1.5   -- ขยับออกอย่างน้อยกี่สตั๊ด
-PLACE.ESC_MAX  = 8     -- ขยับไกลสุดกี่สตั๊ด
-PLACE.ESC_GROW = 0.5   -- ทุกจุดที่วางไม่ติด 1 จุด ระยะขยับสูงสุดเพิ่มกี่สตั๊ด
-PLACE.SAME     = 1.0   -- ระยะที่ถือว่าเป็น "จุดเดิม" ที่เคยวางไม่ติด (จะไม่สุ่มไปในวงนี้)
-CONFIG.PLACE_ACCURACY = math.clamp(tonumber(CONFIG.PLACE_ACCURACY) or DEFAULTS.PLACE_ACCURACY, PLACE.MIN, 100)
+-- ไม่มีการสุ่มตำแหน่งวางแล้ว (ยูนิตวางที่ตำแหน่งที่บันทึกไว้เป๊ะๆ)
+local PLACE = {}
 if not OWN.is then   -- คนนอกรายชื่อ: ล็อกค่าที่ซ่อนไว้เป็นค่าเริ่มต้น + ไม่จด Log remote
     for k in pairs(OWNER_ONLY_KEYS) do CONFIG[k] = DEFAULTS[k] end
     CONFIG.SNIFFER = false
@@ -1779,157 +1770,8 @@ local function resolveUnitId(name, active)
     return nil
 end
 
--- สุ่มเลื่อนตำแหน่ง X/Z ตอนวาง (ไม่แก้ค่าที่บันทึกไว้ ทุกรอบสุ่มใหม่)
---   scale 1 = เต็มระยะตามที่ตั้ง | 0.5 = ครึ่งหนึ่ง | 0 = ตรงเป๊ะ
-function PLACE.offset(scale)
-    local acc = math.clamp(tonumber(CONFIG.PLACE_ACCURACY) or DEFAULTS.PLACE_ACCURACY, PLACE.MIN, 100)
-    local maxR = (100 - acc) / 100 * PLACE.STUDS * (scale or 1)
-    if maxR <= 0 then return 0, 0 end
-    local r = maxR * (0.4 + 0.6 * PLACE.rng:NextNumber())   -- เลื่อนอย่างน้อย 40% ของระยะสูงสุด ไม่เกินระยะสูงสุด
-    local th = PLACE.rng:NextNumber() * math.pi * 2
-    return math.cos(th) * r, math.sin(th) * r
-end
-
--- ขยับออกหลังวางไม่ติด: สุ่มจุดใหม่รอบจุดที่บันทึกไว้ (ระยะ ESC_MIN ถึงระยะที่ขยายตามจำนวนจุดที่ล้มเหลว)
---   failed = รายการ { dx, dz } ของจุดที่วางไม่ติด (เทียบกับจุดที่บันทึกไว้)
---   ห้ามอยู่ในวงรัศมี SAME รอบจุดที่เคยวางไม่ติด  คืน dx, dz
---   (เก็บไว้เป็นตัวสำรอง ตัวหลักตอนนี้คือ PLACE.choose ด้านล่าง)
-function PLACE.escape(failed)
-    local reach = math.clamp(PLACE.ESC_MIN + PLACE.ESC_GROW * #failed, PLACE.ESC_MIN, PLACE.ESC_MAX)
-    local bestX, bestZ, bestGap = 0, 0, -1
-    for _ = 1, 60 do
-        local r = PLACE.ESC_MIN + (reach - PLACE.ESC_MIN) * PLACE.rng:NextNumber()
-        local th = PLACE.rng:NextNumber() * math.pi * 2
-        local x, z = math.cos(th) * r, math.sin(th) * r
-        local gap = math.huge
-        for _, f in ipairs(failed) do
-            gap = math.min(gap, math.sqrt((x - f[1]) ^ 2 + (z - f[2]) ^ 2))
-        end
-        if gap >= PLACE.SAME then return x, z end
-        if gap > bestGap then bestX, bestZ, bestGap = x, z, gap end
-    end
-    -- สุ่มไม่เจอช่องว่างเลย (จุดที่ล้มเหลวเยอะมาก) ใช้จุดที่ห่างจากจุดที่เคยพลาดมากที่สุดที่สุ่มได้
-    return bestX, bestZ
-end
-
--- =====================================================================
---  [แพตช์] เลือกจุดวางแบบหลบยูนิตอื่น (ใช้ตารางสนาม PLACE ไม่เพิ่ม local ระดับบนสุด)
--- =====================================================================
-PLACE.CLEAR   = 3.5   -- ห่างจากยูนิตที่มีอยู่แล้วอย่างน้อยกี่สตั๊ด (ถ้ายูนิตใหญ่/ชนบ่อย เพิ่มเลขนี้)
+-- ไม่มีการสุ่มตำแหน่งแล้ว: ยูนิตจะถูกยิงที่ตำแหน่งที่บันทึกไว้ตรงๆ ทุกครั้ง
 PLACE.MAX_TRY = 40    -- วางไม่ติดครบกี่ครั้งแล้วข้ามยูนิตนี้ (กันค้างตลอดกาล)  ใส่ nil = ไม่จำกัด
-PLACE.BAD_MAX = 150   -- จำจุดที่วางไม่ติดไว้สูงสุดกี่จุด
-PLACE.BAD_TTL = 900   -- จำจุดที่วางไม่ติดไว้กี่วินาที (กันจำผิดเพราะแล็ก)
-PLACE.bad = {}        -- { {p = Vector3, t = เวลา} }  จุดจริงในโลกที่เคยวางไม่ติด (ข้ามรอบได้)
-
-function PLACE.flat(a, b)
-    local dx, dz = a.X - b.X, a.Z - b.Z
-    return math.sqrt(dx * dx + dz * dz)
-end
-
--- ตำแหน่งยูนิตทั้งหมดที่อยู่ในฉากตอนนี้ (workspace.Game.Towers)
-function PLACE.occupied()
-    local list = {}
-    local f = TD.towersFolder
-    if f and f.Parent then
-        for _, t in ipairs(f:GetChildren()) do
-            local p = instPos(t)
-            if p then list[#list + 1] = p end
-        end
-    end
-    return list
-end
-
-function PLACE.markBad(p)
-    if typeof(p) ~= "Vector3" then return end
-    local now = os.clock()
-    for i = #PLACE.bad, 1, -1 do
-        if now - PLACE.bad[i].t > PLACE.BAD_TTL then table.remove(PLACE.bad, i) end
-    end
-    PLACE.bad[#PLACE.bad + 1] = { p = p, t = now }
-    while #PLACE.bad > PLACE.BAD_MAX do table.remove(PLACE.bad, 1) end
-end
-
-function PLACE.nearBad(p)
-    local now = os.clock()
-    for _, b in ipairs(PLACE.bad) do
-        if now - b.t <= PLACE.BAD_TTL and PLACE.flat(p, b.p) < PLACE.SAME then return true end
-    end
-    return false
-end
-
--- เลือกจุดสำรองหลังส่งตำแหน่งเดิมแล้ววางไม่ติด: คืน dx, dz เทียบกับ base
--- ต้องห่างจากยูนิตอื่นอย่างน้อย CLEAR และไม่ย้อนกลับไปจุดที่เคยวางไม่ติด
--- tried = รายการ { dx, dz } ที่ยิงแล้ววางไม่ติดในแอคชันนี้
-function PLACE.choose(base, tried)
-    tried = tried or {}
-    local occ = PLACE.occupied()
-
-    local function score(dx, dz)
-        local p = Vector3.new(base.X + dx, base.Y, base.Z + dz)
-
-        if PLACE.nearBad(p) then
-            return -1
-        end
-
-        for _, f in ipairs(tried) do
-            local tx, tz = tonumber(f[1]) or 0, tonumber(f[2]) or 0
-            local ddx, ddz = dx - tx, dz - tz
-            if math.sqrt(ddx * ddx + ddz * ddz) < PLACE.SAME then
-                return -1
-            end
-        end
-
-        local best = math.huge
-        for _, occupiedPos in ipairs(occ) do
-            local distance = PLACE.flat(p, occupiedPos)
-            if distance < best then
-                best = distance
-            end
-        end
-
-        -- คืนระยะห่างจากยูนิตที่ใกล้ที่สุด (ถ้าไม่มียูนิตจะเป็น math.huge)
-        return best
-    end
-
-    -- ลองขยับเล็กน้อยก่อน
-    if #tried == 0 then
-        for _ = 1, 25 do
-            local dx, dz = PLACE.offset(1)
-            if score(dx, dz) >= PLACE.CLEAR then
-                return dx, dz
-            end
-        end
-    end
-
-    -- ขยายวงค้นหาเมื่อจุดเดิมวางไม่ติด
-    local reach = math.clamp(
-        PLACE.ESC_MIN + PLACE.ESC_GROW * #tried,
-        PLACE.ESC_MIN,
-        PLACE.ESC_MAX
-    )
-    local rMin = (#tried == 0) and 0.5 or PLACE.ESC_MIN
-    local bestX, bestZ, bestScore = nil, nil, -1
-
-    for i = 1, 150 do
-        local lim = (i > 75)
-            and math.min(reach * 1.6, PLACE.ESC_MAX * 1.5)
-            or reach
-        local r = rMin + (math.max(lim, rMin) - rMin) * PLACE.rng:NextNumber()
-        local theta = PLACE.rng:NextNumber() * math.pi * 2
-        local dx, dz = math.cos(theta) * r, math.sin(theta) * r
-        local candidateScore = score(dx, dz)
-
-        if candidateScore >= PLACE.CLEAR then
-            return dx, dz
-        end
-        if candidateScore > bestScore then
-            bestX, bestZ, bestScore = dx, dz, candidateScore
-        end
-    end
-
-    -- ไม่มีจุดที่ผ่านเกณฑ์ ให้ retry แทนการยิงตำแหน่งที่เสี่ยง
-    return nil, nil
-end
 
 -- =====================================================================
 --  วางไม่จำกัดพื้นที่ (CONFIG.PLACE_ANYWHERE)  ปรับตัวเลขได้ที่ตาราง ANY ด้านล่าง
@@ -2160,8 +2002,6 @@ local function playPlace(action, i, total, active, label)
     local cost, _, unknown = costInfo(action)
     local minDrop = math.max(1, (action.cost or 0) * 0.5)
     local firstT
-    local failed = {}   -- จุดที่ยิง TowerAdd แล้วยูนิตไม่โผล่ เก็บเป็น { dx, dz } เทียบกับจุดที่บันทึกไว้ (ห้ามกลับไปจุดเหล่านี้)
-    local originalPositionSent = false -- ส่งตำแหน่งที่บันทึกไว้ตรง ๆ ก่อนเสมอ
 
     local base = action.pos
     if typeof(base) ~= "Vector3" and typeof(action.cframe) == "CFrame" then base = action.cframe.Position end
@@ -2206,40 +2046,9 @@ local function playPlace(action, i, total, active, label)
                 if typeof(base) == "Vector3" and PLACE.walk(base, active) then t0 = os.clock() end
             end
 
-            -- ครั้งแรกใช้ตำแหน่งเดิมจากมาโครแบบตรง ๆ ไม่สุ่มและไม่ขยับ
-            -- ถ้าส่งแล้วตรวจไม่พบยูนิตเพิ่ม รอบถัดไปจึงค่อยหาจุดสุ่มใหม่
-            local dx, dz
-            local useOriginalPosition = not originalPositionSent
-            if useOriginalPosition then
-                dx, dz = 0, 0
-            elseif typeof(base) == "Vector3" then
-                dx, dz = PLACE.choose(base, failed)
-            else
-                dx, dz = PLACE.offset(1)
-            end
+            -- ยิงที่ตำแหน่งที่บันทึกไว้ตรงๆ ทุกครั้ง (ไม่สุ่มตำแหน่ง)
+            -- วางไม่ติด -> รอบถัดไปยิงตำแหน่งเดิมซ้ำ (พลาดครบ PLACE.MAX_TRY จะข้ามยูนิตนี้)
             local cf, pos = action.cframe, action.pos
-
-            -- ถ้าหาจุดสุ่มที่ผ่านเกณฑ์ไม่ได้ ให้รอบถัดไปลองใหม่
-            if dx == nil or dz == nil then
-                logf(
-                    "วาง %s: ยังหาจุดที่ห่างจากยูนิตอื่นพอไม่ได้ จะลองใหม่",
-                    tostring(action.name)
-                )
-                return false
-            end
-
-            -- ใช้ offset เฉพาะรอบสุ่มหลังจากตำแหน่งเดิมวางไม่ติด
-            if not useOriginalPosition then
-                local offset = Vector3.new(dx, 0, dz)
-                if typeof(cf) == "CFrame" then
-                    cf = cf + offset
-                end
-                if typeof(pos) == "Vector3" then
-                    pos = pos + offset
-                elseif typeof(pos) ~= "Vector3" and typeof(cf) == "CFrame" then
-                    pos = cf.Position
-                end
-            end
 
             -- ใช้ตำแหน่งที่ส่งไปวางจริงในการตรวจจับผล
             local checkAction = {
@@ -2275,10 +2084,6 @@ if not ok then
     return false
 end
 
--- ยืนยันว่าได้ส่งตำแหน่งเดิมไปแล้ว; ถ้ายูนิตไม่เพิ่ม รอบ retry จะใช้จุดสุ่ม
-if useOriginalPosition then
-    originalPositionSent = true
-end
 
 -- ตรวจเฉพาะยูนิตที่เกิดหลังการลองวางรอบนี้
 local placed, id = awaitPlaced(
@@ -2290,7 +2095,7 @@ local placed, id = awaitPlaced(
 )
 
 -- ยืนยันกับ workspace.Game.Towers ว่ามียูนิตใหม่เพิ่มจริง
--- อย่าใช้แค่เงินลดเป็นเงื่อนไขสำเร็จ เพราะถ้าจำนวนไม่เพิ่มต้องลองจุดสุ่มใหม่
+-- อย่าใช้แค่เงินลดเป็นเงื่อนไขสำเร็จ เพราะถ้าจำนวนไม่เพิ่มต้องลองใหม่
 if towersFolderAtFire and towersFolderAtFire.Parent and towerCountBefore ~= nil then
     local countDeadline = os.clock() + math.max(0.75, math.min(2, getPing() * 2 + 0.5))
     local newTower
@@ -2315,25 +2120,12 @@ if towersFolderAtFire and towersFolderAtFire.Parent and towerCountBefore ~= nil 
     else
         placed = false
         id = nil
-        logf("วาง %s: จำนวนใน Towers ไม่เพิ่ม จะลองตำแหน่งสุ่มใหม่", tostring(action.name))
+        logf("วาง %s: จำนวนใน Towers ไม่เพิ่ม จะลองที่ตำแหน่งเดิมอีกครั้ง", tostring(action.name))
     end
 end
 
 if not placed and not probing and active() then
-    failed[#failed + 1] = { dx, dz }
-
-    if typeof(base) == "Vector3" then
-        PLACE.markBad(
-            Vector3.new(base.X + dx, base.Y, base.Z + dz)
-        )
-    end
-
-    logf(
-        "วาง %s ไม่สำเร็จที่ X%+.2f Z%+.2f -> จะลองจุดใหม่",
-        tostring(action.name),
-        dx,
-        dz
-    )
+    logf("วาง %s ไม่สำเร็จที่ตำแหน่งเดิม -> จะลองใหม่", tostring(action.name))
 end
 
 return placed, id
@@ -3532,9 +3324,6 @@ ui.T = {
     nameTitle = "ชื่อบันทึก", namePlaceholder = "ว่าง = ตั้งชื่อให้เอง",
     playTitle = "Playback", playDesc = "เล่นมาโครที่โหลดไว้",
     loops = "จำนวนรอบ (1-", playRounds = "เล่นตามรอบ", playForever = "เล่นวนตลอด", stopAll = "หยุดทั้งหมด",
-    randTitle = "สุ่มตำแหน่ง", randDesc = "ขยับตำแหน่งวางนิดหน่อย",
-    accTitle = "ความแม่นยำตำแหน่ง", accExact = "วางตรงจุดเป๊ะ",
-    accFmt = "ความแม่นยำ %d%% (ขยับไม่เกิน ~%.2f Studs)",
 
     -- แท็บ Saves
     savesTitle = "Saved macros", savesDesc = "แตะชื่อเพื่อโหลด", savesList = "ไฟล์บันทึก",
@@ -3583,7 +3372,7 @@ ui.T = {
 
     -- แท็บ Settings
     whereTitle = "ตำแหน่งฟังก์ชัน", whereDesc = "ดูว่าอะไรอยู่แท็บไหน",
-    whereText = "Macro: บันทึก / เล่น / สุ่มตำแหน่ง\nSaves, Editor: จัดการมาโคร\nAuto: ระบบออโต้\nExtras: ระบบเสริม\nSettings: ตั้งค่าหลัก",
+    whereText = "Macro: บันทึก / เล่น\nSaves, Editor: จัดการมาโคร\nAuto: ระบบออโต้\nExtras: ระบบเสริม\nSettings: ตั้งค่าหลัก",
     detTitle = "สถานะระบบ", detDesc = "ดูว่าสคริปต์ทำงานครบไหม",
     genTitle = "ทั่วไป", genDesc = "ตั้งค่าหลัก",
     onlyInGame = "ทำงานเฉพาะในเกม", onlyInGameDesc = "ปิดถ้าสคริปต์คิดว่าไม่ได้อยู่ในเกม",
@@ -3721,34 +3510,6 @@ sPlay:Actions({
 })
 sPlay:Action({ Text = ui.T.stopAll, Icon = "square", Color = PT.Elem, Callback = function() stopAll() end })
 
-do
-local sPlace = tMacro:Section({
-    Title = ui.T.randTitle,
-    Desc = ui.T.randDesc,
-    Icon = "map-pin",
-    Color = PT.Cyan,
-})
-local function placeAccText(v)
-    v = math.clamp(tonumber(v) or 100, PLACE.MIN, 100)
-    local r = (100 - v) / 100 * PLACE.STUDS
-    if r <= 0 then return ui.T.accExact end
-    return string.format(ui.T.accFmt, math.floor(v + 0.5), r)
-end
-ui.placeAccLabel = sPlace:Label({ Text = placeAccText(CONFIG.PLACE_ACCURACY), Color = PT.Text })
-sPlace:Slider({
-    Title = ui.T.accTitle,
-    Min = PLACE.MIN,
-    Max = 100,
-    Step = 1,
-    Suffix = "%",
-    Default = CONFIG.PLACE_ACCURACY,
-    Callback = function(v)
-        CONFIG.PLACE_ACCURACY = math.clamp(tonumber(v) or 100, PLACE.MIN, 100)
-        if ui.placeAccLabel then ui.placeAccLabel.Text = placeAccText(CONFIG.PLACE_ACCURACY) end
-        ui.saveSoon()
-    end,
-})
-end
 
 ui.setRecordUI = function(on)
     ui.recordBtn:SetText(on and ui.T.recStop or ui.T.recStart)
