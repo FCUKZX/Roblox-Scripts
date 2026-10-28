@@ -22,6 +22,10 @@
 --
 -- [แพตช์] วางยูนิตไม่ติด -> ยิงซ้ำที่ตำแหน่งเดิมที่บันทึกไว้ (ไม่มีการสุ่มตำแหน่งแล้ว)
 --         + รอผลวางนานขึ้น + เช็กยูนิตที่วางติดช้าก่อนยิงซ้ำ + พลาดครบ PLACE.MAX_TRY ครั้งจะข้ามยูนิตนั้น
+--
+-- [ฟีเจอร์] โหมดสองเซฟ: แท็บ Saves > เปิดโหมด แล้วแตะ 2 เซฟ (A, B) ในรายการ
+--          -> กด "เล่นตามรอบ / เล่นวนตลอด" จะสลับ A, B, A, B... ตามลำดับรอบ (รอบที่ 1 = A, รอบที่ 2 = B, ...)
+--          ปิดโหมด = เล่นเซฟเดียวตามปกติ | ย้ายเซิร์ฟระหว่างเล่นก็สลับต่อให้ (จำคู่ไว้ในไฟล์ resume)
 
 -- =====================================================================
 --  ตั้งค่าที่แก้เองได้ (ไม่บังคับ)
@@ -415,6 +419,15 @@ local isRecording = false
 local isPlaying = false
 local playToken = 0
 local selfFiring = false   -- true ระหว่างที่สคริปต์ยิง remote เอง (ไม่ให้ hook บันทึกซ้ำ)
+
+-- โหมดสองเซฟ: เปิดแล้วแตะเลือก 2 เซฟในแท็บ Saves (A, B) -> ตอนเล่นสลับ A,B,A,B... ตามลำดับรอบ
+-- ปิด = เล่นเซฟเดียว (selectedName) ตามปกติ
+local altMode = false
+local altPair = {}        -- ชื่อเซฟคู่ ([1] = A, [2] = B) ไม่เกิน 2 ชื่อ
+local function altSnapshot()   -- คู่ที่เลือกไว้ตอนนี้ (ใช้เขียนลงไฟล์ resume ตอนย้ายเซิร์ฟ)
+    if altMode and #altPair == 2 then return { altPair[1], altPair[2] } end
+    return nil
+end
 
 local stats = {
     rounds = 0, placed = 0, upgraded = 0, sold = 0, retries = 0, failures = 0,
@@ -2370,7 +2383,7 @@ end
 local function saveResume(completed, total, forever)
     if not (writefile and CONFIG.AUTO_RESUME and selectedName) then return end
     local data = {
-        playing = true, ts = os.time(), gameId = game.GameId, name = selectedName,
+        playing = true, ts = os.time(), gameId = game.GameId, name = selectedName, alt = altSnapshot(),
         round = completed, total = forever and 0 or total, forever = forever and true or false,
         stats = {
             rounds = stats.rounds, placed = stats.placed, upgraded = stats.upgraded, sold = stats.sold,
@@ -2461,7 +2474,27 @@ local function runLoops(total, startCompleted, waitForGame)
         setStatus("หยุดบันทึกก่อนจึงจะเล่นได้", "warn", "square")
         return
     end
-    if #recordedActions == 0 then
+    -- โหมดสองเซฟ: โหลดทั้ง A และ B ไว้ก่อนเริ่ม แล้วสลับใช้ตามลำดับรอบ (ดูในลูปด้านล่าง)
+    local pairData = nil
+    if altMode then
+        if #altPair ~= 2 then
+            setStatus("โหมดสองเซฟ: เลือกเซฟให้ครบ 2 อันก่อน (แท็บ Saves)", "warn", "x")
+            return
+        end
+        if macroDirty then
+            setStatus("มีการแก้ที่ยังไม่บันทึก กดบันทึกก่อนแล้วค่อยเล่นสองเซฟ", "warn", "x")
+            return
+        end
+        pairData = {}
+        for i, name in ipairs(altPair) do
+            local actions, meta = loadMacro(name)
+            if not actions then
+                setStatus("โหลดเซฟ " .. name .. " ไม่ได้", "bad", "x")
+                return
+            end
+            pairData[i] = { name = name, actions = actions, meta = meta or { vote = nil } }
+        end
+    elseif #recordedActions == 0 then
         setStatus("ยังไม่มีมาโครให้เล่น (บันทึกหรือโหลดก่อน)", "warn", "x")
         return
     end
@@ -2503,7 +2536,14 @@ local function runLoops(total, startCompleted, waitForGame)
             end
 
             while active() and not stopMsg and (forever or completed < total) do
+                -- โหมดสองเซฟ: รอบที่กำลังจะเริ่ม = completed + 1 -> รอบ 1,3,5... ใช้เซฟ A | รอบ 2,4,6... ใช้เซฟ B
+                if pairData then
+                    local slot = pairData[(completed % 2) + 1]
+                    recordedActions, macroMeta, selectedName = slot.actions, slot.meta, slot.name
+                    macroDirty = false
+                end
                 local label = string.format("%d/%s", completed + 1, forever and "∞" or tostring(total))
+                if pairData then label = label .. (completed % 2 == 0 and " [A] " or " [B] ") .. selectedName end
 
                 if not inGame() then
                     -- หลุดออกจากเกม/กลับลอบบี้: รอเฉยๆ ไม่ทำอะไร
@@ -2634,6 +2674,11 @@ local function tryResume()
     if not forever and completed >= total then
         clearResume()
         return
+    end
+    -- ก่อนย้ายเซิร์ฟเล่นโหมดสองเซฟอยู่ -> คืนคู่เซฟเดิม (runLoops จะสลับ A/B ต่อจากรอบเดิม)
+    if type(d.alt) == "table" and #d.alt == 2 then
+        altPair = { tostring(d.alt[1]), tostring(d.alt[2]) }
+        altMode = true
     end
     notify(string.format("ย้ายเซิร์ฟแล้ว เล่นต่อจากรอบที่ %d", completed + 1), nil, 5, "play")
     logf("resume: %s รอบที่ %d", selectedName, completed + 1)
@@ -3461,6 +3506,7 @@ ui.refreshAll = function()
         if not alive then return end
         pcall(ui.setRecordUI, isRecording)
         pcall(ui.refreshList)
+        pcall(ui.updatePair)
         pcall(ui.updateLoaded)
         pcall(ui.refreshEditor)
     end)
@@ -3520,6 +3566,8 @@ end
 ui.updateLoaded = function()
     if isRecording then
         ui.loadedLabel.Text = string.format("กำลังบันทึก... (%d แอคชัน)", #recordedActions)
+    elseif altMode and #altPair == 2 then
+        ui.loadedLabel.Text = string.format("โหมดสองเซฟ: A = %s | B = %s", altPair[1], altPair[2])
     elseif selectedName then
         ui.loadedLabel.Text = string.format("Loaded: %s (%d แอคชัน)", selectedName, #recordedActions)
     elseif #recordedActions > 0 then
@@ -3541,6 +3589,9 @@ ui.saveList = sSaves:List({ Height = 170, Title = ui.T.savesList })
 ui.doDelete = function(name)
     local ok = canFile and pcall(delfile, pathOf(name))
     if ok then
+        for i = #altPair, 1, -1 do
+            if altPair[i] == name then table.remove(altPair, i) end
+        end
         if selectedName == name then
             recordedActions = {}
             macroMeta = { vote = nil }
@@ -3587,6 +3638,35 @@ local function selectMacro(name)
     ui.refreshAll()
 end
 
+-- ----- โหมดสองเซฟ (เล่นสลับ 2 เซฟ) -----
+local function pairIndex(name)
+    for i, n in ipairs(altPair) do
+        if n == name then return i end
+    end
+    return nil
+end
+
+-- แตะเซฟในโหมดสองเซฟ = เลือกเป็น A/B (แตะซ้ำ = เอาออก, เลือกได้สูงสุด 2)
+local function togglePair(name)
+    if isPlaying or isRecording then setStatus("หยุดก่อนจึงจะเลือกเซฟได้", "warn") return end
+    local i = pairIndex(name)
+    if i then
+        table.remove(altPair, i)
+    elseif #altPair < 2 then
+        altPair[#altPair + 1] = name
+    else
+        notify("เลือกได้แค่ 2 เซฟ (แตะอันเดิมก่อนเพื่อเอาออก)", PT.Warn)
+        return
+    end
+    ui.refreshAll()
+end
+
+local function setAltMode(on)
+    if isPlaying or isRecording then setStatus("หยุดก่อนจึงจะเปลี่ยนโหมดได้", "warn") return end
+    altMode = on and true or false
+    ui.refreshAll()
+end
+
 ui.refreshList = function()
     ui.saveList:Clear()
     local names = listMacros()
@@ -3595,10 +3675,51 @@ ui.refreshList = function()
         return
     end
     for i, name in ipairs(names) do
+        local pi = pairIndex(name)
         ui.saveList:Add({
-            Text = name, Selected = (name == selectedName), Order = i,
-            Callback = function() selectMacro(name) end,
+            Text = (altMode and pi and ("[" .. (pi == 1 and "A" or "B") .. "] ") or "") .. name,
+            Selected = (altMode and pi ~= nil) or (not altMode and name == selectedName),
+            Order = i,
+            Callback = function()
+                if altMode then togglePair(name) else selectMacro(name) end
+            end,
         })
+    end
+end
+
+local sPair = tSaves:Section({
+    Title = "สองเซฟ (เล่นสลับ)", Desc = "เปิดโหมด แล้วแตะ 2 เซฟในรายการด้านบนเพื่อเลือก A และ B",
+    Icon = "repeat", Color = PT.Good,
+})
+ui.pairLabel = sPair:Label({ Text = "" })
+ui.pairBtn = sPair:Action({
+    Text = "", Icon = "repeat", Color = PT.Elem,
+    Callback = function() setAltMode(not altMode) end,
+})
+sPair:Action({
+    Text = "ล้างคู่ที่เลือก", Icon = "eraser", Color = PT.Warn,
+    Callback = function()
+        if isPlaying or isRecording then setStatus("หยุดก่อนจึงจะล้างได้", "warn") return end
+        altPair = {}
+        ui.refreshAll()
+    end,
+})
+
+-- รอบแรก = A, รอบที่ 2 = B, สลับไปเรื่อยๆ  (ตอนเล่นจริงดูที่ป้ายในแท็บ Macro)
+ui.updatePair = function()
+    if ui.pairBtn then
+        ui.pairBtn:SetText(altMode and "โหมดสองเซฟ: เปิดอยู่ (แตะเพื่อปิด)" or "โหมดสองเซฟ: ปิดอยู่ (แตะเพื่อเปิด)")
+        ui.pairBtn:SetColor(altMode and PT.Good or PT.Elem)
+    end
+    if ui.pairLabel then
+        local a, b = altPair[1], altPair[2]
+        if not a then
+            ui.pairLabel.Text = "ยังไม่ได้เลือกเซฟ"
+        elseif not b then
+            ui.pairLabel.Text = "A = " .. a .. " | แตะเซฟอีกอันเพื่อเลือก B"
+        else
+            ui.pairLabel.Text = "A = " .. a .. "  ↔  B = " .. b
+        end
     end
 end
 
@@ -3619,7 +3740,11 @@ sEdit:Action({
         if isfile(pathOf(newName)) then notify("มีชื่อนี้อยู่แล้ว", PT.Bad) return end
         local ok = saveMacro(newName, recordedActions, macroMeta)
         if ok then
-            pcall(delfile, pathOf(selectedName))
+            local oldName = selectedName
+            pcall(delfile, pathOf(oldName))
+            for i, n in ipairs(altPair) do
+                if n == oldName then altPair[i] = newName end
+            end
             selectedName = newName
             ui.renameBox.Text = ""
             ui.refreshAll()
@@ -4204,7 +4329,7 @@ function TD.sumLeave()
         pcall(function()
             writefile(RESUME_FILE, HttpService:JSONEncode({
                 playing = true, fromSummon = true, ts = os.time(), maxAge = 7200,
-                gameId = game.GameId, name = name, round = completed,
+                gameId = game.GameId, name = name, alt = altSnapshot(), round = completed,
                 total = forever and 0 or total, forever = forever, stats = st,
             }))
         end)
