@@ -2334,6 +2334,742 @@ local function playActions(active, label)
 end
 
 -- =====================================================================
+--  [แพตช์ความแม่นยำ v2] แก้ระบบบันทึก + ระบบวัดราคา + การอัปเกรด
+--
+--  วิธีใช้: วางบล็อกนี้ "ครั้งเดียว" ต่อท้ายฟังก์ชัน playActions
+--           คือก่อนหัวข้อ  "เริ่มเกม (โหวตโหมด) / จบเกม (PlayAgain) / ต่อหลังย้ายเซิร์ฟ"
+--           (ก่อนบรรทัด  local function waitRoundStart(active, label) )
+--  บล็อกนี้จะแทนที่ฟังก์ชันเดิมตอนสคริปต์เริ่มทำงาน ไม่ต้องลบโค้ดเก่า
+--  ถอยกลับ: ลบบล็อกนี้ทิ้งทั้งก้อน
+--
+--  ส่วนที่แก้ฝั่งเล่น (เล่นซ้ำ) ใช้ได้กับเซฟเก่าทันที
+--  ส่วนที่แก้ฝั่งบันทึก ต้องบันทึกมาโครใหม่ถึงจะได้ผล
+-- =====================================================================
+CONFIG.UPGRADE_RETRIES = math.max(CONFIG.UPGRADE_RETRIES or 0, 10)     -- เดิม 5
+CONFIG.UNKNOWN_COST_WAIT = math.max(CONFIG.UNKNOWN_COST_WAIT or 0, 60) -- เดิม 25
+CONFIG.ID_WAIT = math.max(CONFIG.ID_WAIT or 0, 4)
+
+-- =====================================================================
+--  ส่วนที่ 1 : ฝั่งบันทึก
+-- =====================================================================
+;(function()
+    -- ---------- (1) รับ event จากเซิร์ฟเวอร์ ----------
+    -- แก้: เก็บ event TowerAdd ทุกอัน (เดิมเก็บเฉพาะอันที่มีราคา) เพื่อใช้หา Id ตอนเล่นด้วย
+    onRemoteEvent = function(rem, ...)
+        local name = rem.Name
+        local args = table.pack(...)
+        local now = os.clock()
+
+        if name == "TowerUpgrade" then
+            local p = args[1]
+            if type(p) == "table" and p.Id ~= nil then
+                local st = type(p.Stats) == "table" and p.Stats or nil
+                local id = tostring(p.Id)
+                local price = st and tonumber(st.Price) or nil
+                local level = tonumber(p.Level)
+                TD.upg[id] = { t = now, level = level, price = price }
+                TD.upgEvents[#TD.upgEvents + 1] = { t = now, id = id, level = level, price = price }
+                while #TD.upgEvents > 80 do table.remove(TD.upgEvents, 1) end
+                TD.evUpg = (TD.evUpg or 0) + 1
+                dbg("event อัปเกรด Id=%s level=%s price=%s", id, tostring(level), tostring(price))
+                if TD.resolvePrices then TD.resolvePrices() end
+            end
+        elseif name == "TowerAdd" then
+            local p = args[1]
+            if type(p) == "table" and p.Id ~= nil then
+                local st = type(p.Stats) == "table" and p.Stats or nil
+                local price = st and tonumber(st.Price) or nil
+                TD.addSeen = (TD.addSeen or 0) + 1
+                TD.adds[#TD.adds + 1] = { t = now, id = tostring(p.Id), unitId = p.UnitId, price = price }
+                while #TD.adds > 80 do table.remove(TD.adds, 1) end
+                dbg("event วาง Id=%s price=%s", tostring(p.Id), tostring(price))
+                if TD.resolvePrices then TD.resolvePrices() end
+            end
+        end
+
+        if CONFIG.SNIFFER and now < TD.sniffUntil then
+            local r = TD.rate[name]
+            if not r or now - r.t0 >= 1 then
+                r = { t0 = now, n = 0 }
+                TD.rate[name] = r
+            end
+            r.n = r.n + 1
+            if r.n <= 3 then log("◀ " .. name .. "  " .. shortArgs(args)) end
+        end
+
+        if name ~= "TowerUpgrade" and now < TD.scanUntil then
+            local out, seen, budget = {}, {}, { n = 80 }
+            for i = 1, args.n do collectIds(args[i], out, seen, 0, budget) end
+            for _, c in ipairs(out) do
+                c.t = now
+                c.src = "event"
+                c.from = name
+                addCand(c)
+            end
+        end
+    end
+
+    -- ---------- (2) ราคา ----------
+    -- ราคาที่ใช้รอตอนเล่น = ราคาจาก event (Stats.Price)
+    -- ถ้าเงินที่ลดจริง (paid) มากกว่านิดหน่อย (ไม่เกิน 1.5 เท่า) ใช้ค่าเงินที่ลดจริงแทน กันตั้งราคาต่ำไป
+    function TD.settleCost(a)
+        local ev, paid = a.evCost, a.paid
+        if ev and ev > 0 then
+            local c = ev
+            if paid and paid > ev and paid <= ev * 1.5 then c = paid end
+            a.cost, a.costExact = c, true
+        elseif paid and paid > 0 and not a.costExact then
+            a.cost = paid
+        end
+    end
+
+    -- วัดเงินที่ลด แบบเข้าก่อนออกก่อน: เอาก้อนที่ลดก้อนแรกที่ยังไม่มีแถวไหนเคลม (+ก้อนที่ตามมาติดๆ ใน 0.12 วิ)
+    -- เดิมรวมทุกก้อนในช่วงเวลา ทำให้กดเร็วๆ แล้วราคาไปรวมกับแถวข้างเคียง
+    function TD.measureSpend(t0, t1)
+        local first, total = nil, 0
+        for i = MONEY.head, MONEY.tail do
+            local e = MONEY.log[i]
+            if e and not e.claimed and e.d < 0 and e.t >= t0 - 0.05 and e.t <= t1 then
+                if first and e.t - first.t > 0.12 then break end
+                first = first or e
+                total = total - e.d
+                e.claimed = true
+            end
+        end
+        return total
+    end
+
+    function TD.resolvePrices()
+        local list = rec.priceWait
+        local now = os.clock()
+        local i = 1
+        while i <= #list do
+            local w = list[i]
+            local a, e = w.action, nil
+            if a.type == "Place" then
+                for _, x in ipairs(TD.adds) do
+                    if not x.claimed and x.price and x.price > 0 and x.t >= w.tc - 2
+                        and (x.unitId == nil or a.unitId == nil or x.unitId == a.unitId) then
+                        e = x
+                        break
+                    end
+                end
+            else
+                for _, x in ipairs(TD.upgEvents) do
+                    if not x.claimed and x.id == a.tid and x.t >= w.tc - 2 then
+                        e = x
+                        break
+                    end
+                end
+            end
+
+            if e then
+                e.claimed = true
+                if a.type == "Place" then
+                    a.tid = e.id
+                    a.evCost = e.price
+                else
+                    a.level = e.level
+                    a.evSeen = true   -- เซิร์ฟเวอร์ยืนยันว่ารับอัปเกรดนี้จริง (แม้ event ไม่มีราคา เช่นเลเวลสุดท้าย)
+                    if e.price and e.price > 0 then a.evCost = e.price end
+                end
+                TD.settleCost(a)
+                table.remove(list, i)
+                refreshAll()
+            elseif now - w.tc > 30 then
+                table.remove(list, i)
+            else
+                i = i + 1
+            end
+        end
+    end
+
+    scheduleMeasure = function(action, tc)
+        rec.measures = rec.measures + 1
+        rec.priceWait[#rec.priceWait + 1] = { action = action, tc = tc }
+        pcall(TD.resolvePrices)   -- เผื่อ event มาถึงก่อนแล้ว
+        task.spawn(function()
+            local ok, err = pcall(function()
+                local ping = getPing()
+                local win = math.max(1.2, ping * 2 + 0.9)
+                task.wait(win)
+                local t1 = tc + win
+                -- ตัดช่วงวัดที่แอคชันถัดไป แต่ต้องเผื่อแล็กอย่างน้อย ping*2+0.25 (เดิมตัดสั้นไป ราคาเลยหลุดไปแถวถัดไป)
+                local nxt = nextAfter(tc)
+                if nxt then t1 = math.min(t1, math.max(nxt, tc + ping * 2 + 0.25)) end
+
+                if moneyOK() then
+                    local paid = TD.measureSpend(tc, t1)
+                    if paid > 0 then action.paid = paid end
+                end
+
+                if action.type == "Upgrade" then
+                    local u = TD.upg[action.tid]
+                    if u and u.t >= tc - 0.1 then
+                        action.evSeen = true
+                        action.level = action.level or u.level
+                        if not action.paid and not action.evCost and u.price and u.price > 0 then
+                            action.paid = u.price
+                        end
+                    end
+                end
+                TD.settleCost(action)
+
+                -- รอ event ราคาอีกสูงสุด 2 วิ (ถ้ามาจะทับราคาสำรองให้เอง)
+                local wait2 = os.clock() + 2
+                while not action.evCost and os.clock() < wait2 and alive do task.wait(0.1) end
+                TD.settleCost(action)
+            end)
+            if not ok then dbg("วัดราคา error: %s", tostring(err)) end
+            dbg("จบวัด %s cost=%s paid=%s ev=%s", action.type, tostring(action.cost),
+                tostring(action.paid), tostring(action.evCost))
+            rec.measures = rec.measures - 1
+            refreshAll()
+        end)
+    end
+
+    -- ---------- (3) บันทึกอัปเกรด/ขาย: จดตำแหน่งจริงของยูนิตตอนกด ไว้ใช้ผูกกับแถววาง ----------
+    recordUpgrade = function(p, tc, seq, wave)
+        if type(p) ~= "table" or p.Id == nil then return end
+        local tid = tostring(p.Id)
+        local action = { type = "Upgrade", tid = tid, cost = 0, seq = seq }
+        local inst = TD.towersFolder and TD.towersFolder:FindFirstChild(tid)
+        local tp = inst and instPos(inst)
+        if typeof(tp) == "Vector3" then action.tpos = tp end
+        recordedActions[#recordedActions + 1] = action
+        rec.times[#rec.times + 1] = tc
+        macroDirty = true
+        scheduleMeasure(action, tc)
+        refreshAll()
+    end
+
+    recordSell = function(p, tc, seq, wave)
+        if type(p) ~= "table" or p.Id == nil then return end
+        local tid = tostring(p.Id)
+        local action = { type = "Sell", tid = tid, cost = 0, costExact = true, seq = seq }
+        local inst = TD.towersFolder and TD.towersFolder:FindFirstChild(tid)
+        local tp = inst and instPos(inst)
+        if typeof(tp) == "Vector3" then action.tpos = tp end
+        recordedActions[#recordedActions + 1] = action
+        rec.times[#rec.times + 1] = tc
+        macroDirty = true
+        refreshAll()
+    end
+
+    -- จับคู่ Upgrade/Sell -> Place
+    -- ลำดับ: 1) Id ตรงกัน  2) ตำแหน่งจริงของยูนิตตอนกด (ใหม่)  3) เดาจากลำดับ (ทางสุดท้ายเหมือนเดิม)
+    linkUnits = function(actions)
+        local idToIndex = {}
+        for i, a in ipairs(actions) do
+            if a.type == "Place" and a.tid then idToIndex[a.tid] = i end
+        end
+        local unresolved, guessed, byPos = 0, 0, 0
+        for i, a in ipairs(actions) do
+            if TD.isRef(a) then
+                if not idToIndex[a.tid] and typeof(a.tpos) == "Vector3" then
+                    local best, bd
+                    for j = 1, i - 1 do
+                        local p = actions[j]
+                        if p.type == "Place" then
+                            local pp = p.pos or (typeof(p.cframe) == "CFrame" and p.cframe.Position or nil)
+                            if typeof(pp) == "Vector3" then
+                                local d = Vector3.new(pp.X - a.tpos.X, 0, pp.Z - a.tpos.Z).Magnitude
+                                if d <= 6 and (not bd or d <= bd) then best, bd = j, d end
+                            end
+                        end
+                    end
+                    if best then
+                        idToIndex[a.tid] = best
+                        byPos = byPos + 1
+                        if not actions[best].tid then actions[best].tid = a.tid end
+                    end
+                end
+                if not idToIndex[a.tid] then
+                    for j = 1, i - 1 do
+                        local p = actions[j]
+                        if p.type == "Place" and not p.tid then
+                            p.tid = a.tid
+                            idToIndex[a.tid] = j
+                            guessed = guessed + 1
+                            break
+                        end
+                    end
+                end
+                a.unitRef = idToIndex[a.tid]
+                if not a.unitRef then unresolved = unresolved + 1 end
+            end
+        end
+        return unresolved, guessed, byPos
+    end
+
+    -- ตัดแถวที่เซิร์ฟเวอร์ไม่รับตอนบันทึก (กดรัวตอนเงินไม่พอ / กดอัปที่เลเวลสุด)
+    -- เงื่อนไขตัด: ไม่มี event ยืนยัน + ไม่มีเงินลด + (วาง: ไม่เจอยูนิตใหม่) และต้องมั่นใจว่าระบบจับ event ทำงานอยู่
+    -- ถ้าจะตัดเกิน 40% ของทั้งหมด ถือว่าระบบจับผิดปกติ ไม่ตัดอะไรเลย
+    function TD.dropRejected(actions)
+        if not moneyOK() then return 0 end
+        local canUp, canAdd = (TD.evUpg or 0) > 0, (TD.addSeen or 0) > 0
+        local bad, nBad = {}, 0
+        for i, a in ipairs(actions) do
+            local paid = (a.paid or 0) > 0
+            if a.type == "Upgrade" and canUp then
+                if not (a.evCost or a.evSeen or paid) then
+                    bad[i] = true
+                    nBad = nBad + 1
+                end
+            elseif a.type == "Place" and canAdd then
+                if not (a.evCost or a.tid or paid) then
+                    bad[i] = true
+                    nBad = nBad + 1
+                end
+            end
+        end
+        if nBad == 0 then return 0 end
+        if nBad > math.max(1, math.floor(#actions * 0.4)) then
+            logf("พบแถวที่ยืนยันไม่ได้ %d แถว แต่เยอะผิดปกติ เลยไม่ตัดทิ้ง", nBad)
+            return 0
+        end
+        for i = #actions, 1, -1 do
+            if bad[i] then table.remove(actions, i) end
+        end
+        logf("ตัดแถวที่เซิร์ฟเวอร์ไม่รับ %d แถว", nBad)
+        return nBad
+    end
+
+    finishRecording = function(reason)
+        dbg("finishRecording: %s (บันทึกอยู่=%s)", tostring(reason), tostring(isRecording))
+        if not isRecording then return end
+        isRecording = false
+        refreshAll()
+        setQuiet("กำลังสรุปการบันทึก...")
+        task.spawn(function()
+            local t = os.clock()
+            while (rec.pending > 0 or rec.measures > 0) and os.clock() - t < 10 and alive do
+                task.wait(0.1)
+            end
+            local dropped = TD.dropRejected(recordedActions)
+            local reordered = TD.sortBySeq(recordedActions)
+            local unresolved, guessed, byPos = linkUnits(recordedActions)
+            macroDirty = true
+
+            if #recordedActions == 0 then
+                setStatus("ไม่ได้บันทึกอะไรเลย", "warn", "x")
+                refreshAll()
+                return
+            end
+
+            local base = cleanName(ui.nameBox and ui.nameBox.Text or "")
+            if base == "" then base = "Macro_" .. os.date("%H%M%S") end
+            local name = uniqueName(base)
+            local ok, err = saveMacro(name, recordedActions, macroMeta)
+            if ok then
+                selectedName = name
+                macroDirty = false
+            end
+
+            local noPrice = 0
+            for _, a in ipairs(recordedActions) do
+                if a.type ~= "Sell" and (a.cost or 0) <= 0 and not a.costExact then noPrice = noPrice + 1 end
+            end
+            if not ok then logf("เซฟไม่สำเร็จ: %s", tostring(err)) end
+            if reordered or guessed > 0 or byPos > 0 then
+                logf("จัดลำดับใหม่=%s เดา Id=%d ผูกจากตำแหน่ง=%d", tostring(reordered), guessed, byPos)
+            end
+
+            local head = (reason and reason ~= "หยุดบันทึก") and (reason .. " | ") or ""
+            local msg = head .. string.format("จบการบันทึก %d แอคชัน | โหวตโหมด: %s", #recordedActions,
+                macroMeta.vote and TD.voteText(macroMeta.vote) or "ไม่มี")
+            if ok then msg = msg .. " | เซฟเป็น " .. name else msg = msg .. " | เซฟไม่สำเร็จ" end
+            if dropped > 0 then msg = msg .. string.format(" | ตัด %d แถวที่เซิร์ฟเวอร์ไม่รับ", dropped) end
+            if unresolved > 0 then msg = msg .. string.format(" | %d แถวผูกกับยูนิตไม่ได้ (เช็กที่แท็บ Editor)", unresolved) end
+            if noPrice > 0 then msg = msg .. string.format(" | %d แถวยังไม่มีราคา (แก้ที่แท็บ Editor)", noPrice) end
+            setStatus(msg, (unresolved > 0 or noPrice > 0 or not ok) and "warn" or "ok", "save")
+            refreshAll()
+        end)
+    end
+end)()
+
+-- =====================================================================
+--  ส่วนที่ 2 : ฝั่งเล่นมาโคร (ใช้ได้กับเซฟเก่า)
+-- =====================================================================
+;(function()
+    -- หา event อัปเกรดของยูนิตนี้ที่ "ยังไม่มีแถวไหนใช้" และมาหลังเวลา since
+    -- เดิมดูแค่ event ล่าสุดของยูนิต ทำให้ event ที่มาช้าของแถวก่อนหน้า ถูกนับเป็นผลของแถวถัดไป (อัปไม่ติดแต่ไปต่อ)
+    function TD.takeUpgEvent(id, since, before)
+        for _, ev in ipairs(TD.upgEvents) do
+            if not ev.used and ev.id == id and ev.t >= since - 0.02 then
+                if not (ev.level and before and ev.level <= before) then
+                    ev.used = true
+                    return ev
+                end
+            end
+        end
+        return nil
+    end
+
+    -- รอจนเงินที่ลดจากแอคชันนี้ขึ้นมาที่ฝั่งเรา (สูงสุด ~0.8 วิ) กันแถวถัดไปเห็นเงินเก่าแล้วยิงเร็วเกินไป
+    function TD.settle(t0, cost)
+        if not moneyOK() or (cost or 0) <= 0 then return end
+        local need = math.max(1, cost * 0.35)
+        local deadline = os.clock() + math.min(0.8, getPing() * 2 + 0.25)
+        while os.clock() < deadline do
+            if spendSince(t0, need) then return end
+            task.wait(0.03)
+        end
+    end
+
+    -- หายูนิตในฉากที่ใกล้ตำแหน่ง pos ที่สุด (ไม่นับ Id ใน exclude) ใช้กู้ Id เมื่อจับตอนวางไม่ได้
+    function TD.findNear(pos, radius, exclude)
+        local f = TD.towersFolder
+        if not (f and f.Parent and typeof(pos) == "Vector3") then return nil end
+        local best, bd
+        for _, tw in ipairs(f:GetChildren()) do
+            if not (exclude and exclude[tw.Name]) then
+                local p = instPos(tw)
+                if p then
+                    local d = Vector3.new(p.X - pos.X, 0, p.Z - pos.Z).Magnitude
+                    if d <= radius and (not bd or d < bd) then best, bd = tw, d end
+                end
+            end
+        end
+        if best then return best.Name, bd end
+        return nil
+    end
+
+    -- ---------- วางสำเร็จไหม + ได้ Id อะไร ----------
+    -- ใหม่: ใช้ event TowerAdd ที่ UnitId ตรงกับของเรา เป็นตัวหลัก (Id แน่นอน ไม่ไปหยิบยูนิตคนอื่นที่วางใกล้ๆ)
+    awaitPlaced = function(action, since, active, minDrop, t0)
+        local deadline = t0 + math.max(2.5, getPing() * 3 + 1.6)
+        local want = action.unitId
+
+        local function viaEvent()
+            if want == nil then return nil end
+            for _, e in ipairs(TD.adds) do
+                if not e.taken and e.unitId ~= nil and e.unitId == want and e.t >= since - 0.05 then
+                    return e
+                end
+            end
+            return nil
+        end
+
+        local function claim()
+            local e = viaEvent()
+            if e then
+                e.taken = true
+                TD.used[e.id] = true
+                return e.id
+            end
+            local c = TD.pick(action, since - 0.3)
+            if c then
+                TD.used[c.id] = true
+                return c.id
+            end
+            return nil
+        end
+
+        while os.clock() < deadline and active() do
+            local id = claim()
+            if id then return true, id end
+            if moneyOK() and spendSince(since, minDrop) then
+                -- เงินลดแล้ว = วางสำเร็จ แต่รอ Id อีกนิด (ต้องใช้ตอนอัปเกรด)
+                local d2 = os.clock() + CONFIG.ID_WAIT
+                while os.clock() < d2 and active() do
+                    local id2 = claim()
+                    if id2 then return true, id2 end
+                    task.wait(0.05)
+                end
+                return true, nil
+            end
+            task.wait(0.05)
+        end
+        return false
+    end
+
+    -- ---------- Id ของยูนิตสำหรับอัปเกรด/ขาย ----------
+    -- เดิม: ถ้าหา Id ไม่เจอ จะเอา Id ที่บันทึกไว้จาก "เกมเก่า" มายิง (ใช้ไม่ได้เลย เสียเวลาลองซ้ำ)
+    -- ใหม่: Id ที่ได้ตอนวาง > ยูนิตในฉากที่อยู่ตรงตำแหน่งที่วาง > ตัวจับเก่า > Id เก่า (เฉพาะกรณียังอยู่ในฉาก)
+    TD.refId = function(action, ref, placedMap)
+        local id = ref and placedMap[ref] or nil
+        if id and TD.towerAlive(id) == false then
+            logf("Id %s ไม่อยู่ในฉากแล้ว ลองหายูนิตใหม่", tostring(id))
+            id = nil
+            if ref then placedMap[ref] = nil end
+        end
+        if not id and ref then
+            local pa = recordedActions[ref]
+            if pa then
+                local base = pa.pos or (typeof(pa.cframe) == "CFrame" and pa.cframe.Position or nil)
+                local taken = {}
+                for _, v in pairs(placedMap) do taken[tostring(v)] = true end
+                local nid = TD.findNear(base, 4, taken)
+                if nid then
+                    id = nid
+                    logf("กู้ Id ของ #%d จากตำแหน่งในฉาก -> %s", ref, tostring(id))
+                end
+            end
+            if not id and pa then
+                local c = TD.pick(pa, (TD.roundT or 0) - 0.3)
+                if c then
+                    TD.used[c.id] = true
+                    id = c.id
+                    logf("เก็บ Id ย้อนหลังของ #%d -> %s", ref, tostring(id))
+                end
+            end
+        end
+        if not id and action.tid and TD.towerAlive(action.tid) ~= false then id = action.tid end
+        if id and ref then placedMap[ref] = id end
+        return id
+    end
+
+    -- ---------- วนลองซ้ำ ----------
+    -- spec เพิ่ม: precheck() = เช็กว่ารอบก่อนสำเร็จช้าไหม (ก่อนยิงซ้ำ ไม่ให้อัปซ้อน)
+    --            dead()     = ยูนิตหายไปแล้ว เลิกลอง
+    --            adaptive   = ยิงไม่ติดทั้งที่เงินใกล้พอ -> ปรับราคาที่ต้องรอขึ้นทีละ 8% (ราคาที่บันทึกไว้อาจต่ำไป)
+    runWithRetry = function(spec)
+        local startT, attempts, lastFireT, fails = os.clock(), 0, -math.huge, 0
+        while true do
+            if isGameOver() then return "gameover" end
+            if spec.untilPlaced and not inGame() then return "gameover" end
+
+            if spec.precheck and attempts > 0 then
+                local okp, hit, extra = pcall(spec.precheck)
+                if okp and hit then
+                    stats[spec.statKey] = stats[spec.statKey] + 1
+                    return "ok", extra
+                end
+            end
+
+            if spec.dead and spec.dead() then break end
+            if spec.untilPlaced then
+                if spec.maxAttempts and attempts >= spec.maxAttempts then break end
+            elseif spec.unknown then
+                if attempts > 0 and os.clock() - startT > CONFIG.UNKNOWN_COST_WAIT then break end
+            elseif attempts >= spec.maxAttempts then
+                break
+            end
+
+            local w = waitUntilAffordable(spec, lastFireT)
+            if w == "aborted" or w == "gameover" then return w end
+            local probing = (w == "probe")
+            if w == "timeout" then
+                logf("%s: รอเงินเกิน %d วิ ลองยิงเลย", spec.label, CONFIG.MONEY_TIMEOUT)
+            end
+            if not probing then attempts = attempts + 1 end
+
+            local m0 = getMoney()
+            local t0 = os.clock()
+            lastFireT = t0
+            local okCall, success, extra = pcall(spec.attempt, t0, attempts, probing)
+            if not okCall then
+                logf("%s: error %s", spec.label, tostring(success))
+                success, extra = false, nil
+            end
+            if not spec.active() then return "aborted" end
+
+            if success then
+                stats[spec.statKey] = stats[spec.statKey] + 1
+                return "ok", extra
+            end
+            if not probing then
+                stats.retries = stats.retries + 1
+                fails = fails + 1
+                -- เงินที่เห็นใกล้ราคาแต่ยิงไม่ติดซ้ำๆ = ราคาจริงน่าจะสูงกว่าที่บันทึก -> รอให้เงินเพิ่มอีกนิดก่อนยิงใหม่
+                if spec.adaptive and fails >= 2 and m0 and (spec.cost or 0) > 0 and m0 < spec.cost * 1.5 then
+                    spec.cost = math.max(spec.cost, m0) * 1.08
+                    dbg("%s: ยิงไม่ติดทั้งที่เงินใกล้พอ -> รอเงินถึง %s", spec.label, fmtNum(spec.cost))
+                end
+                task.wait(spec.unknown and 0.5 or CONFIG.RETRY_DELAY)
+            end
+        end
+        stats.failures = stats.failures + 1
+        logf("%s: ไม่สำเร็จ", spec.label)
+        return "failed"
+    end
+
+    -- ---------- อัปเกรด ----------
+    -- ผล: "ok" | "failed" (ไปซ่อมทีหลัง) | "skipped" | "aborted" | "gameover"
+    playUpgrade = function(action, i, total, active, label, placedMap, failedRef, soldRef, maxTry)
+        local ref = action.unitRef
+        if ref and failedRef[ref] then
+            logf("ข้าม #%d: ยูนิตอ้างอิง #%d วางไม่สำเร็จ", i, ref)
+            return "skipped"
+        end
+        if ref and soldRef and soldRef[ref] then
+            logf("ข้าม #%d: ยูนิต #%d ถูกขายไปแล้ว", i, ref)
+            return "skipped"
+        end
+
+        local id = TD.refId(action, ref, placedMap)
+        if not id then
+            logf("#%d: ยังไม่รู้ Id ของยูนิต (จะลองซ่อมทีหลัง)", i)
+            return "failed"
+        end
+
+        local cost, _, unknown = costInfo(action)
+        -- ไม่รู้ราคา: ใช้ราคาอัปเกรดก่อนหน้าของยูนิตเดียวกันเป็นตัวประมาณ จะได้รอเงินแทนที่จะยิงรัว
+        if unknown and ref then
+            for k = i - 1, 1, -1 do
+                local x = recordedActions[k]
+                if x and x.type == "Upgrade" and x.unitRef == ref and (x.cost or 0) > 0 then
+                    cost, unknown = x.cost + CONFIG.COST_MARGIN, false
+                    break
+                end
+            end
+        end
+        local minDrop = math.max(1, cost * 0.35)
+        local refName = ref and recordedActions[ref] and recordedActions[ref].name or "?"
+
+        local fireT0, before, how
+        local gone = false
+
+        local function landed()
+            if not fireT0 then return false end
+            if TD.takeUpgEvent(id, fireT0, before) then return "event" end
+            if moneyOK() and spendSince(fireT0, minDrop) then return "money" end
+            return false
+        end
+
+        local res = runWithRetry({
+            label = string.format("%s | #%d/%d อัปเกรด %s", label, i, total, tostring(refName)),
+            cost = cost, unknown = unknown, maxAttempts = maxTry or CONFIG.UPGRADE_RETRIES,
+            statKey = "upgraded", active = active, adaptive = true,
+            precheck = function()
+                local r = landed()
+                if r then how = r end
+                return r ~= false
+            end,
+            dead = function() return gone end,
+            attempt = function(t0)
+                -- ยูนิตหายจากฉาก (Id เปลี่ยน/ถูกทำลาย) -> หาใหม่ ไม่เจอก็เลิก
+                if TD.towerAlive(id) == false then
+                    local nid = TD.refId(action, ref, placedMap)
+                    if nid and nid ~= id and TD.towerAlive(nid) ~= false then
+                        logf("#%d: Id เดิมหายไป ใช้ Id ใหม่ %s", i, tostring(nid))
+                        id = nid
+                        fireT0, before = nil, nil
+                    else
+                        gone = true
+                        return false
+                    end
+                end
+                if not fireT0 then
+                    fireT0 = t0
+                    local u = TD.upg[id]
+                    before = u and u.level or nil
+                end
+                TD.sniffUntil = os.clock() + 6
+                local ok, err = fire(towerUpgradeRE, { Id = id })
+                if not ok then
+                    logf("ยิง TowerUpgrade ไม่ได้: %s", tostring(err))
+                    return false
+                end
+                -- รอผลนานขึ้น (เดิม 0.8 วิ สั้นไปตอนเซิร์ฟแล็ก แล้วไปยิงซ้ำจนอัปเกินและลำดับเพี้ยน) สำเร็จเมื่อไหร่ก็ออกทันที
+                local deadline = os.clock() + math.max(1.5, getPing() * 3 + 1.0)
+                while os.clock() < deadline and active() do
+                    local r = landed()
+                    if r then
+                        how = r
+                        return true
+                    end
+                    task.wait(0.05)
+                end
+                return false
+            end,
+        })
+
+        if res == "ok" and fireT0 then
+            if how == "money" then
+                -- เงินลดก่อน event: รอ event ของอัปเกรดนี้มาให้ครบ ไม่ให้ไปปนกับแถวถัดไป
+                local d = os.clock() + math.min(0.6, getPing() * 2 + 0.3)
+                while os.clock() < d and active() do
+                    if TD.takeUpgEvent(id, fireT0, before) then break end
+                    task.wait(0.03)
+                end
+            else
+                -- event มาก่อนเงิน: รอให้เงินที่ลดมาถึงฝั่งเรา แถวถัดไปจะได้เห็นเงินที่ถูกต้อง
+                TD.settle(fireT0, cost)
+            end
+        end
+        return res
+    end
+
+    -- ---------- เล่นแอคชันทั้งหมด 1 รอบ ----------
+    -- ใหม่: อัปเกรดที่ยิงไม่ติด ไม่ทิ้งถาวร แต่เก็บไว้ แล้ววนซ่อมต่อจนครบ (ระหว่างรอเกมจบ)
+    playActions = function(active, label)
+        TD.used = {}
+        TD.upg = {}
+        TD.upgEvents = {}
+        TD.roundT = os.clock()
+        local placedMap, failedRef, soldRef = {}, {}, {}
+        local retryList = {}
+        local total = #recordedActions
+
+        for i, action in ipairs(recordedActions) do
+            if not active() then return "aborted" end
+            if isGameOver() then return "gameover" end
+
+            local ww = waitForWave(action, active, label, i, total)
+            if ww ~= "ok" then return ww end
+
+            local st, extra
+            local tStart = os.clock()
+            if action.type == "Place" then
+                if towerAddRE then
+                    st, extra = playPlace(action, i, total, active, label)
+                    if st == "ok" then
+                        if extra then placedMap[i] = extra end
+                    elseif st == "failed" then
+                        failedRef[i] = true
+                    end
+                end
+            elseif action.type == "Upgrade" then
+                if towerUpgradeRE then
+                    st = playUpgrade(action, i, total, active, label, placedMap, failedRef, soldRef)
+                    if st == "failed" then
+                        retryList[#retryList + 1] = { i = i, action = action }
+                    end
+                end
+            elseif action.type == "Sell" then
+                if towerSellRE then
+                    st = playSell(action, i, total, active, label, placedMap, failedRef, soldRef)
+                else
+                    logf("ข้าม #%d: ไม่พบ Remote TowerSell", i)
+                end
+            end
+            if st == "aborted" or st == "gameover" then return st end
+            if st == "ok" and action.type == "Place" then
+                TD.settle(tStart, (costInfo(action)))
+            end
+            task.wait()
+        end
+
+        -- ซ่อมอัปเกรดที่ตกหล่น (สูงสุด 3 รอบ รอบละไม่เกิน 4 ครั้งต่อแถว)
+        local rounds = 0
+        while #retryList > 0 and rounds < 3 do
+            if not active() then return "aborted" end
+            if isGameOver() then return "gameover" end
+            rounds = rounds + 1
+            local nextList = {}
+            for _, it in ipairs(retryList) do
+                if not active() then return "aborted" end
+                if isGameOver() then return "gameover" end
+                setQuiet(string.format("%s | ซ่อมอัปเกรดที่ตกหล่น #%d", label, it.i))
+                local st = playUpgrade(it.action, it.i, total, active, label .. " [ซ่อม]",
+                    placedMap, failedRef, soldRef, 4)
+                if st == "aborted" or st == "gameover" then return st end
+                if st == "failed" then nextList[#nextList + 1] = it end
+                task.wait()
+            end
+            retryList = nextList
+            if #retryList > 0 then
+                local t = os.clock()
+                while active() and not isGameOver() and os.clock() - t < 5 do task.wait(0.2) end
+            end
+        end
+        return "done"
+    end
+end)()
+
+-- =====================================================================
 --  เริ่มเกม (โหวตโหมด) / จบเกม (PlayAgain) / ต่อหลังย้ายเซิร์ฟ
 -- =====================================================================
 local function waitRoundStart(active, label)
