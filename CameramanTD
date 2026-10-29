@@ -2516,7 +2516,7 @@ CONFIG.ID_WAIT = math.max(CONFIG.ID_WAIT or 0, 4)
                 TD.settleCost(action)
 
                 -- รอ event ราคาอีกสูงสุด 2 วิ (ถ้ามาจะทับราคาสำรองให้เอง)
-                local wait2 = os.clock() + 2
+                local wait2 = os.clock() + 0.5
                 while not action.evCost and os.clock() < wait2 and alive do task.wait(0.1) end
                 TD.settleCost(action)
             end)
