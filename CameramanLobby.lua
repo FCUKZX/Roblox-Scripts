@@ -28,7 +28,7 @@ local PEX_URL = "https://raw.githubusercontent.com/FCUKZX/Roblox-Scripts/refs/he
 -- ใส่ -- หน้าบรรทัดเพื่อซ่อนชั่วคราว
 -- =====================================================================
 local UNIT_LIST = {
-    { name = "Camera Helicopter", id = 1234567890 },
+    { name = "Upgraded Titan Cameraman", id = 92998272222523 },
 }
 -- รวมเป็นรายการที่ใช้จริง: ตัดช่องว่าง/ชื่อซ้ำ/ไม่มีชื่อออกให้เอง
 local PICK = {}
