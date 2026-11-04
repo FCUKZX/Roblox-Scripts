@@ -29,6 +29,11 @@ local PEX_URL = "https://raw.githubusercontent.com/FCUKZX/Roblox-Scripts/refs/he
 -- =====================================================================
 local UNIT_LIST = {
     { name = "Upgraded Titan Cameraman", id = 92998272222523 },
+	{ name = "Glitch Cameraman", id = 115445436608295 },
+	{ name = "Titan Cinemaman", id = 71565370415952 },
+	{ name = "Upgraded Brute Prototype", id = 71173094423826 },
+	{ name = "Upgraded Titan Speakerman", id = 75147384852815 },
+	{ name = "Upgraded Videotapper Prototype", id = 117484330138236 },
 }
 -- รวมเป็นรายการที่ใช้จริง: ตัดช่องว่าง/ชื่อซ้ำ/ไม่มีชื่อออกให้เอง
 local PICK = {}
@@ -1524,7 +1529,7 @@ sMain:Action({
 
 local sWant = tabSM:Section({
     Title = "ตัวที่ต้องการ",
-    Desc = "พิมพ์ชื่อตามที่ขึ้นในตู้ แล้วกด Enter | แตะชื่อในรายการ = ลบ",
+    Desc = "พิมพ์ชื่อตามที่ขึ้นในตู้ แล้วกด Enter",
     Icon = "bell", Color = PT.Orange,
 })
 local wantList
@@ -1578,8 +1583,8 @@ end
 -- ---------- เลือกตัวจากรูป (รายการจาก UNIT_LIST บนสุดของไฟล์) ----------
 -- ตัวที่เลือกจะเก็บเป็น "ชื่อตัว" ลง SM.wanted เหมือนช่องพิมพ์ชื่อ จึงใช้ระบบสุ่มเดิมได้เลย
 local sPick = tabSM:Section({
-    Title = "เลือกตัวจากรูป",
-    Desc = "แตะรูปเพื่อเลือก แตะซ้ำเพื่อยกเลิก | กรอบสี = เลือกไว้ | ● = ตัวนี้อยู่ในตู้ตอนนี้",
+    Title = "ตัวที่กำหนดมาให้",
+    Desc = "แตะเพื่อเลือก แตะซ้ำเพื่อยกเลิก",
     Icon = "image", Color = PT.Pink,
 })
 local C_ELEM = PT.Elem or Color3.fromRGB(42, 42, 60)
@@ -1718,7 +1723,7 @@ local MODES = {
 }
 local sMove = tabSM:Section({
     Title = "รูปแบบการเคลื่อนที่",
-    Desc = "เลือกวิธีไปจุดสุ่ม / ลิฟต์ | เดิน = ปลอดภัยสุด | ลอย = เร็วและนิ่ง | วาป = เร็วสุดแต่เสี่ยงกว่า",
+    Desc = "เลือกวิธีไปจุดสุ่ม",
     Icon = "zap", Color = PT.Blue,
 })
 local moveList = sMove:List({ Height = 110, Title = "เลือกแบบ (แตะเพื่อเปลี่ยน)" })
