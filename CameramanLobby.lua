@@ -1,1637 +1,2608 @@
--- =====================================================================
---  Pex Hub Lobby : สุ่มกล่อง Basic Crate (สคริปต์หน้าลอบบี้)
---  ถูกเรียกจาก CameramanTD.lua อัตโนมัติ เมื่อไม่เจอ UI ในเกมและ PlaceId ตรงกับลอบบี้
---  ใส่จำนวนกล่อง -> กดสุ่ม | ทุก 10 กล่อง = 900 Coins, เศษกล่องละ 100 Coins
---  สุ่มทีละ 10 กล่อง จนเหลือเศษหลักหน่วยแล้วสุ่มทีละ 1 กล่อง จนครบจำนวน
---  + ซ่อนชื่อตัวเอง / ซ่อนตัวละคร NOOB (แท็บ Crate > ความเป็นส่วนตัว) ใช้ไฟล์ตั้งค่าเดียวกับ CameramanTD
---  + ออโต้สุ่มตัวแบบกำหนดตัว (แท็บ Auto Summon) อยู่ท้ายไฟล์
---  + [แก้ใหม่] ระบบเดินลื่น/เสถียรขึ้น + เช็กลิฟต์สด + เช็กว่าอยู่คนเดียวก่อนกด Ready
---  + [ใหม่] เลือกรูปแบบเคลื่อนที่ได้ 3 แบบ: เดิน / ลอย / วาปเลย (แท็บ Auto Summon > รูปแบบการเคลื่อนที่)
--- =====================================================================
-if not game:IsLoaded() then game.Loaded:Wait() end
+--[[
+    XenonUI v2.0
+    UI library สไตล์ Xenon Hub สำหรับ Roblox (รองรับทั้ง PC และมือถือ)
+
+    - หน้าต่างปรับขนาดตามจอเอง (มือถือ: กว้าง ~76% / สูง ~82% ของจอ)
+    - ปุ่มเหลือง = ย่อเป็นวงกลมข้างจอ (ลากย้ายได้ ดูดเข้าขอบซ้าย/ขวา แตะเพื่อขยายกลับ)
+    - ไม่มีอีโมจิ: ไอคอนทั้งหมดเป็นไอคอน ID (Lucide อัตโนมัติ หรือใส่ rbxassetid เองได้)
+    - แอนิเมชัน: เปิด/ย่อ/ขยาย, สลับแท็บ, สวิตช์, ปุ่ม, Toast
+    - v2.0: ปุ่มยุบตามจุดที่นิ้วกด + Ripple, ลากหน้าต่างแบบนุ่ม (lerp), เลื่อนแบบ iOS (ยางยืด)
+            คอนโทรลใหม่: Slider, Dropdown (เดี่ยว/หลายตัวเลือก), Keybind, ColorPicker, Progress,
+            Divider, Paragraph, Image (รูปภาพ), Section พับได้ (Collapsible), Dialog ยืนยัน
+
+    วิธีเรียกใช้ผ่าน Git:
+        local UI = loadstring(game:HttpGet("https://raw.githubusercontent.com/USER/REPO/main/XenonUI.lua"))()
+        local win = UI:CreateWindow({ Title = "My Hub", Subtitle = "v1", Icon = "zap" })
+        local tab = win:AddTab({ Name = "Main", Category = "General", Icon = "home" })
+        local sec = tab:Section({ Title = "Hello", Desc = "ตัวอย่าง", Icon = "sparkles" })
+        sec:Toggle({ Title = "Auto", Default = false, Callback = function(v) print(v) end })
+
+    ไอคอน (Icon = ...) รับได้ 3 แบบ
+        "play"                      ชื่อไอคอน Lucide (โหลดเป็น asset id ให้อัตโนมัติ)
+        1234567890 / "rbxassetid://1234567890"   ไอคอน ID ของคุณเอง
+        {id = 123, offset = Vector2.new(0, 0), size = Vector2.new(48, 48)}   สไปรต์ชีต
+    ผูกชื่อกับ ID ของตัวเอง:  UI.CustomIcons["play"] = 1234567890
+
+    รูปภาพ (ไม่ใช่ไอคอน ภาพเต็มขนาดจริง): sec:Image({ Title = "Banner", Image = 1234567890, Height = 160, ScaleType = "Fit", Radius = 10 })
+        Image รับได้: asset id / "rbxassetid://..." / "rbxthumb://..." / URL "https://..."
+        (URL ต้องใช้ executor ที่มี writefile และ getcustomasset ระบบจะดาวน์โหลดแล้วแสดงให้เอง)
+        ScaleType: "Fit" (เห็นทั้งรูป) / "Crop" (เติมเต็มกรอบ) / "Stretch" / "Tile"
+]]
 
 local Players = game:GetService("Players")
-local HttpService = game:GetService("HttpService")
-local RS = game:GetService("ReplicatedStorage")
-local VirtualUser = game:GetService("VirtualUser")
-local lp = Players.LocalPlayer
-local pg = lp:WaitForChild("PlayerGui")
-
-local CRATE_NAME = "Basic Crate"
-local PRICE_ONE, PRICE_TEN = 100, 900
-local PEX_URL = "https://raw.githubusercontent.com/FCUKZX/Roblox-Scripts/refs/heads/main/PexUI.lua"
-
-local genv = (getgenv and getgenv()) or _G
-if type(genv.__PexLobby) == "function" then pcall(genv.__PexLobby) end
-
-local httpRequest = (syn and syn.request) or (http and http.request) or http_request or request
-    or (fluxus and fluxus.request)
-
-local alive, running = true, false
-local conns = {}
-
-local function fmt(n)
-    local txt = string.format("%.0f", tonumber(n) or 0)
-    local sign, digits = txt:match("^(-?)(%d+)$")
-    if not digits then return txt end
-    digits = digits:reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
-    return sign .. digits
-end
-
--- ---------- เงิน ----------
--- อ่านจากข้อความ เช่น "1,250" / "1.2K"
-local SUF = { K = 1e3, M = 1e6, B = 1e9, T = 1e12 }
-local function getCoins()
-    local ok, txt = pcall(function()
-        return pg.HUD.Currencies.Money.CurrencyFrame.AmountLabel.Text
-    end)
-    if not ok or type(txt) ~= "string" then return nil end
-    txt = txt:gsub("<[^>]+>", ""):gsub(",", ""):gsub("%s", "")
-    local num, suf = txt:match("(%d+%.?%d*)([KkMmBbTt]?)")
-    local n = tonumber(num)
-    if not n then return nil end
-    if suf ~= "" then n = n * (SUF[suf:upper()] or 1) end
-    return n
-end
-
--- ---------- Anti-AFK ----------
-conns[#conns + 1] = lp.Idled:Connect(function()
-    pcall(function()
-        VirtualUser:CaptureController()
-        VirtualUser:ClickButton2(Vector2.new())
-    end)
-end)
-
--- ---------- ตัวบันทึก (ใช้ไฟล์เดียวกับสคริปต์ในเกม CameramanTD) ----------
--- อ่าน/เขียนไฟล์เดียวกัน: เขียนเฉพาะค่าของเราแล้วเก็บค่าอื่นในไฟล์ไว้เหมือนเดิม
-local SETTINGS_FILE = "PexSkibidiTD_Settings.json"
-local CFG = { HIDE_NAME = false, NOOB_MODE = false }
-local function readSettings()
-    local ok, data = pcall(function()
-        if isfile and readfile and isfile(SETTINGS_FILE) then
-            return HttpService:JSONDecode(readfile(SETTINGS_FILE))
-        end
-    end)
-    return (ok and type(data) == "table") and data or {}
-end
-do
-    local data = readSettings()
-    for k in pairs(CFG) do
-        if type(data[k]) == "boolean" then CFG[k] = data[k] end
-    end
-end
-local function saveSettings()
-    if not writefile then return end
-    pcall(function()
-        local data = readSettings()   -- อ่านใหม่ทุกครั้ง กันทับค่าที่สคริปต์เกมเพิ่งเซฟ
-        if data.CFG_VERSION == nil then data.CFG_VERSION = 1 end
-        for k, v in pairs(CFG) do data[k] = v end
-        writefile(SETTINGS_FILE, HttpService:JSONEncode(data))
-    end)
-end
-
--- ---------- ซ่อนชื่อตัวเอง / ซ่อนตัวละคร (NOOB) ----------
--- ชื่อบัญชี + ชื่อที่แสดงของเรา ที่โผล่ในข้อความตรงไหนก็ตาม -> เปลี่ยนเป็น "ถูกซ่อน" (เฉพาะฝั่งเครื่องเรา)
--- ปิดสวิตช์ / ปิดสคริปต์ = คืนข้อความเดิม
-local PRIV = { on = false, conns = {}, noobOn = false, noobConns = {} }
-do
-    local HIDDEN_TEXT = "ชื่อถูกซ่อน"
-    local weak = function() return setmetatable({}, { __mode = "k" }) end
-    PRIV.hooked, PRIV.orig, PRIV.last = weak(), weak(), weak()
-
-    local function scrub(str)
-        local out = str
-        for _, nm in ipairs(PRIV.names or {}) do
-            local low, lowN = out:lower(), nm:lower()
-            local init, parts, hit = 1, {}, false
-            while true do
-                local a, b = low:find(lowN, init, true)
-                if not a then break end
-                parts[#parts + 1] = out:sub(init, a - 1)
-                parts[#parts + 1] = HIDDEN_TEXT
-                init, hit = b + 1, true
-            end
-            if hit then
-                parts[#parts + 1] = out:sub(init)
-                out = table.concat(parts)
-            end
-        end
-        return out
-    end
-
-    local function hookText(o)
-        if PRIV.hooked[o] then return end
-        local function fix()
-            if not PRIV.on then return end
-            local t = o.Text
-            if t == "" then return end
-            local n = scrub(t)
-            if n ~= t then
-                PRIV.orig[o], PRIV.last[o] = t, n   -- t = ข้อความจากเกม (ล่าสุด)
-                o.Text = n
-            end
-        end
-        PRIV.hooked[o] = o:GetPropertyChangedSignal("Text"):Connect(fix)
-        fix()
-    end
-
-    local function isTextObj(o)
-        local c = o.ClassName
-        return c == "TextLabel" or c == "TextButton"   -- ไม่แตะ TextBox (ช่องพิมพ์)
-    end
-
-    local function scanRoot(root)
-        local ok, list = pcall(function() return root:GetDescendants() end)
-        if not ok then return end
-        for i, d in ipairs(list) do
-            if not (alive and PRIV.on) then return end
-            if isTextObj(d) then pcall(hookText, d) end
-            if i % 300 == 0 then task.wait() end
-        end
-    end
-
-    local function hideHumanoidName(ch)
-        local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-        if hum and PRIV.on then pcall(function() hum.DisplayName = HIDDEN_TEXT end) end
-    end
-
-    function PRIV.set(on)
-        on = on and true or false
-        if on == PRIV.on then return end
-        PRIV.on = on
-        if on then
-            local names, seen = {}, {}
-            for _, n in ipairs({ lp.Name, lp.DisplayName }) do
-                if type(n) == "string" and #n >= 3 and not seen[n:lower()] then
-                    seen[n:lower()] = true
-                    names[#names + 1] = n
-                end
-            end
-            table.sort(names, function(a, b) return #a > #b end)   -- ชื่อยาวก่อน
-            PRIV.names = names
-
-            local roots = { pg, game:GetService("Workspace") }
-            local okC, core = pcall(function() return game:GetService("CoreGui") end)
-            if okC and core then roots[#roots + 1] = core end
-            for _, root in ipairs(roots) do
-                local okS, conn = pcall(function()
-                    return root.DescendantAdded:Connect(function(d)
-                        if PRIV.on and isTextObj(d) then pcall(hookText, d) end
-                    end)
-                end)
-                if okS and conn then PRIV.conns[#PRIV.conns + 1] = conn end
-                task.spawn(scanRoot, root)
-            end
-            PRIV.conns[#PRIV.conns + 1] = lp.CharacterAdded:Connect(function(ch)
-                for _, w in ipairs({ 0.2, 1, 3 }) do
-                    task.delay(w, function() if alive then hideHumanoidName(ch) end end)
-                end
-            end)
-            hideHumanoidName(lp.Character)
-        else
-            for _, c in ipairs(PRIV.conns) do pcall(function() c:Disconnect() end) end
-            PRIV.conns = {}
-            for _, c in pairs(PRIV.hooked) do pcall(function() c:Disconnect() end) end
-            for o, orig in pairs(PRIV.orig) do
-                pcall(function()
-                    if o.Parent and o.Text == PRIV.last[o] then o.Text = orig end
-                end)
-            end
-            PRIV.hooked, PRIV.orig, PRIV.last = weak(), weak(), weak()
-            local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
-            if hum then pcall(function() hum.DisplayName = lp.DisplayName end) end
-        end
-    end
--- ---------- 2) ซ่อนตัวละคร (NOOB) ----------
-local NOOB = {
-    head  = BrickColor.new("Bright yellow").Color,
-    torso = BrickColor.new("Bright blue").Color,
-    arm   = BrickColor.new("Bright yellow").Color,
-    leg   = BrickColor.new("Bright green").Color,
-}
-
-local function noobColor(partName)
-    if partName == "Head" then return NOOB.head end
-    if partName == "Torso" or partName == "UpperTorso" or partName == "LowerTorso" then return NOOB.torso end
-    if partName:find("Arm") or partName:find("Hand") then return NOOB.arm end
-    if partName:find("Leg") or partName:find("Foot") then return NOOB.leg end
-    return nil
-end
-
-local function isAppearance(d)
-    local c = d.ClassName
-    return d:IsA("Accessory") or c == "Shirt" or c == "Pants" or c == "ShirtGraphic"
-        or c == "CharacterMesh" or c == "SurfaceAppearance"
-end
-
-local function parkAppearance(nb, d)
-    pcall(function()
-        nb.removed[#nb.removed + 1] = { d, d.Parent }
-        d.Parent = nil
-    end)
-end
-
-local function noobify(ch)
-    if not (PRIV.noobOn and ch and ch.Parent) then return end
-    local nb = PRIV.nb
-    if not nb or nb.ch ~= ch then
-        nb = { ch = ch, removed = {}, colors = {}, tex = {} }
-        PRIV.nb = nb
-    end
-    -- ถอดเสื้อ/กางเกง/หมวก/ผิวพิเศษ (เก็บไว้ คืนได้)
-    for _, d in ipairs(ch:GetDescendants()) do
-        if isAppearance(d) then parkAppearance(nb, d) end
-    end
-    -- สีผิวผ่าน BodyColors
-    local bc = ch:FindFirstChildOfClass("BodyColors")
-    if not bc then
-        bc = Instance.new("BodyColors")
-        bc.Parent = ch
-        nb.bcNew = bc
-    elseif not nb.bcOrig then
-        nb.bcOrig = {
-            bc, bc.HeadColor3, bc.TorsoColor3,
-            bc.LeftArmColor3, bc.RightArmColor3, bc.LeftLegColor3, bc.RightLegColor3,
-        }
-    end
-    pcall(function()
-        bc.HeadColor3, bc.TorsoColor3 = NOOB.head, NOOB.torso
-        bc.LeftArmColor3, bc.RightArmColor3 = NOOB.arm, NOOB.arm
-        bc.LeftLegColor3, bc.RightLegColor3 = NOOB.leg, NOOB.leg
-    end)
-    -- ทาสีที่ชิ้นส่วนตรงๆ ด้วย (เผื่อเกมไม่ใช้ BodyColors) + ล้างลายของ MeshPart
-    for _, part in ipairs(ch:GetChildren()) do
-        if part:IsA("BasePart") then
-            local col = noobColor(part.Name)
-            if col then
-                if nb.colors[part] == nil then nb.colors[part] = part.Color end
-                pcall(function() part.Color = col end)
-                if part:IsA("MeshPart") and part.TextureID ~= "" then
-                    if nb.tex[part] == nil then nb.tex[part] = part.TextureID end
-                    pcall(function() part.TextureID = "" end)
-                end
-            end
-        end
-    end
-end
-
-local function noobStart(ch)
-    if not ch then return end
-    PRIV.nb = nil
-    noobify(ch)
-    -- เกมมักโหลดชุดตัวละครตามหลัง -> ทำซ้ำช่วงแรก + ดักของที่โผล่มาใหม่
-    for _, w in ipairs({ 0.3, 1, 2.5, 5 }) do
-        task.delay(w, function() if alive and PRIV.noobOn and lp.Character == ch then noobify(ch) end end)
-    end
-    PRIV.noobConns[#PRIV.noobConns + 1] = ch.DescendantAdded:Connect(function(d)
-        if not (PRIV.noobOn and PRIV.nb and PRIV.nb.ch == ch) then return end
-        if isAppearance(d) then
-            task.defer(function() if PRIV.nb and PRIV.nb.ch == ch then parkAppearance(PRIV.nb, d) end end)
-        end
-    end)
-end
-
-function PRIV.noobSet(on)
-    on = on and true or false
-    if on == PRIV.noobOn then return end
-    PRIV.noobOn = on
-    if on then
-        PRIV.noobConns[#PRIV.noobConns + 1] = lp.CharacterAdded:Connect(function(ch)
-            task.wait(0.1)
-            if alive and PRIV.noobOn then noobStart(ch) end
-        end)
-        noobStart(lp.Character)
-    else
-        for _, c in ipairs(PRIV.noobConns) do pcall(function() c:Disconnect() end) end
-        PRIV.noobConns = {}
-        local nb = PRIV.nb
-        PRIV.nb = nil
-        if not nb then return end
-        for part, col in pairs(nb.colors) do pcall(function() if part.Parent then part.Color = col end end) end
-        for part, tex in pairs(nb.tex) do pcall(function() if part.Parent then part.TextureID = tex end end) end
-        if nb.bcOrig then
-            local o = nb.bcOrig
-            pcall(function()
-                local bc = o[1]
-                bc.HeadColor3, bc.TorsoColor3 = o[2], o[3]
-                bc.LeftArmColor3, bc.RightArmColor3 = o[4], o[5]
-                bc.LeftLegColor3, bc.RightLegColor3 = o[6], o[7]
-            end)
-        end
-        if nb.bcNew then pcall(function() nb.bcNew:Destroy() end) end
-        for _, r in ipairs(nb.removed) do
-            pcall(function()
-                if r[2] and r[2].Parent then r[1].Parent = r[2] end
-            end)
-        end
-    end
-end
-
-end
-
--- ---------- โหลด PexUI ----------
-local PEX
-do
-    local src
-    local okGet, res = pcall(function() return game:HttpGet(PEX_URL) end)
-    if okGet and type(res) == "string" and #res > 0 then src = res end
-    if not src and httpRequest then
-        local ok2, r = pcall(httpRequest, { Url = PEX_URL, Method = "GET" })
-        if ok2 and r and type(r.Body) == "string" and #r.Body > 0 then src = r.Body end
-    end
-    local fn = src and loadstring(src)
-    local okRun, lib = false, nil
-    if fn then okRun, lib = pcall(fn) end
-    if okRun and type(lib) == "table" and type(lib.CreateWindow) == "function" then PEX = lib end
-end
-if not PEX then
-    warn("[PexLobby] โหลดหน้าต่างไม่สำเร็จ")
-    for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
-    return
-end
-local PT = PEX.Theme
-
-local function shutdown()
-    alive = false
-    running = false
-    pcall(PRIV.set, false)       -- คืนชื่อที่ซ่อนไว้
-    pcall(PRIV.noobSet, false)   -- คืนหน้าตาตัวละคร
-    for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
-    genv.__PexLobby = nil
-end
-genv.__PexLobby = shutdown
-
-local win = PEX:CreateWindow({
-    Title = "Pex Hub", Subtitle = "Lobby", Icon = "package", Name = "PexHubLobby",
-    OnClose = shutdown,
-})
-local function notify(text, color, icon, dur)
-    pcall(function() win:Notify({ Text = tostring(text), Color = color, Duration = dur or 3, Icon = icon }) end)
-end
-
-local tab = win:AddTab({ Name = "Crate", Category = "Lobby", Icon = "package", Color = PT.Accent })
-local sel = tab:Section({ Title = "สุ่มกล่อง (Basic Crate)", Desc = "ใส่จำนวนกล่อง แล้วกดสุ่ม (ทีละ 10 เศษทีละ 1) | 1 กล่อง = 100 Coins | ทุก 10 กล่อง คิดชุดละ 900 (ลด 10%)", Icon = "gift", Color = PT.Orange })
-local lblCoins = sel:Label({ Text = "Coins: -", TextSize = 13, Color = PT.Text })
-local countBox = sel:Input({ Title = "จำนวนที่จะสุ่ม (กล่อง)", Default = "10", Placeholder = "เช่น 10, 50, 7" })
-local lblCalc = sel:Label({ Text = "-", TextSize = 12, Color = PT.Text })
-local lblInfo = sel:Label({ Text = "พร้อมสุ่ม", TextSize = 12, Color = PT.Text })
-
-local function getCount()
-    local n = tonumber(countBox and countBox.Text) or 1
-    return math.clamp(math.floor(n), 1, 9999)
-end
-
--- ราคา: ทุก 10 กล่อง = 900 / เศษที่เหลือกล่องละ 100
-local function calcCost(n)
-    local packs, single = math.floor(n / 10), n % 10
-    return packs * PRICE_TEN + single * PRICE_ONE, packs, single
-end
-
-local function setInfo(t) lblInfo.Text = t end
-
--- ---------- ระดับความหายาก (อ่านจาก SummonBoardUI) + แจ้งเตือนเมื่อสุ่มได้ ----------
-local ALERT_SOUND = "rbxasset://sounds/electronicpingshort.wav"   -- เปลี่ยนเป็นเสียงอื่นได้ เช่น "rbxassetid://เลขไอดี"
-local SoundService = game:GetService("SoundService")
-
-local RARITY = { order = {}, byName = {}, lastScan = 0 }   -- byName[ชื่อยูนิต(ตัวเล็ก)] = ระดับ
-local selected = {}        -- ระดับที่เลือกให้แจ้งเตือน
-local notifyOn = true
-local syncToggles          -- ประกาศไว้ก่อน (อัปเดตรายการระดับใน Dropdown)
-
-local function cleanText(t)
-    local x = tostring(t or ""):gsub("<[^>]+>", "")
-    x = x:gsub("^%s+", ""):gsub("%s+$", "")
-    return x:lower()
-end
-
--- ชื่อโฟลเดอร์ระดับ เช่น Units1.Epic.UnitFrame.UnitName -> ระดับ = "Epic"
-local function scanRarity()
-    RARITY.lastScan = os.clock()
-    local list = pg:FindFirstChild("SummonBoardUI")
-    list = list and list:FindFirstChild("SummonHolder")
-    list = list and list:FindFirstChild("MainFrame")
-    list = list and list:FindFirstChild("UnitList")
-    if not list then return false end
-    local known = {}
-    for _, r in ipairs(RARITY.order) do known[r] = true end
-    for _, d in ipairs(list:GetDescendants()) do
-        if d.Name == "UnitName" and (d:IsA("TextLabel") or d:IsA("TextButton")) then
-            local a = d
-            while a.Parent and a.Parent ~= list and not a.Parent.Name:match("^Units%d*$") do a = a.Parent end
-            if a.Parent and a.Parent.Name:match("^Units%d*$") then
-                local r = a.Name
-                RARITY.byName[cleanText(d.Text)] = r
-                if not known[r] then known[r] = true RARITY.order[#RARITY.order + 1] = r end
-            end
-        end
-    end
-    return #RARITY.order > 0
-end
-
-local function playAlert()
-    task.spawn(function()
-        pcall(function()
-            local snd = Instance.new("Sound")
-            snd.SoundId = ALERT_SOUND
-            snd.Volume = 2
-            snd.Parent = SoundService
-            for _ = 1, 3 do snd:Play() task.wait(0.4) end
-            task.wait(1.5)
-            snd:Destroy()
-        end)
-    end)
-end
-
--- ตรวจผลสุ่ม: ชื่อยูนิตตรงกับ UnitName ที่ระดับไหน ถ้าเป็นระดับที่เลือกไว้ -> แจ้งเตือน + เสียง
-local function handleResults(res)
-    if not notifyOn or next(selected) == nil or type(res) ~= "table" then return end
-    local list = res
-    if res.Name == nil and type(res[1]) == "table" and res[1].Name == nil and type(res[1][1]) == "table" then list = res[1] end
-    local hits, order = {}, {}
-    for _, e in ipairs(list) do
-        local nm = type(e) == "table" and e.Name
-        if type(nm) == "string" then
-            local key = cleanText(nm)
-            local r = RARITY.byName[key]
-            if not r and os.clock() - RARITY.lastScan > 5 then
-                scanRarity()
-                if syncToggles then pcall(syncToggles) end
-                r = RARITY.byName[key]
-            end
-            if r and selected[r] then
-                if not hits[r] then hits[r] = {} order[#order + 1] = r end
-                table.insert(hits[r], nm)
-            end
-        end
-    end
-    if #order == 0 then return end
-    for _, r in ipairs(order) do
-        notify("🎉 สุ่มได้ระดับ " .. r .. ": " .. table.concat(hits[r], ", "), PT.Good, "trophy", 6)
-    end
-    playAlert()
-end
-
-local function summon(count)
-    local rf = RS:FindFirstChild("ModuleLoader")
-    rf = rf and rf:FindFirstChild("Shared")
-    rf = rf and rf:FindFirstChild("Network")
-    rf = rf and rf:FindFirstChild("RemoteFunction")
-    rf = rf and rf:FindFirstChild("SummonTowers")
-    if not rf then return false, "ระบบสุ่มใช้ไม่ได้ในตอนนี้" end
-    return pcall(function() return rf:InvokeServer(CRATE_NAME, count) end)
-end
-
--- สุ่ม 1 ครั้ง (count = 10 หรือ 1) คืนค่า true ถ้าสำเร็จ
-local function summonOnce(count, cost)
-    local coins = getCoins()
-    if not coins then return false, "อ่านเงินไม่ได้", true end
-    if coins < cost then
-        return false, string.format("เงินไม่พอ (มี %s ต้องใช้ %s)", fmt(coins), fmt(cost)), true
-    end
-    local ok, res = summon(count)
-    local replied = ok and res ~= nil and res ~= false
-    local dropped = false
-    local t0 = os.clock()
-    -- เซิร์ฟเวอร์ตอบแล้ว = ไปต่อทันที / ไม่ตอบ = รอดูเงินลดสูงสุด 2.5 วิ
-    while ok and not replied and os.clock() - t0 < 2.5 do
-        local now = getCoins()
-        if now and now <= coins - cost * 0.5 then dropped = true break end
-        task.wait(0.1)
-    end
-    if ok and (dropped or replied) then return true, nil, false, res end
-    return false, tostring(res), false
-end
-
-local function roll()
-    if running then notify("กำลังสุ่มอยู่ รอให้เสร็จก่อน", PT.Warn, "hourglass") return end
-    local n = getCount()
-    local cost = calcCost(n)
-    local coins = getCoins()
-    if not coins then notify("อ่านเงินไม่ได้", PT.Warn, "x") return end
-    if coins < cost then
-        local msg = string.format("เงินไม่พอ สุ่ม %d กล่องต้องใช้ %s (มี %s ขาดอีก %s)", n, fmt(cost), fmt(coins), fmt(cost - coins))
-        setInfo(msg)
-        notify(msg, PT.Warn, "x")
-        return
-    end
-
-    running = true
-    task.spawn(function()
-        -- สุ่มทีละ 10 กล่อง (900) จนเหลือเศษ แล้วสุ่มทีละ 1 กล่อง (100) จนครบจำนวน
-        local opened, spent, stopMsg, fails = 0, 0, nil, 0
-        while alive and opened < n do
-            local count = (n - opened >= 10) and 10 or 1
-            local price = (count == 10) and PRICE_TEN or PRICE_ONE
-            setInfo(string.format("กำลังสุ่ม... %d/%d กล่อง", opened, n))
-            local ok, err, fatal, res = summonOnce(count, price)
-            if ok then
-                fails = 0
-                opened = opened + count
-                spent = spent + price
-                handleResults(res)
-            else
-                fails = fails + 1
-                if fatal or fails >= 3 then
-                    stopMsg = fatal and err or ("สุ่มไม่สำเร็จติดกัน 3 ครั้ง (" .. tostring(err) .. ")")
-                    break
-                end
-            end
-        end
-        running = false
-        local msg = stopMsg and string.format("หยุด: %s | สุ่มได้ %d/%d กล่อง", stopMsg, opened, n)
-            or string.format("สุ่มเสร็จ %d กล่อง (ใช้ %s Coins)", opened, fmt(spent))
-        setInfo(msg)
-        notify(msg, stopMsg and PT.Warn or PT.Good, stopMsg and "x" or "trophy")
-    end)
-end
-
--- ใส่จำนวนให้พอดีกับเงินทั้งหมด (ชุด 10 = 900 ก่อน แล้วเศษกล่องละ 100)
-local function fitMax()
-    local coins = getCoins()
-    if not coins then notify("อ่านเงินไม่ได้", PT.Warn, "x") return end
-    local packs = math.floor(coins / PRICE_TEN)
-    local single = math.floor((coins - packs * PRICE_TEN) / PRICE_ONE)
-    local n = packs * 10 + single
-    if n < 1 then notify("เงินไม่พอสุ่มแม้แต่ 1 กล่อง", PT.Warn, "x") return end
-    countBox.Text = tostring(n)
-    notify(string.format("ตั้งจำนวน %d กล่อง (ใช้ %s Coins)", n, fmt((calcCost(n)))), PT.Good, "check")
-end
-
-sel:Action({ Text = "ใส่จำนวนพอดีกับเงินทั้งหมด", Icon = "coins", Color = PT.Blue, Callback = fitMax })
-sel:Action({ Text = "สุ่มเลย", Icon = "boxes", Color = PT.Purple, Callback = roll })
-
--- ---------- สุ่มต่อเนื่องจนกว่า Coin จะหมด ----------
-local autoOn, autoRunning = false, false
-local autoTog
-
-local function flipAutoOff()
-    autoOn = false
-    if autoTog then
-        for _, fn in ipairs({ "Set", "SetValue", "SetState" }) do
-            local ok = pcall(function()
-                if type(autoTog[fn]) == "function" then autoTog[fn](autoTog, false) else error("x") end
-            end)
-            if ok then break end
-        end
-    end
-end
-
-local function startAuto()
-    if autoRunning then return end   -- ลูปเดิมยังทำงานอยู่ และจะทำต่อเพราะ autoOn เป็น true แล้ว
-    if running then
-        notify("กำลังสุ่มอยู่ รอให้เสร็จก่อน", PT.Warn, "hourglass")
-        flipAutoOff()
-        return
-    end
-    autoRunning, running = true, true
-    task.spawn(function()
-        local opened, spent, stopMsg, fails = 0, 0, nil, 0
-        while alive and autoOn do
-            local coins = getCoins()
-            if not coins then stopMsg = "อ่านเงินไม่ได้" break end
-            local count, price
-            if coins >= PRICE_TEN then count, price = 10, PRICE_TEN
-            elseif coins >= PRICE_ONE then count, price = 1, PRICE_ONE
-            else stopMsg = "Coin หมดแล้ว" break end
-            setInfo(string.format("สุ่มต่อเนื่อง... สุ่มแล้ว %d กล่อง", opened))
-            local ok, err, fatal, res = summonOnce(count, price)
-            if ok then
-                fails = 0
-                opened = opened + count
-                spent = spent + price
-                handleResults(res)
-            else
-                fails = fails + 1
-                if fatal or fails >= 3 then
-                    stopMsg = fatal and err or ("สุ่มไม่สำเร็จติดกัน 3 ครั้ง (" .. tostring(err) .. ")")
-                    break
-                end
-                task.wait(0.3)
-            end
-        end
-        local byUser = alive and not stopMsg   -- ผู้ใช้ปิดปุ่มเอง
-        autoRunning, running = false, false
-        if stopMsg then flipAutoOff() end
-        local msg = string.format("สุ่มต่อเนื่อง%s | สุ่มได้ %d กล่อง (ใช้ %s Coins)",
-            stopMsg and (" หยุด: " .. stopMsg) or (byUser and " หยุดแล้ว" or " จบ"), opened, fmt(spent))
-        setInfo(msg)
-        notify(msg, stopMsg == "Coin หมดแล้ว" and PT.Good or PT.Warn, stopMsg == "Coin หมดแล้ว" and "trophy" or "x", 5)
-    end)
-end
-
-autoTog = sel:Toggle({
-    Title = "สุ่มต่อเนื่องจนกว่า Coin จะหมด",
-    Desc = "สุ่มทีละ 10 (เศษทีละ 1) จนกว่า Coin จะไม่พอ",
-    Default = false,
-    Callback = function(v)
-        autoOn = v and true or false
-        if autoOn then startAuto() end
-    end,
-})
-
--- ---------- แจ้งเตือนเมื่อสุ่มได้ระดับที่เลือก ----------
-local sNotif = tab:Section({ Title = "แจ้งเตือนเมื่อสุ่มได้", Desc = "เลือกระดับที่ต้องการ ถ้าสุ่มได้ยูนิตระดับนั้นจะมีแจ้งเตือน + เสียง", Icon = "bell", Color = PT.Purple })
-local lblRar = sNotif:Label({ Text = "กำลังหาระดับ...", TextSize = 12, Color = PT.Text })
-sNotif:Toggle({
-    Title = "เปิดแจ้งเตือน (มีเสียง)",
-    Default = true,
-    Callback = function(v) notifyOn = v and true or false end,
-})
--- เลือกระดับแบบ Dropdown (เลือกได้หลายระดับ) กดหัวเพื่อเปิด/ปิดรายการ
-local rarDrop = sNotif:Dropdown({
-    Title = "ระดับที่ต้องการแจ้งเตือน",
-    Desc = "เลือกได้หลายระดับ",
-    Options = {},
-    Multi = true,
-    Default = {},
-    Placeholder = "ยังไม่พบระดับ",
-    Callback = function(list)
-        selected = {}
-        for _, r in ipairs(list or {}) do selected[r] = true end
-    end,
-})
-local shownN = -1
-syncToggles = function()
-    if #RARITY.order ~= shownN then
-        shownN = #RARITY.order
-        local opts = {}
-        for i, r in ipairs(RARITY.order) do opts[i] = r end
-        rarDrop.Refresh(opts, true)   -- เก็บระดับที่เลือกไว้เดิม
-    end
-    lblRar.Text = (#RARITY.order > 0) and ("พบ " .. #RARITY.order .. " ระดับ: " .. table.concat(RARITY.order, ", "))
-        or "ยังไม่พบระดับ (เปิดหน้า Summon ในเกมหนึ่งครั้ง แล้วกดสแกนใหม่)"
-end
-sNotif:Action({
-    Text = "สแกนระดับใหม่", Icon = "refresh-cw", Color = PT.Blue,
-    Callback = function()
-        scanRarity()
-        syncToggles()
-        notify(#RARITY.order > 0 and ("พบ " .. #RARITY.order .. " ระดับ") or "ยังไม่พบระดับ", #RARITY.order > 0 and PT.Good or PT.Warn, "refresh-cw")
-    end,
-})
-task.spawn(function()
-    local t0 = os.clock()
-    repeat
-        scanRarity()
-        if #RARITY.order > 0 then break end
-        task.wait(1)
-    until not alive or os.clock() - t0 > 20
-    if alive then syncToggles() end
-end)
-
--- ---------- ความเป็นส่วนตัว ----------
-local sPriv = tab:Section({ Title = "ความเป็นส่วนตัว", Desc = "ซ่อนชื่อและหน้าตาของตัวเอง (เห็นเฉพาะในเครื่องเรา)", Icon = "shield-check", Color = PT.Pink })
-sPriv:Toggle({
-    Title = "ซ่อนชื่อตัวเอง",
-    Default = CFG.HIDE_NAME,
-    Callback = function(v)
-        CFG.HIDE_NAME = v and true or false
-        saveSettings()
-        PRIV.set(v)
-    end,
-})
-sPriv:Toggle({
-    Title = "ซ่อนตัวละคร (เป็น NOOB)",
-    Default = CFG.NOOB_MODE,
-    Callback = function(v)
-        CFG.NOOB_MODE = v and true or false
-        saveSettings()
-        PRIV.noobSet(v)
-    end,
-})
--- ค่าที่จำไว้ (จากไฟล์เดียวกับในเกม) -> เปิดให้เลยตอนเข้า
-if CFG.HIDE_NAME then task.spawn(function() pcall(PRIV.set, true) end) end
-if CFG.NOOB_MODE then task.spawn(function() pcall(PRIV.noobSet, true) end) end
-
-task.spawn(function()
-    while alive do
-        local c = getCoins()
-        local n = getCount()
-        local cost, packs, single = calcCost(n)
-        lblCoins.Text = "Coins: " .. (c and fmt(c) or "-")
-        lblCalc.Text = string.format("สุ่ม %d กล่อง = %d ชุด x%s + %d กล่อง x%s | รวม %s Coins",
-            n, packs, fmt(PRICE_TEN), single, fmt(PRICE_ONE), fmt(cost))
-        task.wait(0.5)
-    end
-end)
-
--- =====================================================================
---  AUTO SUMMON แบบกำหนดตัว  (วางต่อท้ายไฟล์ CameramanLobby.lua ได้เลย ไม่ต้องแก้ส่วนอื่น)
---  ลำดับ: เช็กเงิน + เช็กว่าตู้มีตัวที่เลือก -> เดินไปจุดสุ่ม -> สุ่มจนเงินหมด
---         -> เดินไปลิฟต์ที่เป็นด่านที่เลือก (ลิฟต์ว่างเท่านั้น) -> กด Ready -> เกมเล่นต่อเอง
---  ตู้รีเซ็ตทุกครึ่งชั่วโมงตามนาฬิกาโลก (นาทีที่ :00 และ :30) ฝั่งในเกมจะพากลับมาลอบบี้เอง
---  เก็บค่าลงไฟล์เดียวกับสคริปต์อื่น: AUTO_SELECT_SUMMON / SUMMON_MAP / SUMMON_WANTED
--- =====================================================================
-do
-local PathfindingService = game:GetService("PathfindingService")
-local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
 local GuiService = game:GetService("GuiService")
-local _okV, VIM = pcall(function() return game:GetService("VirtualInputManager") end)
-if not _okV then VIM = nil end
+local RunService = game:GetService("RunService")
 
-local SUMMON_CF = CFrame.new(583.37, 310.81, 741.09)   -- จุดที่ต้องไปยืนสุ่ม
-local RESUME_FILE = "PexSkibidiTD_Resume.json"
--- ถ้าไม่ได้ใช้ autoexec ให้ปล่อย true (จะ queue_on_teleport สคริปต์ในเกมให้ก่อนกด Ready)
--- ถ้าใช้ autoexec อยู่แล้ว ตั้งเป็น false กันสคริปต์รันซ้อน
-local QUEUE_GAME = true
-local GAME_URL = "https://raw.githubusercontent.com/FCUKZX/Roblox-Scripts/refs/heads/main/CameramanTD.lua"
+local UI = {}
+UI.Version = "2.0.0"
+-- แหล่งไอคอน Lucide (spritesheet asset id) ถ้าโหลดไม่ได้ ไอคอนจะเป็นจุดแทน ไม่ทำให้ UI พัง
+UI.LucideURL = "https://github.com/latte-soft/lucide-roblox/releases/latest/download/lucide-roblox.luau"
+UI.LucideMirrors = {
+    "https://github.com/latte-soft/lucide-roblox/releases/latest/download/lucide-roblox.luau",
+    "https://raw.githubusercontent.com/latte-soft/lucide-roblox/main/lucide-roblox.luau",
+}
+UI.CustomIcons = {}
+UI.UiScale = 1 -- ขนาดตัวหน้าต่าง (1 = ขนาดจริง คมที่สุด)
+UI.ForceMobile = nil -- true/false = บังคับโหมดมือถือ/คอม, nil = ตรวจเอง
+UI.DragHoldTime = 0 -- กดค้างที่หัวหน้าต่างกี่วินาทีถึงจะลากได้ (0 = ลากได้ทันที ไม่ต้องกดค้าง)
+UI.DragReturn = true -- ปล่อยหัวหน้าต่างแล้วค่อยๆ เด้งกลับที่เดิม (false = อยู่ตรงที่ปล่อย)
+UI.SliderHoldTime = 0.5 -- ต้องกดค้างที่หลอด Slider กี่วินาทีถึงจะลากได้ (0 = ลากได้ทันที)
+UI.IntroBubble = true -- ตอนเปิดสคริปต์: ผุดเป็นวงกลมแล้วขยายออกแบบเดียวกับตอนกดขยาย (false = แอนิเมชันเก่า)
 
-local SM = {
-    on = false, wanted = {}, map = "", maps = {}, mapOrder = {},
-    crate = nil, crateN = 0, state = "ปิดอยู่", bad = {}, loopOn = false,
-    skipSummonUntil = 0, queued = false,
-    mode = "walk",   -- walk = เดิน | float = ลอย | tp = วาปเลย
+UI.Theme = {
+    Bg = Color3.fromRGB(16, 16, 24),
+    Side = Color3.fromRGB(20, 20, 30),
+    Top = Color3.fromRGB(19, 19, 28),
+    Card = Color3.fromRGB(26, 26, 38),
+    Inset = Color3.fromRGB(17, 17, 25),
+    Elem = Color3.fromRGB(42, 42, 60),
+    Line = Color3.fromRGB(58, 58, 80),
+    Text = Color3.fromRGB(246, 246, 255),
+    Muted = Color3.fromRGB(176, 176, 200),
+    Accent = Color3.fromRGB(98, 112, 255),
+    Good = Color3.fromRGB(52, 202, 120),
+    Bad = Color3.fromRGB(240, 82, 98),
+    Warn = Color3.fromRGB(240, 178, 60),
+    Blue = Color3.fromRGB(56, 142, 248),
+    Purple = Color3.fromRGB(160, 96, 245),
+    Pink = Color3.fromRGB(244, 76, 150),
+    Orange = Color3.fromRGB(250, 160, 50),
+    Cyan = Color3.fromRGB(36, 190, 212),
+}
+local T = UI.Theme
+local WHITE = Color3.new(1, 1, 1)
+
+local F_REG, F_MED, F_BOLD = Enum.Font.Gotham, Enum.Font.GothamMedium, Enum.Font.GothamBold
+local AX, AY = Enum.AutomaticSize.X, Enum.AutomaticSize.Y
+
+-- =====================================================================
+-- Utilities
+-- =====================================================================
+local activeTw = setmetatable({}, { __mode = "k" })
+local function tween(o, props, t, style, dir)
+    -- ยกเลิกทวีนเดิมที่แย่งคุณสมบัติชุดเดียวกัน -> ไม่ตีกัน ไม่สั่น ไม่กระตุก
+    local keys = {}
+    for k in pairs(props) do keys[#keys + 1] = tostring(k) end
+    table.sort(keys)
+    local sig = table.concat(keys, "|")
+    local m = activeTw[o]
+    if not m then
+        m = {}
+        activeTw[o] = m
+    end
+    local old = m[sig]
+    if old then old:Cancel() end
+    local tw = TweenService:Create(o, TweenInfo.new(t or 0.25, style or Enum.EasingStyle.Quint, dir or Enum.EasingDirection.Out), props)
+    m[sig] = tw
+    tw.Completed:Connect(function()
+        if m[sig] == tw then m[sig] = nil end
+    end)
+    tw:Play()
+    return tw
+end
+UI.Tween = tween
+
+local function new(class, props, parent)
+    local o = Instance.new(class)
+    if props then
+        for k, v in pairs(props) do o[k] = v end
+    end
+    if parent then o.Parent = parent end
+    return o
+end
+UI.New = new
+
+local function clamp(v, a, b) return math.max(a, math.min(b, v)) end
+
+local function corner(o, r) return new("UICorner", { CornerRadius = UDim.new(0, r) }, o) end
+local function stroke(o, color, th, tr)
+    return new("UIStroke", { Color = color, Thickness = th or 1, Transparency = tr or 0, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, o)
+end
+local function pad(o, l, t, r, b)
+    t = t or l
+    r = r or l
+    b = b or t
+    return new("UIPadding", {
+        PaddingLeft = UDim.new(0, l), PaddingTop = UDim.new(0, t),
+        PaddingRight = UDim.new(0, r), PaddingBottom = UDim.new(0, b),
+    }, o)
+end
+local function vlist(o, gap)
+    return new("UIListLayout", { Padding = UDim.new(0, gap or 0), SortOrder = Enum.SortOrder.LayoutOrder }, o)
+end
+local function label(parent, props)
+    local base = {
+        BackgroundTransparency = 1, BorderSizePixel = 0, Font = F_MED, TextSize = 13, TextColor3 = T.Text,
+        TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center,
+    }
+    for k, v in pairs(props) do base[k] = v end
+    return new("TextLabel", base, parent)
+end
+UI.Corner, UI.Stroke, UI.Pad, UI.List, UI.Label = corner, stroke, pad, vlist, label
+
+local function httpGet(url)
+    local ok, res = pcall(function() return game:HttpGet(url) end)
+    if ok and type(res) == "string" and #res > 0 then return res end
+    local req = (syn and syn.request) or (http and http.request) or http_request or request or (fluxus and fluxus.request)
+    if req then
+        local ok2, r = pcall(req, { Url = url, Method = "GET" })
+        if ok2 and r and r.Body and (r.Success or r.StatusCode == 200) then return r.Body end
+    end
+    return nil
+end
+UI.HttpGet = httpGet
+
+-- =====================================================================
+-- Icons (ไอคอน ID แทนอีโมจิ)
+-- =====================================================================
+local lucide, lucideTried = nil, false
+local function loadLucide()
+    if lucideTried then return lucide end
+    lucideTried = true
+    local ok, res = pcall(function()
+        local urls = { UI.LucideURL }
+        for _, u in ipairs(UI.LucideMirrors) do if u ~= UI.LucideURL then urls[#urls + 1] = u end end
+        for _, u in ipairs(urls) do
+            local src = httpGet(u)
+            if src then
+                local fn = loadstring(src)
+                if fn then
+                    local ok2, mod = pcall(fn)
+                    if ok2 and type(mod) == "table" then return mod end
+                end
+            end
+        end
+        return nil
+    end)
+    if ok and type(res) == "table" and type(res.GetAsset) == "function" then lucide = res end
+    return lucide
+end
+UI.LoadIcons = loadLucide
+
+-- ชื่อไอคอน Lucide เปลี่ยนตามเวอร์ชัน -> ลองหลายชื่อ
+local ALIASES = {
+    ["bar-chart-3"] = { "bar-chart-3", "chart-column", "bar-chart-2", "bar-chart" },
+    ["alert-triangle"] = { "alert-triangle", "triangle-alert" },
+    ["panel-left"] = { "panel-left", "sidebar" },
+    ["chevrons-up-down"] = { "chevrons-up-down", "chevron-up-down" },
+    ["circle-dot"] = { "circle-dot", "dot-circle" },
+    ["flask-conical"] = { "flask-conical", "flask-round", "beaker" },
+    ["pencil-ruler"] = { "pencil-ruler", "pencil" },
+    ["undo-2"] = { "undo-2", "undo", "rotate-ccw" },
+    ["clipboard-copy"] = { "clipboard-copy", "copy" },
+    ["trash-2"] = { "trash-2", "trash" },
+    ["scroll-text"] = { "scroll-text", "file-text", "scroll" },
+    ["clapperboard"] = { "clapperboard", "film", "video" },
+    ["infinity"] = { "infinity", "repeat" },
+    ["layout-list"] = { "layout-list", "list" },
+    ["folder-open"] = { "folder-open", "folder" },
 }
 
--- ---------- โหลดค่าที่เซฟไว้ ----------
-do
-    local d = readSettings()
-    SM.on = d.AUTO_SELECT_SUMMON == true
-    if type(d.SUMMON_MAP) == "string" then SM.map = d.SUMMON_MAP end
-    if d.MOVE_MODE == "walk" or d.MOVE_MODE == "float" or d.MOVE_MODE == "tp" then SM.mode = d.MOVE_MODE end
-    if type(d.SUMMON_WANTED) == "table" then
-        for _, n in ipairs(d.SUMMON_WANTED) do
-            if type(n) == "string" and n ~= "" then SM.wanted[#SM.wanted + 1] = n end
-        end
+local function applyIcon(img, icon, px)
+    img.Image = ""
+    img.ImageRectOffset = Vector2.new(0, 0)
+    img.ImageRectSize = Vector2.new(0, 0)
+    if icon == nil or icon == "" then return false end
+    local ty = type(icon)
+    if ty == "number" then
+        img.Image = "rbxassetid://" .. tostring(math.floor(icon))
+        return true
     end
-end
-
-local function saveSM()
-    if not writefile then return end
-    pcall(function()
-        local data = readSettings()   -- อ่านใหม่ทุกครั้ง เก็บค่าอื่นไว้เหมือนเดิม
-        if data.CFG_VERSION == nil then data.CFG_VERSION = 1 end
-        data.AUTO_SELECT_SUMMON = SM.on
-        data.SUMMON_MAP = SM.map
-        data.MOVE_MODE = SM.mode
-        data.SUMMON_WANTED = SM.wanted
-        writefile(SETTINGS_FILE, HttpService:JSONEncode(data))
-    end)
-end
-
-local function setState(t) SM.state = tostring(t) end
-
--- ---------- อ่านตู้ (รายชื่อตัวที่อยู่ในตู้ตอนนี้ เก็บสดทุกครั้ง ไม่สะสมของเก่า) ----------
-local function scanCrate()
-    local list = pg:FindFirstChild("SummonBoardUI")
-    list = list and list:FindFirstChild("SummonHolder")
-    list = list and list:FindFirstChild("MainFrame")
-    list = list and list:FindFirstChild("UnitList")
-    if not list then return nil end
-    local set, n = {}, 0
-    for _, d in ipairs(list:GetDescendants()) do
-        if d.Name == "UnitName" and (d:IsA("TextLabel") or d:IsA("TextButton")) then
-            local k = cleanText(d.Text)
-            if k ~= "" and not set[k] then
-                set[k] = (tostring(d.Text):gsub("<[^>]+>", ""))
-                n = n + 1
+    if ty == "table" then
+        local id = icon.id or icon[1]
+        if not id then return false end
+        img.Image = (type(id) == "number") and ("rbxassetid://" .. id) or tostring(id)
+        if icon.offset then img.ImageRectOffset = icon.offset end
+        if icon.size then img.ImageRectSize = icon.size end
+        return true
+    end
+    if ty ~= "string" then return false end
+    if icon:find("^rbxassetid://") or icon:find("^rbxthumb://") or icon:find("^rbxasset://") then
+        img.Image = icon
+        return true
+    end
+    if icon:match("^%d+$") then
+        img.Image = "rbxassetid://" .. icon
+        return true
+    end
+    local custom = UI.CustomIcons[icon]
+    if custom ~= nil and custom ~= icon then return applyIcon(img, custom, px) end
+    local L = loadLucide()
+    if L then
+        local size = (px and px > 24) and 96 or 48
+        for _, name in ipairs(ALIASES[icon] or { icon }) do
+            local ok, asset = pcall(L.GetAsset, name, size)
+            if ok and asset and asset.Url then
+                img.Image = asset.Url
+                img.ImageRectSize = asset.ImageRectSize
+                img.ImageRectOffset = asset.ImageRectOffset
+                return true
             end
-        end
-    end
-    if n == 0 then return nil end
-    SM.crate, SM.crateN = set, n
-    return set
-end
-
-local function foundWanted(set)
-    local found = {}
-    if set then
-        for _, w in ipairs(SM.wanted) do
-            local d = set[cleanText(w)]
-            if d then found[#found + 1] = d end
-        end
-    end
-    return found
-end
-
-local function waitFor(fn, timeout, active)
-    local t0 = os.clock()
-    repeat
-        local v = fn()
-        if v then return v end
-        task.wait(0.5)
-    until os.clock() - t0 > timeout or not (alive and active())
-    return fn()
-end
-
--- ---------- ลิฟต์ ----------
-local function readText(obj)
-    local ok, t = pcall(function() return obj.Text end)
-    if ok and type(t) == "string" then return (t:gsub("<[^>]+>", "")) end
-    return nil
-end
-
-local function allElevators()
-    local out = {}
-    local root = Workspace:FindFirstChild("Elevators")
-    if not root then return out end
-    for _, e in ipairs(root:GetChildren()) do
-        local bp = e:FindFirstChild("BasePart")
-        local sg = bp and bp:FindFirstChild("StatusGui")
-        local mapL = sg and sg:FindFirstChild("MapName")
-        local cntL = sg and sg:FindFirstChild("PlayersCount")
-        local map = mapL and readText(mapL)
-        local cnt = cntL and readText(cntL)
-        local a, b = tostring(cnt or ""):match("(%d+)%s*/%s*(%d+)")
-        out[#out + 1] = {
-            model = e, map = map, key = map and cleanText(map) or nil,
-            area = e:FindFirstChild("Area"), players = tonumber(a), max = tonumber(b),
-        }
-    end
-    table.sort(out, function(x, y) return x.model.Name < y.model.Name end)
-    return out
-end
-
-local function areaPos(area)
-    if not area then return nil end
-    if area:IsA("BasePart") then return area.Position end
-    if area:IsA("Model") then return area:GetPivot().Position end
-    local p = area:FindFirstChildWhichIsA("BasePart", true)
-    return p and p.Position
-end
-
--- ชื่อด่านซ้ำ = ที่เดียวกัน (เทียบด้วย key ตัวเล็ก)
-local function scanMaps()
-    local changed = false
-    if SM.map ~= "" then
-        local k = cleanText(SM.map)
-        if not SM.maps[k] then SM.maps[k] = SM.map SM.mapOrder[#SM.mapOrder + 1] = k changed = true end
-    end
-    for _, e in ipairs(allElevators()) do
-        if e.key and e.key ~= "" and not SM.maps[e.key] then
-            SM.maps[e.key] = e.map
-            SM.mapOrder[#SM.mapOrder + 1] = e.key
-            changed = true
-        end
-    end
-    return changed
-end
-
-local function queueFrame()
-    local g = pg:FindFirstChild("ElevatorGui")
-    return g and g:FindFirstChild("QueueFrame")
-end
-
-local function guiShown(o)
-    local cur = o
-    while cur and cur ~= pg do
-        if cur:IsA("GuiObject") and not cur.Visible then return false end
-        if cur:IsA("ScreenGui") and not cur.Enabled then return false end
-        cur = cur.Parent
-    end
-    return cur == pg
-end
-
-local function queueShown()
-    local f = queueFrame()
-    return (f and guiShown(f)) and f or nil
-end
-
--- ---------- กดปุ่ม ----------
-local function pressBtn(obj)
-    local btn = obj
-    if not obj:IsA("GuiButton") then btn = obj:FindFirstChildWhichIsA("GuiButton", true) or obj end
-    local fired = false
-    if getconnections then
-        for _, sig in ipairs({ "MouseButton1Click", "Activated", "MouseButton1Down" }) do
-            local ok, list = pcall(function() return getconnections(btn[sig]) end)
-            if ok and list then
-                for _, c in ipairs(list) do pcall(function() c:Fire() end) fired = true end
-            end
-            if fired then break end
-        end
-    end
-    if not fired and firesignal then
-        fired = pcall(function() firesignal(btn.MouseButton1Click) end)
-        pcall(function() firesignal(btn.Activated) end)
-    end
-    if not fired and VIM then
-        pcall(function()
-            local pos, size = btn.AbsolutePosition, btn.AbsoluteSize
-            local gui = btn:FindFirstAncestorWhichIsA("ScreenGui")
-            local inset = (gui and gui.IgnoreGuiInset) and 0 or GuiService:GetGuiInset().Y
-            local x, y = pos.X + size.X / 2, pos.Y + size.Y / 2 + inset
-            VIM:SendMouseButtonEvent(x, y, 0, true, game, 1)
-            task.wait(0.05)
-            VIM:SendMouseButtonEvent(x, y, 0, false, game, 1)
-        end)
-    end
-end
-
--- ---------- เดินฉลาด (PathfindingService หลบสิ่งกีดขวาง / กระโดดเมื่อติด) ----------
--- [แก้ใหม่] เสถียรขึ้น:
---   * มองไปข้างหน้าแค่ 5 สตั๊ด + จุดถี่ขึ้น ไม่ตัดมุมจนตกขอบ/ชนมุม
---   * ถูกดัน/ตกออกนอกเส้นทางเกิน 14 สตั๊ด = คำนวณทางใหม่
---   * active() ถูกเรียกทุกเฟรม -> ยกเลิกทันทีได้ (เช่น ลิฟต์มีคนเข้าแล้ว) แม้อยู่ระหว่างคำนวณทาง
---   * ตัวละครนั่งอยู่จะลุกก่อนเดิน / กระโดดมี cooldown / คำนวณทางใหม่ไม่รัว
---   * จบแล้วสั่งหยุดตัวละครเสมอ
-local RunService = game:GetService("RunService")
-local LOOK_AHEAD = 5       -- มองไปข้างหน้ากี่สตั๊ด
-local ADVANCE_DIST = 3     -- เข้าใกล้จุดในระยะนี้ = ถือว่าผ่านจุดนั้นแล้ว
-local OFFPATH_DIST = 14    -- ห่างทางเกินระยะนี้ = คำนวณทางใหม่
-
-local function getRH()
-    local ch = lp.Character
-    local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-    local root = ch and ch:FindFirstChild("HumanoidRootPart")
-    if hum and root and hum.Health > 0 then return root, hum end
-    return nil
-end
-
-local function flat(a, b) return Vector3.new(a.X - b.X, 0, a.Z - b.Z).Magnitude end
-
-local function stopMoving()
-    local root, hum = getRH()
-    if root and hum then pcall(function() hum:MoveTo(root.Position) end) end
-end
-
--- คืน true = ถึงแล้ว | false = ไม่ถึง / ถูกสั่งหยุด (active() เป็น false)
-local function walkTo(target, active, reach)
-    reach = reach or 3
-    local t0, fails = os.clock(), 0
-    local result = false
-    local function arrived(root)
-        return flat(root.Position, target) <= reach and math.abs(root.Position.Y - target.Y) < 10
-    end
-
-    while alive and active() and os.clock() - t0 < 120 and fails < 8 do
-        local root, hum = getRH()
-        if not root then
-            task.wait(0.3)
-        elseif arrived(root) then
-            result = true
-            break
-        else
-            if hum.Sit then hum.Sit = false hum.Jump = true end   -- นั่งอยู่ลุกก่อน
-            pcall(function() hum:MoveTo(target) end)              -- ระหว่างคำนวณทางเดินตรงไปก่อน
-            local path = PathfindingService:CreatePath({
-                AgentRadius = 2, AgentHeight = 5, AgentCanJump = true, AgentCanClimb = true, WaypointSpacing = 5,
-            })
-            local okP = pcall(function() path:ComputeAsync(root.Position, target) end)
-            if not (alive and active()) then break end           -- คำนวณทางนานแล้วถูกยกเลิก = หยุดทันที
-            root, hum = getRH()
-
-            local wps = (okP and path.Status == Enum.PathStatus.Success) and path:GetWaypoints() or nil
-            if not root then
-                task.wait(0.3)
-            elseif wps and #wps >= 1 then
-                local blocked, done = false, false
-                local i = math.min(2, #wps)
-                local bc = path.Blocked:Connect(function(idx)
-                    if idx >= i then blocked = true end          -- สนใจเฉพาะจุดที่ยังไม่ผ่าน
-                end)
-                local lastP, lastMoveT, lastJumpT = root.Position, os.clock(), 0
-                local segT0, maxT = os.clock(), 8 + #wps * 2.5
-
-                while alive and active() and not blocked and not done do
-                    if not root.Parent or hum.Health <= 0 then blocked = true break end
-                    local pos = root.Position
-                    if arrived(root) then done = true break end
-                    if os.clock() - segT0 > maxT then blocked = true break end
-                    if hum.Sit then hum.Sit = false end
-
-                    -- ถูกดัน/ตกออกนอกเส้นทางมาก -> คำนวณใหม่
-                    local prev = wps[math.max(i - 1, 1)].Position
-                    if flat(pos, wps[i].Position) > OFFPATH_DIST and flat(pos, prev) > OFFPATH_DIST then
-                        blocked = true
-                        break
-                    end
-
-                    -- จุดกระโดด: กระโดดเมื่อเข้าใกล้ (มี cooldown กันกระโดดรัว)
-                    if wps[i].Action == Enum.PathWaypointAction.Jump and flat(pos, wps[i].Position) < 4
-                        and os.clock() - lastJumpT > 0.6 then
-                        hum.Jump = true
-                        lastJumpT = os.clock()
-                    end
-                    -- ข้ามจุดที่ผ่านแล้ว (ไม่ข้ามจุดสุดท้าย)
-                    while i < #wps and flat(pos, wps[i].Position) < ADVANCE_DIST do i = i + 1 end
-
-                    -- เลือกจุดที่จะวิ่งไป = มองไปข้างหน้า LOOK_AHEAD สตั๊ด (ไม่มองข้ามจุดกระโดด)
-                    local j, acc = i, flat(pos, wps[i].Position)
-                    while j < #wps and acc < LOOK_AHEAD and wps[j].Action ~= Enum.PathWaypointAction.Jump do
-                        acc = acc + flat(wps[j].Position, wps[j + 1].Position)
-                        j = j + 1
-                    end
-                    hum:MoveTo(wps[j].Position)
-
-                    -- ถึงปลายทางของเส้นทางแล้ว แต่ยังไม่เข้าเงื่อนไขถึงเป้า -> ค่อยๆ เดินเข้าเป้าตรงๆ
-                    if i >= #wps and flat(pos, wps[#wps].Position) < 2.5 then
-                        local tf = os.clock()
-                        while alive and active() and os.clock() - tf < 1.5 do
-                            local r2 = getRH()
-                            if not r2 or arrived(r2) then break end
-                            hum:MoveTo(target)
-                            RunService.Heartbeat:Wait()
-                        end
-                        local r3 = getRH()
-                        if r3 and arrived(r3) then done = true else fails = fails + 1 end
-                        break
-                    end
-
-                    -- ติดสิ่งกีดขวาง: ไม่ขยับ 0.7 วิ = กระโดด | 2.5 วิ = คำนวณทางใหม่
-                    if (pos - lastP).Magnitude > 0.5 then
-                        lastP, lastMoveT = pos, os.clock()
-                    else
-                        local idle = os.clock() - lastMoveT
-                        if idle > 2.5 then
-                            blocked = true
-                        elseif idle > 0.7 and os.clock() - lastJumpT > 0.7 then
-                            hum.Jump = true
-                            lastJumpT = os.clock()
-                        end
-                    end
-                    RunService.Heartbeat:Wait()
-                end
-                bc:Disconnect()
-                if done then result = true break end
-                if blocked then
-                    fails = fails + 1
-                    task.wait(0.15)   -- กันคำนวณทางรัวเกินไปตอนติดจริง
-                end
-            else
-                -- หาเส้นทางไม่ได้: แผนสำรอง เดินตรงไปทางเป้าหมาย
-                fails = fails + 1
-                pcall(function() hum:MoveTo(target) end)
-                local lp0, tw = root.Position, os.clock()
-                while alive and active() and os.clock() - tw < 1.5 do
-                    local r2 = getRH()
-                    if not r2 or arrived(r2) then break end
-                    RunService.Heartbeat:Wait()
-                end
-                local r3 = getRH()
-                if r3 and (r3.Position - lp0).Magnitude < 1 then hum.Jump = true end
-            end
-        end
-    end
-    stopMoving()
-    return result
-end
-
--- ---------- [ใหม่] เลือกรูปแบบเคลื่อนที่: เดิน / ลอย / วาปเลย ----------
---   walk  = เดินตามเส้นทาง (walkTo ด้านบน) ปลอดภัยสุด ช้าสุด
---   float = ลอยตรงไปหาจุดหมายด้วยความเร็วคงที่ (ทะลุสิ่งกีดขวาง ไม่ตกขอบ) เช็กยกเลิกได้ทุกเฟรม
---   tp    = วาปเลย ย้ายตำแหน่งทันที เร็วสุด (เสี่ยงโดนระบบกันโกงของเกมมากกว่า)
-local FLOAT_SPEED = 80   -- ความเร็วตอนลอย (สตั๊ด/วินาที) ปรับได้
-
-local function floatTo(target, active)
-    local root, hum = getRH()
-    if not root then return false end
-    local ch = lp.Character
-    local saved = {}
-    for _, d in ipairs(ch:GetDescendants()) do
-        if d:IsA("BasePart") and d.CanCollide then saved[d] = true d.CanCollide = false end
-    end
-    local oldPS = hum.PlatformStand
-    hum.PlatformStand = true   -- กัน Humanoid ออกแรงสู้ตอนลอย
-    local result = false
-    local t0 = os.clock()
-    while alive and active() and os.clock() - t0 < 60 do
-        root, hum = getRH()
-        if not root then break end
-        local dt = RunService.Heartbeat:Wait()
-        root, hum = getRH()
-        if not root then break end
-        local pos = root.Position
-        local delta = target - pos
-        local dist = delta.Magnitude
-        if dist <= 1.5 then result = true break end
-        local newPos = pos + delta.Unit * math.min(dist, FLOAT_SPEED * dt)
-        root.CFrame = CFrame.new(newPos) * (root.CFrame - root.CFrame.Position)
-        root.AssemblyLinearVelocity = Vector3.zero
-        root.AssemblyAngularVelocity = Vector3.zero
-    end
-    for p in pairs(saved) do pcall(function() if p.Parent then p.CanCollide = true end end) end
-    local r2, h2 = getRH()
-    if h2 then pcall(function() h2.PlatformStand = oldPS end) end
-    if r2 then pcall(function() r2.AssemblyLinearVelocity = Vector3.zero end) end
-    return result
-end
-
-local function tpTo(target, active)
-    if not (alive and active()) then return false end
-    local root = getRH()
-    if not root then return false end
-    root.CFrame = CFrame.new(target) * (root.CFrame - root.CFrame.Position)
-    root.AssemblyLinearVelocity = Vector3.zero
-    task.wait(0.15)
-    return true
-end
-
--- ใช้แทน walkTo ทุกที่ | yOff = ยกตำแหน่งสูงขึ้น (ใช้กับจุดที่เป็นศูนย์กลางของ Area ตอนลอย/วาป กันฝังพื้น)
-local function moveTo(target, active, reach, yOff)
-    if SM.mode == "float" then
-        return floatTo(target + Vector3.new(0, yOff or 0, 0), active)
-    elseif SM.mode == "tp" then
-        return tpTo(target + Vector3.new(0, yOff or 0, 0), active)
-    end
-    return walkTo(target, active, reach)
-end
-
--- ---------- สุ่มจนเงินหมด (ใช้ summonOnce / getCoins / handleResults ของสคริปต์เดิม) ----------
-local function summonBody(active)
-    local opened, spent, fails, stop = 0, 0, 0, nil
-    local slot = os.time() // 1800
-    while active() do
-        if os.time() // 1800 ~= slot then   -- ตู้รีเซ็ตระหว่างสุ่ม: เช็กใหม่ว่ายังมีตัวที่เลือกไหม
-            slot = os.time() // 1800
-            local set = scanCrate()
-            if set and #foundWanted(set) == 0 then stop = "ตู้รีเซ็ตระหว่างสุ่ม และตัวที่เลือกไม่อยู่ในตู้แล้ว" break end
-        end
-        local coins = getCoins()
-        if not coins then stop = "อ่านจำนวน Coin ไม่ได้" break end
-        local count, price
-        if coins >= PRICE_TEN then count, price = 10, PRICE_TEN
-        elseif coins >= PRICE_ONE then count, price = 1, PRICE_ONE
-        else stop = "Coin หมดแล้ว" break end
-        setState(string.format("กำลังสุ่ม | แล้ว %d กล่อง | เหลือ %s Coins", opened, fmt(coins)))
-        local ok, err, fatal, res = summonOnce(count, price)
-        if ok then
-            fails = 0
-            opened = opened + count
-            spent = spent + price
-            handleResults(res)
-        else
-            fails = fails + 1
-            if fatal or fails >= 3 then
-                stop = fatal and err or ("สุ่มพลาดติดกัน 3 ครั้ง (" .. tostring(err) .. ")")
-                break
-            end
-            task.wait(0.3)
-        end
-    end
-    return opened, spent, stop
-end
-
-local function summonRun(active)
-    running = true
-    local ok, a, b, c = pcall(summonBody, active)
-    running = false
-    if ok then return a, b, c end
-    return 0, 0, "error: " .. tostring(a)
-end
-
--- ---------- กลับไปเล่น: ลิฟต์ -> Ready ----------
-local function touchResume()   -- ต่ออายุไฟล์ resume ให้สคริปต์ในเกมยังเล่นต่อได้
-    pcall(function()
-        if isfile and readfile and isfile(RESUME_FILE) then
-            local d = HttpService:JSONDecode(readfile(RESUME_FILE))
-            if type(d) == "table" and d.playing then
-                d.ts = os.time()
-                writefile(RESUME_FILE, HttpService:JSONEncode(d))
-            end
-        end
-    end)
-end
-
--- ---------- [แก้ใหม่] เช็กลิฟต์สด / เช็กว่าอยู่คนเดียว ----------
-local SOLO_SETTLE = 1.2    -- ต้องอยู่คนเดียวต่อเนื่องกี่วิ ก่อนกด Ready (กันคนวิ่งเข้ามาพร้อมกัน)
-local WALK_MARGIN = 1.5    -- ระหว่างเดินไป: มีคนอยู่ใน Area (ขยายขอบกี่สตั๊ด) = ไม่ว่าง
-local SOLO_MARGIN = 3      -- ตอนอยู่ในลิฟต์: เช็กกว้างขึ้น (จับคนที่กำลังวิ่งเข้ามาติดขอบ)
-
--- อ่านสถานะลิฟต์ 1 ตัวสดๆ (ชื่อด่าน + จำนวนคน + Area)
-local function readElevator(model)
-    local bp = model:FindFirstChild("BasePart")
-    local sg = bp and bp:FindFirstChild("StatusGui")
-    local mapL = sg and sg:FindFirstChild("MapName")
-    local cntL = sg and sg:FindFirstChild("PlayersCount")
-    local map = mapL and readText(mapL)
-    local cnt = cntL and readText(cntL)
-    local a, b = tostring(cnt or ""):match("(%d+)%s*/%s*(%d+)")
-    return {
-        model = model, map = map, key = map and cleanText(map) or nil,
-        area = model:FindFirstChild("Area"), players = tonumber(a), max = tonumber(b),
-    }
-end
-
--- กล่องของ Area (CFrame + Size) ใช้เช็กว่าใครยืนอยู่ในลิฟต์ "ตามตำแหน่งจริง" (เร็วกว่าป้ายตัวเลขที่อัปเดตช้า)
-local function areaBox(area)
-    if not area then return nil end
-    if area:IsA("BasePart") then return area.CFrame, area.Size end
-    if area:IsA("Model") then
-        local ok, cf, size = pcall(function() return area:GetBoundingBox() end)
-        if ok and cf then return cf, size end
-    end
-    local p = area:FindFirstChildWhichIsA("BasePart", true)
-    if p then return p.CFrame, p.Size end
-    return nil
-end
-
-local function inBox(pos, cf, size, margin)
-    local rel = cf:PointToObjectSpace(pos)
-    return math.abs(rel.X) <= size.X / 2 + margin
-        and math.abs(rel.Z) <= size.Z / 2 + margin
-        and math.abs(rel.Y) <= size.Y / 2 + 8
-end
-
-local function otherInArea(cf, size, margin)
-    if not cf then return false end
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= lp then
-            local ch = p.Character
-            local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-            if hrp and inBox(hrp.Position, cf, size, margin) then return true end
         end
     end
     return false
 end
 
--- เช็กลิฟต์แบบสด: ด่านตรง + ไม่มีคนอื่น (ทั้งป้ายตัวเลข และตำแหน่งตัวละครจริง)
--- ถ้าเราเองยืนอยู่ในลิฟต์แล้ว ยอมให้ป้ายขึ้น 1 (คือตัวเรา)
-local function elevCheck(model, want, margin)
-    if not (model and model.Parent) then return false, "ลิฟต์หาย" end
-    local e = readElevator(model)
-    if not e.area then return false, "ไม่เจอ Area" end
-    if e.key ~= want then return false, "ด่านเปลี่ยน" end
-    local cf, size = areaBox(e.area)
-    local root = getRH()
-    local meIn = (root and cf) and inBox(root.Position, cf, size, 2) or false
-    local limit = meIn and 1 or 0
-    if e.players and e.players > limit then
-        return false, string.format("มีคนอยู่แล้ว (%d/%s)", e.players, tostring(e.max or "?"))
-    end
-    if e.players and e.max and e.players >= e.max then return false, "ลิฟต์เต็ม" end
-    if otherInArea(cf, size, margin or WALK_MARGIN) then return false, "มีคนยืนอยู่ในลิฟต์" end
-    return true
+
+-- ไอคอนวาดเองด้วย Frame (ใช้เมื่อ Lucide โหลดไม่ได้ ไม่ต้องพึ่งเน็ตหรือ asset id)
+local VEC = {}
+local function bar(parent, color, x, y, w, h, rot, r)
+    local f = new("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(x, y), Size = UDim2.fromScale(w, h),
+        BackgroundColor3 = color, BorderSizePixel = 0, Rotation = rot or 0,
+    }, parent)
+    if r then corner(f, r) end
+    return f
+end
+VEC["x"] = function(p, c)
+    bar(p, c, 0.5, 0.5, 0.78, 0.12, 45, 3)
+    bar(p, c, 0.5, 0.5, 0.78, 0.12, -45, 3)
+end
+VEC["plus"] = function(p, c)
+    bar(p, c, 0.5, 0.5, 0.74, 0.12, 0, 3)
+    bar(p, c, 0.5, 0.5, 0.12, 0.74, 0, 3)
+end
+VEC["minus"] = function(p, c) bar(p, c, 0.5, 0.5, 0.74, 0.12, 0, 3) end
+VEC["check"] = function(p, c)
+    bar(p, c, 0.36, 0.6, 0.3, 0.13, 45, 3)
+    bar(p, c, 0.6, 0.52, 0.56, 0.13, -50, 3)
+end
+VEC["trash-2"] = function(p, c)
+    bar(p, c, 0.5, 0.24, 0.8, 0.1, 0, 2)            -- ฝา
+    bar(p, c, 0.5, 0.15, 0.28, 0.1, 0, 2)           -- หูจับ
+    local body = new("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.fromScale(0.5, 0.3), Size = UDim2.fromScale(0.62, 0.62),
+        BackgroundTransparency = 1, BorderSizePixel = 0,
+    }, p)
+    corner(body, 4)
+    stroke(body, c, 2, 0)
+    bar(body, c, 0.33, 0.5, 0.1, 0.5, 0, 2)
+    bar(body, c, 0.67, 0.5, 0.1, 0.5, 0, 2)
+end
+VEC["trash"] = VEC["trash-2"]
+VEC["chevron-down"] = function(p, c)
+    bar(p, c, 0.34, 0.5, 0.5, 0.13, 45, 3)
+    bar(p, c, 0.66, 0.5, 0.5, 0.13, -45, 3)
+end
+VEC["chevron-up"] = function(p, c)
+    bar(p, c, 0.34, 0.5, 0.5, 0.13, -45, 3)
+    bar(p, c, 0.66, 0.5, 0.5, 0.13, 45, 3)
+end
+VEC["chevrons-up-down"] = function(p, c)
+    bar(p, c, 0.36, 0.3, 0.38, 0.12, -45, 3)
+    bar(p, c, 0.64, 0.3, 0.38, 0.12, 45, 3)
+    bar(p, c, 0.36, 0.7, 0.38, 0.12, 45, 3)
+    bar(p, c, 0.64, 0.7, 0.38, 0.12, -45, 3)
+end
+VEC["panel-left"] = function(p, c)
+    local box = new("Frame", { Size = UDim2.fromScale(0.86, 0.76), AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5), BackgroundTransparency = 1 }, p)
+    corner(box, 4)
+    stroke(box, c, 2, 0)
+    bar(p, c, 0.38, 0.5, 0.1, 0.62, 0, 2)
+end
+VEC["menu"] = function(p, c)
+    for i = 1, 3 do bar(p, c, 0.5, 0.2 + (i - 1) * 0.3, 0.76, 0.11, 0, 3) end
+end
+VEC["search"] = function(p, c)
+    local ring = new("Frame", { Size = UDim2.fromScale(0.56, 0.56), Position = UDim2.fromScale(0.1, 0.1),
+        BackgroundTransparency = 1 }, p)
+    corner(ring, 99)
+    stroke(ring, c, 2, 0)
+    bar(p, c, 0.78, 0.78, 0.34, 0.12, 45, 3)
+end
+VEC["copy"] = function(p, c)
+    local a = new("Frame", { Size = UDim2.fromScale(0.5, 0.5), Position = UDim2.fromScale(0.34, 0.34), BackgroundTransparency = 1 }, p)
+    corner(a, 3) stroke(a, c, 2, 0)
+    local b = new("Frame", { Size = UDim2.fromScale(0.5, 0.5), Position = UDim2.fromScale(0.12, 0.12), BackgroundTransparency = 1 }, p)
+    corner(b, 3) stroke(b, c, 2, 0)
+end
+VEC["clipboard-copy"] = VEC["copy"]
+VEC["folder-open"] = function(p, c)
+    local f = new("Frame", { Size = UDim2.fromScale(0.84, 0.58), AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.56), BackgroundTransparency = 1 }, p)
+    corner(f, 3) stroke(f, c, 2, 0)
+    bar(p, c, 0.28, 0.24, 0.3, 0.1, 0, 2)
+end
+-- ไอคอนสำรองของแจ้งเตือน (วงกลม + เครื่องหมาย / กระดิ่ง) ใช้เมื่อ Lucide โหลดไม่ได้
+local function ring(p, c)
+    local r = new("Frame", { Size = UDim2.fromScale(0.86, 0.86), AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5), BackgroundTransparency = 1 }, p)
+    corner(r, 99) stroke(r, c, 2, 0)
+end
+VEC["alert-triangle"] = function(p, c)
+    ring(p, c)
+    bar(p, c, 0.5, 0.38, 0.11, 0.3, 0, 2)
+    bar(p, c, 0.5, 0.69, 0.12, 0.12, 0, 6)
+end
+VEC["info"] = function(p, c)
+    ring(p, c)
+    bar(p, c, 0.5, 0.31, 0.12, 0.12, 0, 6)
+    bar(p, c, 0.5, 0.6, 0.11, 0.3, 0, 2)
+end
+VEC["bell"] = function(p, c)
+    local dome = new("Frame", { Size = UDim2.fromScale(0.56, 0.52), AnchorPoint = Vector2.new(0.5, 0),
+        Position = UDim2.fromScale(0.5, 0.12), BackgroundTransparency = 1 }, p)
+    corner(dome, 99) stroke(dome, c, 2, 0)
+    bar(p, c, 0.5, 0.72, 0.8, 0.1, 0, 2)
+    bar(p, c, 0.5, 0.88, 0.2, 0.1, 0, 5)
 end
 
--- ออกจากลิฟต์ (ยกเลิกคิว) ด้วยการเดินกลับไปทางที่มา
-local function leaveElevator(ap, startPos)
-    local d = Vector3.new(startPos.X - ap.X, 0, startPos.Z - ap.Z)
-    local leaveTo, yOff = startPos, 0
-    if d.Magnitude < 10 then
-        local dir = (d.Magnitude > 0.1) and d.Unit or Vector3.new(1, 0, 0)
-        leaveTo = Vector3.new(ap.X + dir.X * 14, ap.Y, ap.Z + dir.Z * 14)
-        yOff = 3
+local function drawVector(img, icon, color)
+    local name = tostring(icon)
+    local fn = VEC[name]
+    if not fn then
+        local al = ALIASES[name]
+        if al then for _, n in ipairs(al) do if VEC[n] then fn = VEC[n] break end end end
     end
-    local t0 = os.clock()
-    moveTo(leaveTo, function() return alive and SM.on and os.clock() - t0 < 8 end, 4, yOff)
-    waitFor(function() return not queueShown() end, 3, function() return SM.on end)
+    if not fn then return false end
+    img.Image = ""
+    local holder = new("Frame", { Name = "Vec", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1 }, img)
+    fn(holder, color or WHITE)
+    return true, holder
 end
 
-local function goPlay(active)
-    if SM.map == "" then
-        setState("ยังไม่ได้เลือกด่านที่จะกลับไปเล่น")
-        task.wait(3)
-        return
+-- สร้าง ImageLabel ไอคอน (ถ้าไอคอนโหลดไม่ได้ จะโชว์จุดเล็กๆ หรือข้อความสำรอง ไม่ใช่อีโมจิ)
+local function iconLabel(parent, icon, px, color, fallbackText, extra)
+    local img = new("ImageLabel", {
+        BackgroundTransparency = 1, BorderSizePixel = 0, Size = UDim2.fromOffset(px, px),
+        ImageColor3 = color or WHITE, ScaleType = Enum.ScaleType.Fit,
+    })
+    if extra then
+        for k, v in pairs(extra) do img[k] = v end
     end
-    local want = cleanText(SM.map)
-
-    -- ลองได้หลายลิฟต์ในรอบเดียว (ลิฟต์ไหนมีคนเข้า = ตัดทิ้งแล้วเลือกตัวใหม่ทันที)
-    for attempt = 1, 8 do
-        if not (alive and SM.on) then return end
-        local root = getRH()
-        if not root then
-            task.wait(1)
-            continue
-        end
-
-        -- 1) เลือกลิฟต์ที่ว่างจริง (เช็กสด) ใกล้ที่สุดก่อน
-        local cands = {}
-        for _, e in ipairs(allElevators()) do
-            local bad = SM.bad[e.model] and SM.bad[e.model] > os.clock()
-            if e.key == want and e.area and not bad and elevCheck(e.model, want) then
-                local ap = areaPos(e.area)
-                if ap then
-                    e.ap, e.dist = ap, flat(root.Position, ap)
-                    cands[#cands + 1] = e
+    img.Parent = parent
+    if not applyIcon(img, icon, px) then
+        local okVec, holder = false, nil
+        if type(icon) == "string" then okVec, holder = drawVector(img, icon, color or WHITE) end
+        if okVec then
+            -- ให้ไอคอนวาดเองเปลี่ยนสีตาม ImageColor3 (hover ฯลฯ)
+            img:GetPropertyChangedSignal("ImageColor3"):Connect(function()
+                for _, d in ipairs(holder:GetDescendants()) do
+                    if d:IsA("Frame") and d.BackgroundTransparency < 1 then d.BackgroundColor3 = img.ImageColor3 end
+                    if d:IsA("UIStroke") then d.Color = img.ImageColor3 end
                 end
-            end
+                for _, d in ipairs(holder:GetChildren()) do
+                    if d:IsA("Frame") and d.BackgroundTransparency < 1 then d.BackgroundColor3 = img.ImageColor3 end
+                end
+            end)
+            img:GetPropertyChangedSignal("ImageTransparency"):Connect(function()
+                for _, d in ipairs(holder:GetDescendants()) do
+                    if d:IsA("Frame") and d.BackgroundTransparency < 1 then d.BackgroundTransparency = img.ImageTransparency end
+                    if d:IsA("UIStroke") then d.Transparency = img.ImageTransparency end
+                end
+            end)
+        elseif fallbackText then
+            label(img, {
+                Size = UDim2.fromScale(1, 1), Text = fallbackText, Font = F_BOLD, TextSize = math.max(10, px - 2),
+                TextColor3 = color or WHITE, TextXAlignment = Enum.TextXAlignment.Center,
+            })
+        else
+            local dot = new("Frame", {
+                AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+                Size = UDim2.fromOffset(math.max(4, px * 0.28), math.max(4, px * 0.28)),
+                BackgroundColor3 = color or WHITE, BorderSizePixel = 0,
+            }, img)
+            corner(dot, 8)
         end
-        if #cands == 0 then
-            setState("รอลิฟต์ว่างของด่าน " .. SM.map)
-            task.wait(2)
+    end
+    return img
+end
+UI.Icon = iconLabel
+
+local CENTER = { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5) }
+
+local function mask(name)
+    name = tostring(name or "")
+    if #name <= 5 then return name end
+    return name:sub(1, 2) .. string.rep("*", math.min(#name - 4, 10)) .. name:sub(-2)
+end
+
+-- =====================================================================
+-- Interaction helpers (ตำแหน่งนิ้ว / Ripple / ลาก)
+-- =====================================================================
+local function isPress(input)
+    local t = input.UserInputType
+    return t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch
+end
+UI.IsPress = isPress
+
+-- ตำแหน่งที่กดเป็นสัดส่วน 0..1 ภายในปุ่ม (ชดเชย GuiInset ให้ตรงกับ AbsolutePosition)
+local function pressRatio(gui, input)
+    local inset = GuiService:GetGuiInset()
+    local px, py = input.Position.X + inset.X, input.Position.Y + inset.Y
+    local ap, as = gui.AbsolutePosition, gui.AbsoluteSize
+    local rx = as.X > 0 and clamp((px - ap.X) / as.X, 0, 1) or 0.5
+    local ry = as.Y > 0 and clamp((py - ap.Y) / as.Y, 0, 1) or 0.5
+    return rx, ry
+end
+
+-- วงคลื่นกระจายจากจุดที่นิ้วกด (ใช้ UIAspectRatio จึงเป็นวงกลมเสมอ ไม่ต้องคำนวณพิกเซล)
+-- ปิดคลื่นไว้เป็นค่าเริ่มต้น (คลื่นที่ใช้ UIAspectRatio ในแถว AutomaticSize ทำให้แถวสูงขึ้นตอนกดค้าง
+-- จนเนื้อหาด้านล่างเลื่อนลง) ถ้าอยากเปิดเอง: UI.RippleEnabled = true
+UI.RippleEnabled = false
+local function ripple(host, rx, ry, color, alpha)
+    if not UI.RippleEnabled then return end
+    local r = new("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(rx, ry), Size = UDim2.fromScale(0, 0),
+        BackgroundColor3 = color or WHITE, BackgroundTransparency = alpha or 0.84, BorderSizePixel = 0, ZIndex = 0,
+    }, host)
+    new("UICorner", { CornerRadius = UDim.new(0.5, 0) }, r)
+    new("UIAspectRatioConstraint", { AspectRatio = 1, DominantAxis = Enum.DominantAxis.Width }, r)
+    tween(r, { Size = UDim2.fromScale(2.2, 2.2) }, 0.6, Enum.EasingStyle.Quint)
+    tween(r, { BackgroundTransparency = 1 }, 0.6, Enum.EasingStyle.Sine)
+    task.delay(0.65, function() r:Destroy() end)
+end
+UI.Ripple = ripple
+
+-- ลากแนวนอนบน hit (สำหรับ Slider / ColorPicker) ปิดการเลื่อนหน้าระหว่างลาก
+-- ล็อกการลากทั้งระบบ: ลากได้ทีละอย่างเท่านั้น (กันนิ้วลากผ่านตัวอื่นแล้วลากพร้อมกัน)
+UI._dragLock = nil
+
+-- hold (วินาที): ต้องกดค้างที่หลอดครบเวลาก่อนถึงจะลากได้ (0/nil = ลากได้ทันที)
+-- ถ้านิ้วขยับก่อนครบเวลา = ยกเลิก ปล่อยให้เลื่อนหน้าตามปกติ
+local function bindDrag(win, hit, page, onAlpha, onState, hold)
+    hold = hold or 0
+    local dragging, active, armed, token, startPos = false, nil, false, 0, nil
+    local function alphaOf(input)
+        return clamp((input.Position.X - hit.AbsolutePosition.X) / math.max(1, hit.AbsoluteSize.X), 0, 1)
+    end
+    local function arm()
+        armed = true
+        if page then page.ScrollingEnabled = false end
+        if onState then onState(true) end
+        onAlpha(alphaOf(active))
+    end
+    hit.InputBegan:Connect(function(input)
+        if not isPress(input) then return end
+        if UI._dragLock then return end
+        UI._dragLock = input
+        dragging, active, armed = true, input, false
+        startPos = input.Position
+        token = token + 1
+        local my = token
+        if hold <= 0 then
+            arm()
+        else
+            task.delay(hold, function()
+                if dragging and token == my and not armed then arm() end
+            end)
+        end
+        local c
+        c = input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                c:Disconnect()
+                if UI._dragLock == input then UI._dragLock = nil end
+                token = token + 1
+                local wasArmed = armed
+                dragging, armed = false, false
+                if page then page.ScrollingEnabled = true end
+                if wasArmed and onState then onState(false) end
+            end
+        end)
+    end)
+    win:_conn(UserInputService.InputChanged:Connect(function(input)
+        if not dragging then return end
+        local t = input.UserInputType
+        local ok = (t == Enum.UserInputType.MouseMovement and active.UserInputType ~= Enum.UserInputType.Touch)
+            or (t == Enum.UserInputType.Touch and input == active)
+        if not ok then return end
+        if not armed then
+            -- ขยับก่อนครบเวลา = ไม่ใช่การกดค้าง -> ยกเลิกรอบนี้ (ปล่อยให้เลื่อนหน้า)
+            local d = input.Position - startPos
+            if math.abs(d.X) + math.abs(d.Y) > 12 then token = token + 1 end
             return
         end
-        table.sort(cands, function(x, y) return x.dist < y.dist end)
-        local e = cands[1]
-        local ap = e.ap
-        local startPos = root.Position
+        onAlpha(alphaOf(input))
+    end))
+end
 
-        -- 2) เดินไป พร้อมเช็กลิฟต์สดทุก ~0.1 วิ ถ้ามีคนเข้าก่อน = หยุดทันที
-        setState("เดินไปลิฟต์ด่าน " .. SM.map)
-        local abortReason
-        local lastChk, lastOk = -100, true
-        local function walking()
-            if not (alive and SM.on) then return false end
-            if queueShown() then return false end          -- เข้าคิวแล้ว
-            if os.clock() - lastChk > 0.1 then
-                lastChk = os.clock()
-                local ok, why = elevCheck(e.model, want, WALK_MARGIN)
-                lastOk = ok
-                if not ok then abortReason = why end
+-- =====================================================================
+-- Button builder (ปุ่มยุบ/เด้งโดยใช้จุดที่นิ้วกดเป็นจุดหมุน + Ripple)
+-- =====================================================================
+local function makeButton(parent, o)
+    local color = o.Color or T.Elem
+    -- b = พื้นที่รับสัมผัส (โปร่งใส อยู่กับที่เสมอ), face = ตัวปุ่มที่ยุบ/เด้งจริง
+    local b = new("TextButton", {
+        Text = "", AutoButtonColor = false, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = o.Size or UDim2.new(1, 0, 0, 34), LayoutOrder = o.LayoutOrder or 0,
+    }, parent)
+    local face = new("Frame", {
+        Size = UDim2.fromScale(1, 1), BackgroundColor3 = color, BorderSizePixel = 0, ClipsDescendants = true,
+    }, b)
+    corner(face, 9)
+    stroke(face, WHITE, 1, 0.85)
+    local sc = new("UIScale", { Scale = 1 }, face)
+    local content = new("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1) }, face)
+    new("UIListLayout", {
+        FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Center,
+        VerticalAlignment = Enum.VerticalAlignment.Center, Padding = UDim.new(0, 7), SortOrder = Enum.SortOrder.LayoutOrder,
+    }, content)
+    local obj = { Instance = b, Face = face }
+    local iconObj
+    local function setIcon(icon)
+        if iconObj then iconObj:Destroy() iconObj = nil end
+        if icon then
+            iconObj = iconLabel(content, icon, 15, WHITE)
+            iconObj.LayoutOrder = 1
+        end
+    end
+    setIcon(o.Icon)
+    local txt = label(content, {
+        Text = o.Text or "", Font = F_BOLD, TextSize = o.TextSize or 12, TextColor3 = WHITE,
+        AutomaticSize = AX, Size = UDim2.fromOffset(0, 20), LayoutOrder = 2,
+        TextXAlignment = Enum.TextXAlignment.Center,
+    })
+    obj.TextLabel = txt
+    function obj:SetText(t) txt.Text = tostring(t) end
+    function obj:SetColor(c)
+        color = c
+        tween(face, { BackgroundColor3 = c }, 0.25)
+    end
+    function obj:SetIcon(icon) setIcon(icon) end
+    b.MouseEnter:Connect(function() tween(face, { BackgroundColor3 = color:Lerp(WHITE, 0.12) }, 0.18) end)
+    b.MouseLeave:Connect(function()
+        tween(face, { BackgroundColor3 = color }, 0.28)
+        tween(sc, { Scale = 1 }, 0.4, Enum.EasingStyle.Back)
+    end)
+    b.InputBegan:Connect(function(input)
+        if not isPress(input) then return end
+        -- ย้ายจุดหมุน (AnchorPoint) ไปที่ตำแหน่งนิ้ว แล้วชดเชย Position ให้ปุ่มไม่ขยับ
+        -- UIScale ย่อ/ขยายรอบ AnchorPoint -> ปุ่มยุบเข้าหานิ้วพอดี ไม่เด้งไปทางซ้ายอีก
+        local rx, ry = pressRatio(face, input)
+        face.AnchorPoint = Vector2.new(rx, ry)
+        face.Position = UDim2.fromScale(rx, ry)
+        tween(sc, { Scale = 0.94 }, 0.12, Enum.EasingStyle.Quad)
+        ripple(face, rx, ry, WHITE, 0.8)
+    end)
+    b.InputEnded:Connect(function(input)
+        if isPress(input) then tween(sc, { Scale = 1 }, 0.5, Enum.EasingStyle.Back) end
+    end)
+    b.Activated:Connect(function()
+        if o.Callback then
+            local ok, err = pcall(o.Callback, obj)
+            if not ok then warn("[XenonUI] callback error: " .. tostring(err)) end
+        end
+    end)
+    return obj
+end
+
+-- =====================================================================
+-- Section (การ์ดรวมแถวตั้งค่า)
+-- =====================================================================
+local Section = {}
+Section.__index = Section
+
+local function nextSlot(sec)
+    sec._n = sec._n + 1
+    local order = sec._n * 2
+    if sec._n > 1 then
+        new("Frame", { Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = T.Line, BorderSizePixel = 0, LayoutOrder = order - 1 }, sec.Card)
+    end
+    return order
+end
+
+-- แถวมาตรฐาน: ซ้าย = ชื่อ + คำอธิบาย, ขวา = ตัวควบคุม
+-- parent (ไม่บังคับ): วางแถวในที่อื่น เช่น หัวของ Dropdown
+local function makeRow(sec, title, desc, ctlSize, clickable, parent)
+    local order = 1
+    if not parent then order = nextSlot(sec) end
+    local row = new(clickable and "TextButton" or "Frame", {
+        Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, BorderSizePixel = 0, LayoutOrder = order,
+        ClipsDescendants = clickable and true or false,
+    }, parent or sec.Card)
+    if clickable then
+        row.Text = ""
+        row.AutoButtonColor = false
+        row.InputBegan:Connect(function(input)
+            if isPress(input) then
+                local rx, ry = pressRatio(row, input)
+                ripple(row, rx, ry, WHITE, 0.9)
             end
-            return lastOk
+        end)
+    end
+    -- เนื้อหาจริงอยู่ใน inner (มี layout) ส่วน row ว่างไว้ให้วาง Ripple
+    local inner = new("Frame", {
+        Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 2,
+    }, row)
+    new("UISizeConstraint", { MinSize = Vector2.new(0, 54) }, inner)
+    pad(inner, 14, 10, 14, 10)
+    new("UIListLayout", {
+        FillDirection = Enum.FillDirection.Horizontal, VerticalAlignment = Enum.VerticalAlignment.Center,
+        Padding = UDim.new(0, 12), SortOrder = Enum.SortOrder.LayoutOrder,
+    }, inner)
+    local block = new("Frame", {
+        Size = ctlSize and UDim2.new(1, -(ctlSize.X + 12), 0, 0) or UDim2.new(1, 0, 0, 0),
+        AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = 1,
+    }, inner)
+    vlist(block, 2)
+    local tl = label(block, {
+        Text = title or "", Font = F_BOLD, TextSize = 14, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY,
+        TextWrapped = true, LayoutOrder = 1,
+    })
+    local dl
+    if desc and desc ~= "" then
+        dl = label(block, {
+            Text = desc, TextSize = 12, TextColor3 = T.Muted, Font = F_MED, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY,
+            TextWrapped = true, LayoutOrder = 2,
+        })
+    end
+    local ctl
+    if ctlSize then
+        ctl = new("Frame", { Size = UDim2.fromOffset(ctlSize.X, ctlSize.Y), BackgroundTransparency = 1, LayoutOrder = 2 }, inner)
+    end
+    return row, ctl, tl, dl
+end
+
+local function safe(cb, ...)
+    if not cb then return end
+    local ok, err = pcall(cb, ...)
+    if not ok then warn("[XenonUI] callback error: " .. tostring(err)) end
+end
+
+function Section:Toggle(o)
+    local TW, TH, KN = 42, 24, 18
+    local row, ctl = makeRow(self, o.Title, o.Desc, Vector2.new(TW, TH), true)
+    local track = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Elem, BorderSizePixel = 0 }, ctl)
+    corner(track, TH / 2)
+    stroke(track, T.Line, 1, 0)
+    local knob = new("Frame", {
+        Size = UDim2.fromOffset(KN, KN), Position = UDim2.fromOffset(3, 3), BackgroundColor3 = WHITE, BorderSizePixel = 0,
+    }, track)
+    corner(knob, KN / 2)
+    local state = o.Default and true or false
+    local pressed = false
+    local function render(instant)
+        local c = state and T.Accent or T.Elem
+        local w = pressed and (KN + 5) or KN -- แบบ iOS: ปุ่มยืดออกตอนกดค้าง
+        local p = UDim2.fromOffset(state and (TW - 3 - w) or 3, 3)
+        local sz = UDim2.fromOffset(w, KN)
+        if instant then
+            track.BackgroundColor3 = c
+            knob.Position, knob.Size = p, sz
+        else
+            tween(track, { BackgroundColor3 = c }, 0.25)
+            tween(knob, { Position = p, Size = sz }, 0.38, Enum.EasingStyle.Back)
         end
-        moveTo(ap, walking, 2.5, 2.5)
-        if not (alive and SM.on) then return end
-        if SM.mode ~= "walk" and not abortReason and not queueShown() then
-            -- ลอย/วาป: บางทีเกมยังไม่นับว่าเหยียบลิฟต์ -> ขยับตัวนิดหน่อยให้ลิฟต์ตรวจจับ
-            if not waitFor(queueShown, 1, function() return SM.on end) then
-                local _, h = getRH()
-                if h then
-                    pcall(function() h:MoveTo(ap + Vector3.new(2, 0, 0)) end)
-                    task.wait(0.4)
-                    pcall(function() h:MoveTo(ap - Vector3.new(2, 0, 0)) end)
-                    task.wait(0.4)
-                end
+    end
+    render(true)
+    row.InputBegan:Connect(function(input)
+        if isPress(input) then
+            pressed = true
+            render(false)
+        end
+    end)
+    row.InputEnded:Connect(function(input)
+        if isPress(input) then
+            pressed = false
+            render(false)
+        end
+    end)
+    row.Activated:Connect(function()
+        state = not state
+        pressed = false
+        render(false)
+        safe(o.Callback, state)
+    end)
+    local obj = { Row = row }
+    function obj.Set(v, silent)
+        state = v and true or false
+        render(false)
+        if not silent then safe(o.Callback, state) end
+    end
+    function obj.Get() return state end
+    return obj
+end
+
+function Section:Button(o)
+    local w = o.Width or 106
+    local row, ctl = makeRow(self, o.Title, o.Desc, Vector2.new(w, 30), false)
+    return makeButton(ctl, {
+        Text = o.Text or "Run", Icon = o.Icon, Color = o.Color or T.Accent, Callback = o.Callback,
+        Size = UDim2.fromScale(1, 1), TextSize = 12,
+    })
+end
+
+function Section:Input(o)
+    local w = o.Width or 190
+    local row, ctl = makeRow(self, o.Title, o.Desc, Vector2.new(w, 32), false)
+    local holder = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Elem, BorderSizePixel = 0 }, ctl)
+    corner(holder, 9)
+    stroke(holder, T.Line, 1, 0)
+    local st = stroke(holder, T.Accent, 1.5, 1)
+    local box = new("TextBox", {
+        Size = UDim2.new(1, -20, 1, 0), Position = UDim2.fromOffset(10, 0), BackgroundTransparency = 1,
+        Text = o.Default or "", PlaceholderText = o.Placeholder or "", PlaceholderColor3 = Color3.fromRGB(150, 150, 176),
+        TextColor3 = T.Text, Font = F_MED, TextSize = 13, ClearTextOnFocus = false,
+        TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+    }, holder)
+    box.Focused:Connect(function() tween(st, { Transparency = 0 }, 0.2) end)
+    box.FocusLost:Connect(function(enter)
+        tween(st, { Transparency = 1 }, 0.2)
+        safe(o.Callback, box, enter)
+    end)
+    return box
+end
+
+function Section:Stepper(o)
+    local min, max, step = o.Min or 0, o.Max or 100, o.Step or 1
+    local value = clamp(o.Default or min, min, max)
+    local row, ctl = makeRow(self, o.Title, o.Desc, Vector2.new(o.Width or 140, 32), false)
+    local holder = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Elem, BorderSizePixel = 0 }, ctl)
+    corner(holder, 9)
+    stroke(holder, T.Line, 1, 0)
+    local function fmt(v)
+        if v % 1 == 0 then return tostring(math.floor(v + 0.5)) end
+        return string.format("%.1f", v)
+    end
+    local box = new("TextBox", {
+        Size = UDim2.new(1, -64, 1, 0), Position = UDim2.fromOffset(32, 0), BackgroundTransparency = 1,
+        Text = fmt(value), TextColor3 = T.Text, Font = F_BOLD, TextSize = 13, ClearTextOnFocus = false,
+        TextXAlignment = Enum.TextXAlignment.Center,
+    }, holder)
+    local function setValue(v, silent)
+        v = clamp(math.floor(v * 100 + 0.5) / 100, min, max)
+        value = v
+        box.Text = fmt(v)
+        if not silent then safe(o.Callback, v) end
+    end
+    local function stepBtn(icon, fb, x, dir)
+        local b = new("TextButton", {
+            Text = "", AutoButtonColor = false, BackgroundTransparency = 1, BorderSizePixel = 0,
+            Size = UDim2.new(0, 32, 1, 0), Position = UDim2.new(x, x == 1 and -32 or 0, 0, 0),
+        }, holder)
+        local ic = iconLabel(b, icon, 14, T.Muted, fb, CENTER)
+        b.MouseEnter:Connect(function() tween(ic, { ImageColor3 = T.Text }, 0.15) end)
+        b.MouseLeave:Connect(function() tween(ic, { ImageColor3 = T.Muted }, 0.15) end)
+        b.Activated:Connect(function() setValue(value + dir * step) end)
+    end
+    stepBtn("minus", "-", 0, -1)
+    stepBtn("plus", "+", 1, 1)
+    box.FocusLost:Connect(function()
+        local n = tonumber(box.Text)
+        if n then setValue(n) else box.Text = fmt(value) end
+    end)
+    return {
+        Box = box, Row = row,
+        Get = function() return value end,
+        Set = function(v) setValue(v, true) end,
+    }
+end
+
+function Section:Label(o)
+    if type(o) == "string" then o = { Text = o } end
+    local order = nextSlot(self)
+    local f = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = order }, self.Card)
+    pad(f, 14, 10, 14, 10)
+    return label(f, {
+        Text = o.Text or "", TextSize = o.TextSize or 12, TextColor3 = o.Color or T.Muted, Font = o.Font or F_REG,
+        Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top,
+        RichText = o.RichText or false,
+    })
+end
+
+-- แถวปุ่มเต็มความกว้าง แบ่งเท่าๆ กัน: list = { {Text, Icon, Color, Callback}, ... }
+function Section:Actions(list)
+    local order = nextSlot(self)
+    local f = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = order }, self.Card)
+    pad(f, 12, 10, 12, 10)
+    new("UIListLayout", {
+        FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder,
+    }, f)
+    local n = #list
+    local out = {}
+    for i, o in ipairs(list) do
+        o.Size = UDim2.new(1 / n, -(8 * (n - 1)) / n, 0, o.Height or 34)
+        o.LayoutOrder = i
+        out[i] = makeButton(f, o)
+    end
+    return out
+end
+
+function Section:Action(o)
+    return self:Actions({ o })[1]
+end
+
+-- รายการเลื่อนได้ (ไฟล์บันทึก / แถวแอคชัน / Log ฯลฯ)
+-- มีหัวรายการ แตะเพื่อพับ/กางได้ (ถ้าข้อมูลเยอะ)  o.Title = ชื่อหัว, o.Collapsed = เริ่มแบบพับ, o.Collapsible = false = ไม่มีหัว
+function Section:List(o)
+    o = o or {}
+    local order = nextSlot(self)
+    local height = o.Height or 150
+    local collapsible = o.Collapsible ~= false
+    local open = not o.Collapsed
+    local wrap = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = order }, self.Card)
+    vlist(wrap, 0)
+    local head, titleLbl, cntLbl, chev
+    if collapsible then
+        head = new("TextButton", {
+            Size = UDim2.new(1, 0, 0, 38), BackgroundTransparency = 1, BorderSizePixel = 0, AutoButtonColor = false,
+            Text = "", ClipsDescendants = true, LayoutOrder = 1,
+        }, wrap)
+        head.InputBegan:Connect(function(input)
+            if isPress(input) then
+                local rx, ry = pressRatio(head, input)
+                ripple(head, rx, ry, WHITE, 0.9)
             end
-        end
+        end)
+        titleLbl = label(head, {
+            Text = o.Title or "รายการ", Font = F_BOLD, TextSize = 13, Position = UDim2.fromOffset(14, 0),
+            Size = UDim2.new(1, -120, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd,
+        })
+        cntLbl = label(head, {
+            Text = "", Font = F_MED, TextSize = 12, TextColor3 = T.Muted, AnchorPoint = Vector2.new(1, 0.5),
+            Position = UDim2.new(1, -38, 0.5, 0), Size = UDim2.fromOffset(70, 20), TextXAlignment = Enum.TextXAlignment.Right,
+        })
+        chev = iconLabel(head, "chevron-down", 14, T.Muted, "v", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -14, 0.5, 0) })
+        chev.Rotation = open and 180 or 0
+    end
+    local holder = new("Frame", {
+        Size = UDim2.new(1, 0, 0, open and (height + 20) or 0), BackgroundTransparency = 1, ClipsDescendants = true,
+        LayoutOrder = 2, Visible = open,
+    }, wrap)
+    local inner = new("Frame", { Size = UDim2.new(1, 0, 0, height + 20), BackgroundTransparency = 1 }, holder)
+    pad(inner, 10)
+    local sf = new("ScrollingFrame", {
+        Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Inset, BorderSizePixel = 0, ScrollBarThickness = 3,
+        ScrollBarImageColor3 = T.Muted, CanvasSize = UDim2.new(), AutomaticCanvasSize = AY,
+        ScrollingDirection = Enum.ScrollingDirection.Y, ElasticBehavior = Enum.ElasticBehavior.Always,
+    }, inner)
+    corner(sf, 9)
+    stroke(sf, T.Line, 1, 0)
+    pad(sf, 6, 6, 8, 6)
+    vlist(sf, 4)
+    local list = { Frame = sf, Holder = holder, Wrap = wrap }
 
-        -- 3) ยืนยันว่าเข้าคิวจริง
-        local inQueue = queueShown() ~= nil
-        if not inQueue and not abortReason then
-            inQueue = waitFor(queueShown, 3, function() return SM.on end) ~= nil
+    local function recount()
+        if not cntLbl then return end
+        local n = 0
+        for _, c in ipairs(sf:GetChildren()) do
+            if c:IsA("TextButton") then n = n + 1 end
         end
-        if not inQueue then
-            SM.bad[e.model] = os.clock() + (abortReason and 6 or 20)
-            setState(abortReason and ("ลิฟต์ไม่ว่างแล้ว (" .. abortReason .. ") -> เปลี่ยนลิฟต์")
-                or "ลิฟต์นี้เข้าคิวไม่ได้ -> ลองลิฟต์อื่น")
-            continue
-        end
+        cntLbl.Text = n > 0 and (n .. " รายการ") or ""
+    end
+    sf.ChildAdded:Connect(function() task.defer(recount) end)
+    sf.ChildRemoved:Connect(function() task.defer(recount) end)
 
-        -- 4) ด่านตรวจ "อยู่คนเดียว" : ต้องผ่านต่อเนื่อง SOLO_SETTLE วิ ก่อนกด Ready
-        setState("เข้าคิวแล้ว -> ตรวจว่าอยู่คนเดียว")
-        local soloSince, gateT0, solo, why = nil, os.clock(), false, nil
-        while alive and SM.on and queueShown() and os.clock() - gateT0 < 8 do
-            local ok, w = elevCheck(e.model, want, SOLO_MARGIN)
-            if ok then
-                soloSince = soloSince or os.clock()
-                if os.clock() - soloSince >= SOLO_SETTLE then solo = true break end
+    function list:IsOpen() return open end
+    function list:Set(v)
+        v = v and true or false
+        if v == open then return end
+        open = v
+        if chev then tween(chev, { Rotation = open and 180 or 0 }, 0.35, Enum.EasingStyle.Quint) end
+        if open then
+            holder.Visible = true
+            tween(holder, { Size = UDim2.new(1, 0, 0, height + 20) }, 0.4, Enum.EasingStyle.Quint)
+        else
+            tween(holder, { Size = UDim2.new(1, 0, 0, 0) }, 0.3, Enum.EasingStyle.Quint)
+            task.delay(0.32, function()
+                if not open then holder.Visible = false end
+            end)
+        end
+    end
+    function list:Open() self:Set(true) end
+    function list:Close() self:Set(false) end
+    function list:Toggle() self:Set(not open) end
+    function list:SetTitle(t) if titleLbl then titleLbl.Text = tostring(t) end end
+
+    if head then head.Activated:Connect(function() list:Toggle() end) end
+
+    function list:Clear()
+        for _, c in ipairs(sf:GetChildren()) do
+            if c:IsA("GuiObject") then c:Destroy() end
+        end
+    end
+    function list:Note(text)
+        return label(sf, {
+            Text = text, TextSize = 12, TextColor3 = T.Muted, Size = UDim2.new(1, 0, 0, 30),
+            TextXAlignment = Enum.TextXAlignment.Center,
+        })
+    end
+    function list:Add(it)
+        local sel = it.Selected and true or false
+        local base = sel and T.Accent or T.Elem
+        local b = new("TextButton", {
+            Size = UDim2.new(1, 0, 0, it.Height or 34), BackgroundColor3 = base, BorderSizePixel = 0, AutoButtonColor = false,
+            Text = it.Text or "", TextColor3 = WHITE, Font = F_MED, TextSize = it.TextSize or 13, TextWrapped = true,
+            TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = it.Order or 0,
+        }, sf)
+        corner(b, 8)
+        stroke(b, sel and T.Accent:Lerp(WHITE, 0.25) or T.Line, 1, 0)
+        pad(b, 12, 0, 8, 0)
+        b.MouseEnter:Connect(function() tween(b, { BackgroundColor3 = base:Lerp(WHITE, 0.1) }, 0.15) end)
+        b.MouseLeave:Connect(function() tween(b, { BackgroundColor3 = base }, 0.2) end)
+        b.Activated:Connect(function() safe(it.Callback, b) end)
+        return b
+    end
+    return list
+end
+
+-- =====================================================================
+-- คอนโทรลใหม่ (v2.0)
+-- =====================================================================
+local function autoFrame(sec, padv, gap)
+    local order = nextSlot(sec)
+    local f = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = order }, sec.Card)
+    if padv then pad(f, padv[1], padv[2], padv[3], padv[4]) end
+    if gap then vlist(f, gap) end
+    return f
+end
+
+function Section:Divider(text)
+    local order = nextSlot(self)
+    local f = new("Frame", { Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, LayoutOrder = order }, self.Card)
+    pad(f, 14, 0, 14, 0)
+    label(f, {
+        Text = string.upper(tostring(text or "")), Font = F_BOLD, TextSize = 11, TextColor3 = T.Muted,
+        Size = UDim2.fromScale(1, 1),
+    })
+    return f
+end
+
+function Section:Paragraph(o)
+    o = o or {}
+    local f = autoFrame(self, { 14, 12, 14, 12 }, 4)
+    local tl
+    if o.Title then
+        tl = label(f, { Text = o.Title, Font = F_BOLD, TextSize = 14, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, TextWrapped = true, LayoutOrder = 1 })
+    end
+    local bl = label(f, {
+        Text = tostring(o.Text or ""), Font = F_MED, TextSize = 12, TextColor3 = T.Muted, Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = AY, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, LayoutOrder = 2, RichText = o.RichText or false,
+    })
+    return { Row = f, Title = tl, Body = bl, SetText = function(t) bl.Text = tostring(t) end }
+end
+
+-- =====================================================================
+-- รูปภาพ (ไม่ใช่ไอคอน) = แสดงรูปเต็มขนาดจริง ไม่ผ่านระบบไอคอน/Lucide
+-- =====================================================================
+UI.ImageCache = {}
+local IMG_SCALE = {
+    Fit = Enum.ScaleType.Fit, Crop = Enum.ScaleType.Crop,
+    Stretch = Enum.ScaleType.Stretch, Tile = Enum.ScaleType.Tile,
+}
+
+local function hashStr(s)
+    local h = 5381
+    for i = 1, #s do h = (h * 33 + string.byte(s, i)) % 4294967296 end
+    return string.format("%08x", h)
+end
+
+local function imageExt(url)
+    local path = string.match(url, "^[^?#]*") or url
+    local ext = string.lower(string.match(path, "%.(%w+)$") or "")
+    if ext == "jpg" or ext == "jpeg" or ext == "tga" then return ext end
+    return "png"
+end
+
+-- URL -> ดาวน์โหลดเก็บเป็นไฟล์ในเครื่อง -> asset ที่ ImageLabel ใช้ได้
+-- ต้องใช้ executor ที่มี writefile และ getcustomasset (หรือ getsynasset)
+local function fileAsset(url)
+    local writeFn = writefile
+    local assetFn = getcustomasset or getsynasset
+    if not (writeFn and assetFn) then
+        return nil, "executor นี้ไม่มี writefile/getcustomasset"
+    end
+    local name = "XenonUI_img_" .. hashStr(url) .. "." .. imageExt(url)
+    local okE, exists = pcall(function() return isfile and isfile(name) end)
+    if not (okE and exists) then
+        local data = httpGet(url)
+        if not data then return nil, "ดาวน์โหลดรูปไม่ได้" end
+        if not pcall(writeFn, name, data) then return nil, "เขียนไฟล์ไม่ได้" end
+    end
+    local ok, id = pcall(assetFn, name)
+    if ok and type(id) == "string" then return id end
+    return nil, "แปลงไฟล์เป็น asset ไม่ได้"
+end
+
+-- แปลงค่า Image เป็น content string ที่ ImageLabel ใช้ได้ (คืน nil ถ้าใช้ไม่ได้)
+local function resolveImage(src)
+    if type(src) == "number" then
+        return "rbxassetid://" .. tostring(math.floor(src))
+    end
+    if type(src) ~= "string" then
+        warn("[XenonUI] Image ต้องเป็นตัวเลข asset id หรือข้อความ (URL)")
+        return nil
+    end
+    if src:find("^rbxassetid://") or src:find("^rbxthumb://") or src:find("^rbxasset://") then
+        return src
+    end
+    if src:match("^%d+$") then
+        return "rbxassetid://" .. src
+    end
+    if src:find("^https?://") then
+        local cached = UI.ImageCache[src]
+        if cached then return cached end
+        local id, err = fileAsset(src)
+        if id then
+            UI.ImageCache[src] = id
+            return id
+        end
+        warn("[XenonUI] โหลดรูป " .. src .. " ไม่สำเร็จ: " .. err)
+        return nil
+    end
+    warn("[XenonUI] Image ไม่รู้จักรูปแบบ: " .. src)
+    return nil
+end
+
+-- Section:Image({ Title, Image, Height = 160, ScaleType = "Fit", Radius = 10, Loading, Fallback, Empty })
+-- คืน { Row, Box, Image (ImageLabel), Set(src), Get() }
+function Section:Image(o)
+    o = o or {}
+    local height = o.Height or 160
+    local radius = o.Radius or 10
+    local f = autoFrame(self, { 12, 12, 12, 12 }, 8)
+    if o.Title then
+        label(f, {
+            Text = o.Title, Font = F_BOLD, TextSize = 14, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY,
+            TextWrapped = true, LayoutOrder = 1,
+        })
+    end
+    local box = new("Frame", {
+        Size = UDim2.new(1, 0, 0, height), BackgroundColor3 = T.Elem, BorderSizePixel = 0, LayoutOrder = 2,
+    }, f)
+    corner(box, radius)
+    stroke(box, T.Line, 1, 0)
+    local img = new("ImageLabel", {
+        Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0,
+        ScaleType = IMG_SCALE[o.ScaleType] or Enum.ScaleType.Fit,
+    }, box)
+    corner(img, radius)
+    local status = label(box, {
+        Size = UDim2.fromScale(1, 1), Text = "", TextSize = 12, TextColor3 = T.Muted, Font = F_MED,
+        TextXAlignment = Enum.TextXAlignment.Center, TextWrapped = true,
+    })
+
+    local token, current = 0, nil
+    local function show(src)
+        token = token + 1
+        local my = token
+        current = src
+        img.Image = ""
+        if src == nil or src == "" then
+            status.Text = o.Empty or ""
+            status.Visible = o.Empty ~= nil
+            return
+        end
+        status.Text = o.Loading or "กำลังโหลดรูป..."
+        status.Visible = true
+        task.spawn(function()
+            local content = resolveImage(src)
+            if my ~= token then return end -- มีการเปลี่ยนรูปใหม่ไปแล้ว ไม่ต้องทำต่อ
+            if content then
+                img.Image = content
+                status.Visible = false
             else
-                soloSince, why = nil, w
+                status.Text = o.Fallback or "โหลดรูปไม่ได้"
+                status.Visible = true
             end
-            task.wait(0.1)
-        end
-        if not (alive and SM.on) then return end
-        if not queueShown() then continue end
-        if not solo then
-            setState("มีคนเข้าลิฟต์ด้วย (" .. tostring(why or "ไม่แน่ใจ") .. ") -> ออกแล้วเปลี่ยนลิฟต์")
-            SM.bad[e.model] = os.clock() + 8
-            leaveElevator(ap, startPos)
-            continue
-        end
-
-        -- 5) กด Ready (ยังเช็กต่อทุกรอบ ถ้ามีคนเข้ามาก่อนเกมเริ่ม = ออกทันที)
-        setState("อยู่คนเดียว -> กด Ready")
-        touchResume()
-        if QUEUE_GAME and queue_on_teleport and GAME_URL ~= "" and not SM.queued then
-            SM.queued = true
-            pcall(queue_on_teleport, string.format("loadstring(game:HttpGet(%q))()", GAME_URL))
-        end
-        local lastPress, t0, kicked = -100, os.clock(), false
-        while alive and SM.on and os.clock() - t0 < 90 do
-            local qf = queueShown()
-            if not qf then break end
-            local ok, w = elevCheck(e.model, want, SOLO_MARGIN)
-            if not ok then kicked, why = true, w break end
-            local rb = qf:FindFirstChild("ReadyButton")
-            -- กดครั้งเดียวต่อรอบ 30 วิ (กันปุ่มเป็นแบบสลับ Ready/ยกเลิก)
-            if rb and os.clock() - lastPress > 30 then
-                lastPress = os.clock()
-                pressBtn(rb)
-                setState("กด Ready แล้ว รอเข้าเกม...")
-            end
-            task.wait(0.1)
-        end
-        if kicked and queueShown() then
-            setState("มีคนเข้ามาก่อนเริ่ม (" .. tostring(why) .. ") -> ออกแล้วเปลี่ยนลิฟต์")
-            SM.bad[e.model] = os.clock() + 8
-            leaveElevator(ap, startPos)
-            continue
-        end
-        return   -- เข้าเกมแล้ว / หมดเวลา: ให้ cycle รอบถัดไปจัดการ
+        end)
     end
+    show(o.Image)
+
+    local obj = { Row = f, Box = box, Image = img }
+    function obj.Set(src) show(src) end
+    function obj.Get() return current end
+    return obj
 end
 
--- ---------- 1 รอบการตัดสินใจ ----------
-function SM.cycle()
-    local function active() return alive and SM.on end
-    if not active() then return end
-    setState("ตรวจเงินและตู้...")
-    local coins = waitFor(getCoins, 20, active)
-    local set = waitFor(scanCrate, 20, active)
-    if not active() then return end
-    local found = foundWanted(set)
+function Section:Progress(o)
+    o = o or {}
+    local f = autoFrame(self, { 14, 12, 14, 12 }, 8)
+    local head = new("Frame", { Size = UDim2.new(1, 0, 0, 18), BackgroundTransparency = 1, LayoutOrder = 1 }, f)
+    label(head, { Text = o.Title or "", Font = F_BOLD, TextSize = 14, Size = UDim2.new(1, -60, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd })
+    local val = label(head, {
+        Text = "0%", Font = F_MED, TextSize = 12, TextColor3 = T.Muted, Size = UDim2.fromScale(1, 1), TextXAlignment = Enum.TextXAlignment.Right,
+    })
+    local track = new("Frame", { Size = UDim2.new(1, 0, 0, 8), BackgroundColor3 = T.Elem, BorderSizePixel = 0, LayoutOrder = 2, ClipsDescendants = true }, f)
+    corner(track, 4)
+    local fill = new("Frame", { Size = UDim2.fromScale(0, 1), BackgroundColor3 = o.Color or T.Accent, BorderSizePixel = 0 }, track)
+    corner(fill, 4)
+    local function set(a, text)
+        a = clamp(a or 0, 0, 1)
+        tween(fill, { Size = UDim2.fromScale(a, 1) }, 0.45, Enum.EasingStyle.Quint)
+        val.Text = text or (tostring(math.floor(a * 100 + 0.5)) .. "%")
+    end
+    set(o.Default or 0)
+    return { Row = f, Set = set }
+end
 
-    if #found > 0 and coins and coins >= PRICE_ONE and os.clock() >= SM.skipSummonUntil then
-        if running then
-            setState("กำลังสุ่มจากแท็บ Crate อยู่ รอก่อน")
-            task.wait(2)
+function Section:Slider(o)
+    o = o or {}
+    local min, max = o.Min or 0, o.Max or 100
+    local step = o.Step or 1
+    local suffix = o.Suffix or ""
+    local value = clamp(o.Default or min, min, max)
+    local accent = o.Color or T.Accent
+    local dec = o.Decimals
+    if dec == nil then
+        if step % 1 == 0 then dec = 0 else
+            local d = tostring(step):match("%.(%d+)")
+            dec = d and #d or 2
+        end
+    end
+    local function fmt(v) return string.format("%." .. dec .. "f", v) .. suffix end
+
+    local f = autoFrame(self, { 14, 12, 14, 12 }, 4)
+    local head = new("Frame", { Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, LayoutOrder = 1 }, f)
+    label(head, { Text = o.Title or "", Font = F_BOLD, TextSize = 14, Size = UDim2.new(1, -80, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd })
+    local box = new("TextBox", {
+        AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(72, 22),
+        BackgroundColor3 = T.Elem, BorderSizePixel = 0, Text = "", TextColor3 = T.Text, Font = F_BOLD, TextSize = 12, ClearTextOnFocus = false,
+    }, head)
+    corner(box, 7)
+    if o.Desc and o.Desc ~= "" then
+        label(f, { Text = o.Desc, TextSize = 12, TextColor3 = T.Muted, Font = F_MED, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, TextWrapped = true, LayoutOrder = 2 })
+    end
+    local hit = new("TextButton", { Text = "", AutoButtonColor = false, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 28), LayoutOrder = 3 }, f)
+    local track = new("Frame", {
+        AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.new(1, 0, 0, 6),
+        BackgroundColor3 = T.Elem, BorderSizePixel = 0,
+    }, hit)
+    corner(track, 3)
+    local fill = new("Frame", { Size = UDim2.fromScale(0, 1), BackgroundColor3 = accent, BorderSizePixel = 0 }, track)
+    corner(fill, 3)
+    local knob = new("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.fromOffset(18, 18),
+        BackgroundColor3 = WHITE, BorderSizePixel = 0,
+    }, track)
+    corner(knob, 9)
+    stroke(knob, accent, 2, 0)
+    local ks = new("UIScale", { Scale = 1 }, knob)
+
+    local function apply(v, silent, instant)
+        v = clamp(math.floor((v - min) / step + 0.5) * step + min, min, max)
+        v = tonumber(string.format("%." .. dec .. "f", v)) or v
+        local changed = v ~= value
+        value = v
+        local a = (max > min) and (v - min) / (max - min) or 0
+        if instant then
+            fill.Size = UDim2.fromScale(a, 1)
+            knob.Position = UDim2.fromScale(a, 0.5)
+        else
+            tween(fill, { Size = UDim2.fromScale(a, 1) }, 0.12, Enum.EasingStyle.Quad)
+            tween(knob, { Position = UDim2.fromScale(a, 0.5) }, 0.12, Enum.EasingStyle.Quad)
+        end
+        box.Text = fmt(v)
+        if changed and not silent then safe(o.Callback, v) end
+    end
+    apply(value, true, true)
+    bindDrag(self.Window, hit, self.Tab.Page, function(a)
+        apply(min + a * (max - min))
+    end, function(down)
+        tween(ks, { Scale = down and 1.28 or 1 }, 0.25, Enum.EasingStyle.Back)
+    end, UI.SliderHoldTime)
+    box.Focused:Connect(function() box.Text = tostring(value) end)
+    box.FocusLost:Connect(function()
+        local n = tonumber(box.Text:match("-?%d+%.?%d*"))
+        if n then apply(n) else box.Text = fmt(value) end
+    end)
+    return { Row = f, Get = function() return value end, Set = function(v) apply(v, true) end }
+end
+
+-- ส่วนที่กางออกได้ใต้แถว (ใช้ร่วมกันใน Dropdown / ColorPicker)
+local function makeCollapsePanel(wrap)
+    local panel = new("Frame", {
+        Size = UDim2.new(1, 0, 0, 0), BackgroundTransparency = 1, BorderSizePixel = 0, ClipsDescendants = true,
+        LayoutOrder = 2, Visible = false,
+    }, wrap)
+    local open = false
+    local ctl = {}
+    function ctl.Set(v, height)
+        open = v
+        if v then
+            panel.Visible = true
+            tween(panel, { Size = UDim2.new(1, 0, 0, height) }, 0.4, Enum.EasingStyle.Quint)
+        else
+            tween(panel, { Size = UDim2.new(1, 0, 0, 0) }, 0.3, Enum.EasingStyle.Quint)
+            task.delay(0.32, function()
+                if not open then panel.Visible = false end
+            end)
+        end
+    end
+    function ctl.IsOpen() return open end
+    return panel, ctl
+end
+
+function Section:Dropdown(o)
+    o = o or {}
+    local multi = o.Multi and true or false
+    local options = o.Options or {}
+    local selected, value = {}, nil
+    if multi then
+        for _, v in ipairs(o.Default or {}) do selected[v] = true end
+    else
+        value = o.Default
+    end
+    local order = nextSlot(self)
+    local wrap = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = order }, self.Card)
+    vlist(wrap, 0)
+    local row, ctl = makeRow(self, o.Title, o.Desc, Vector2.new(o.Width or 150, 32), true, wrap)
+    local pill = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Elem, BorderSizePixel = 0 }, ctl)
+    corner(pill, 9)
+    local pst = stroke(pill, T.Line, 1, 0)
+    local vl = label(pill, {
+        Text = "", Font = F_MED, TextSize = 12, Position = UDim2.fromOffset(10, 0), Size = UDim2.new(1, -34, 1, 0),
+        TextTruncate = Enum.TextTruncate.AtEnd,
+    })
+    local chev = iconLabel(pill, "chevron-down", 14, T.Muted, "v", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -9, 0.5, 0) })
+    local panel, pc = makeCollapsePanel(wrap)
+    local scroll = new("ScrollingFrame", {
+        Position = UDim2.fromOffset(12, 0), Size = UDim2.new(1, -24, 0, 100), BackgroundColor3 = T.Inset, BorderSizePixel = 0,
+        ScrollBarThickness = 3, ScrollBarImageColor3 = T.Muted, CanvasSize = UDim2.new(), AutomaticCanvasSize = AY,
+        ScrollingDirection = Enum.ScrollingDirection.Y, ElasticBehavior = Enum.ElasticBehavior.Always,
+    }, panel)
+    corner(scroll, 9)
+    stroke(scroll, T.Line, 1, 0)
+    pad(scroll, 5, 5, 5, 5)
+    vlist(scroll, 3)
+
+    local btns = {}
+    local function isSel(v)
+        if multi then return selected[v] == true end
+        return value == v
+    end
+    local function list()
+        local t = {}
+        for _, op in ipairs(options) do
+            if selected[op] then t[#t + 1] = op end
+        end
+        return t
+    end
+    local function text()
+        if multi then
+            local t = {}
+            for _, op in ipairs(options) do
+                if selected[op] then t[#t + 1] = tostring(op) end
+            end
+            if #t > 2 then return t[1] .. ", " .. t[2] .. " +" .. (#t - 2) end   -- เลือกเยอะ: สรุปสั้นๆ ไม่ให้ล้นช่อง
+            return #t > 0 and table.concat(t, ", ") or (o.Placeholder or "None")
+        end
+        return value ~= nil and tostring(value) or (o.Placeholder or "Select")
+    end
+    local function paint()
+        vl.Text = text()
+        for i, b in ipairs(btns) do
+            local on = isSel(options[i])
+            tween(b, { BackgroundTransparency = on and 0 or 1 }, 0.2)
+            tween(b, { TextColor3 = on and WHITE or T.Muted }, 0.2)
+        end
+    end
+    local function panelHeight()
+        local content = #options * 33 - 3 + 10
+        local view = math.min(math.max(content, 20), o.MaxHeight or 180)
+        scroll.Size = UDim2.new(1, -24, 0, view)
+        return view + 12
+    end
+    local function setOpen(v)
+        pc.Set(v, v and panelHeight() or 0)
+        tween(chev, { Rotation = v and 180 or 0 }, 0.4, Enum.EasingStyle.Quint)
+        tween(pst, { Color = v and T.Accent or T.Line }, 0.25)
+    end
+    local function fire()
+        if multi then safe(o.Callback, list()) else safe(o.Callback, value) end
+    end
+    local function build()
+        for _, b in ipairs(btns) do b:Destroy() end
+        btns = {}
+        for i, op in ipairs(options) do
+            local b = new("TextButton", {
+                Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = T.Accent, BackgroundTransparency = 1, BorderSizePixel = 0,
+                AutoButtonColor = false, Text = tostring(op), Font = F_MED, TextSize = 12, TextColor3 = T.Muted,
+                TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = i, ClipsDescendants = true,
+            }, scroll)
+            corner(b, 7)
+            pad(b, 10, 0, 10, 0)
+            b.InputBegan:Connect(function(input)
+                if isPress(input) then
+                    local rx, ry = pressRatio(b, input)
+                    ripple(b, rx, ry, WHITE, 0.8)
+                end
+            end)
+            b.MouseEnter:Connect(function()
+                if not isSel(op) then tween(b, { BackgroundTransparency = 0.82 }, 0.12) end
+            end)
+            b.MouseLeave:Connect(function()
+                if not isSel(op) then tween(b, { BackgroundTransparency = 1 }, 0.18) end
+            end)
+            b.Activated:Connect(function()
+                if multi then
+                    selected[op] = (not selected[op]) and true or nil
+                else
+                    value = op
+                    setOpen(false)
+                end
+                paint()
+                fire()
+            end)
+            btns[i] = b
+        end
+        paint()
+    end
+    build()
+    row.Activated:Connect(function() setOpen(not pc.IsOpen()) end)
+
+    local obj = { Row = wrap }
+    -- กดหัว Dropdown เพื่อเปิด/ปิดได้เสมอ + สั่งจากโค้ดได้
+    function obj.IsOpen() return pc.IsOpen() end
+    function obj.Open() setOpen(true) end
+    function obj.Close() setOpen(false) end
+    function obj.Toggle() setOpen(not pc.IsOpen()) end
+    function obj.Get() return multi and list() or value end
+    function obj.Set(v, silent)
+        if multi then
+            selected = {}
+            for _, x in ipairs(v or {}) do selected[x] = true end
+        else
+            value = v
+        end
+        paint()
+        if not silent then fire() end
+    end
+    function obj.Refresh(newOptions, keep)
+        options = newOptions or {}
+        if not keep then
+            selected, value = {}, nil
+        end
+        build()
+        if pc.IsOpen() then setOpen(true) end
+    end
+    return obj
+end
+
+function Section:Keybind(o)
+    o = o or {}
+    local key = o.Default
+    local row, ctl = makeRow(self, o.Title, o.Desc, Vector2.new(o.Width or 104, 32), false)
+    local listening = false
+    local function nameOf(k) return k and k.Name or "None" end
+    local btn
+    btn = makeButton(ctl, {
+        Text = nameOf(key), Color = T.Elem, Size = UDim2.fromScale(1, 1), TextSize = 12,
+        Callback = function()
+            if listening then return end
+            listening = true
+            btn:SetText("...")
+            btn:SetColor(T.Accent)
+        end,
+    })
+    self.Window:_conn(UserInputService.InputBegan:Connect(function(input, gp)
+        if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+        if listening then
+            listening = false
+            if input.KeyCode == Enum.KeyCode.Backspace then
+                key = nil
+            elseif input.KeyCode ~= Enum.KeyCode.Escape then
+                key = input.KeyCode
+            end
+            btn:SetText(nameOf(key))
+            btn:SetColor(T.Elem)
+            safe(o.Changed, key)
             return
         end
-        setState("ตู้มี " .. table.concat(found, ", ") .. " -> เดินไปจุดสุ่ม")
-        local arrived = moveTo(SUMMON_CF.Position, active, 3, 0)
-        if arrived and active() then
-            local opened, spent, stop = summonRun(active)
-            local msg = string.format("สุ่มเสร็จ %d กล่อง | ใช้ %s Coins%s",
-                opened, fmt(spent), stop and (" | " .. stop) or "")
-            notify(msg, (stop == "Coin หมดแล้ว") and PT.Good or PT.Warn, "trophy", 6)
-            if stop and stop ~= "Coin หมดแล้ว" then SM.skipSummonUntil = os.clock() + 120 end
-        elseif active() then
-            SM.skipSummonUntil = os.clock() + 120
-            notify("เดินไปจุดสุ่มไม่ถึง -> ข้ามไปเล่นก่อน", PT.Warn, "x")
-        end
-    else
-        local why = (not set) and "อ่านตู้ไม่ได้"
-            or (#found == 0) and "ตู้ไม่มีตัวที่เลือก"
-            or (not coins or coins < PRICE_ONE) and "Coin ไม่พอ"
-            or "เพิ่งสุ่มพลาด พักก่อน"
-        setState("ไม่สุ่ม (" .. why .. ") -> กลับไปเล่น")
-    end
-    if active() then goPlay(active) end
+        if not gp and key and input.KeyCode == key then safe(o.Callback, key) end
+    end))
+    return {
+        Row = row, Get = function() return key end,
+        Set = function(k) key = k; btn:SetText(nameOf(k)) end,
+    }
 end
 
-function SM.start()
-    if SM.loopOn then return end
-    SM.loopOn = true
-    task.spawn(function()
-        while alive and SM.on do
-            local ok, err = pcall(SM.cycle)
-            if not ok then
-                setState("error: " .. tostring(err))
-                task.wait(3)
-            end
-            task.wait(0.3)
+function Section:ColorPicker(o)
+    o = o or {}
+    local h, s, v = (o.Default or T.Accent):ToHSV()
+    local color = Color3.fromHSV(h, s, v)
+    local order = nextSlot(self)
+    local wrap = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = order }, self.Card)
+    vlist(wrap, 0)
+    local row, ctl = makeRow(self, o.Title, o.Desc, Vector2.new(58, 28), true, wrap)
+    local sw = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = color, BorderSizePixel = 0 }, ctl)
+    corner(sw, 9)
+    stroke(sw, WHITE, 1, 0.7)
+    local panel, pc = makeCollapsePanel(wrap)
+    local holder = new("Frame", { Position = UDim2.fromOffset(14, 2), Size = UDim2.new(1, -28, 0, 92), BackgroundTransparency = 1 }, panel)
+    vlist(holder, 4)
+
+    local function mkTrack(order2, onAlpha)
+        local hit = new("TextButton", { Text = "", AutoButtonColor = false, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 28), LayoutOrder = order2 }, holder)
+        local tr = new("Frame", {
+            AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.new(1, 0, 0, 10),
+            BackgroundColor3 = WHITE, BorderSizePixel = 0,
+        }, hit)
+        corner(tr, 5)
+        local g = new("UIGradient", {}, tr)
+        local knob = new("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.fromOffset(18, 18),
+            BackgroundColor3 = WHITE, BorderSizePixel = 0,
+        }, tr)
+        corner(knob, 9)
+        stroke(knob, Color3.fromRGB(40, 40, 56), 2, 0)
+        local ks = new("UIScale", { Scale = 1 }, knob)
+        bindDrag(self.Window, hit, self.Tab.Page, onAlpha, function(down)
+            tween(ks, { Scale = down and 1.25 or 1 }, 0.22, Enum.EasingStyle.Back)
+        end)
+        return { Gradient = g, Knob = knob }
+    end
+
+    local hueT, satT, valT
+    local function refresh(silent)
+        color = Color3.fromHSV(h, s, v)
+        sw.BackgroundColor3 = color
+        hueT.Knob.Position = UDim2.fromScale(h, 0.5)
+        satT.Knob.Position = UDim2.fromScale(s, 0.5)
+        valT.Knob.Position = UDim2.fromScale(v, 0.5)
+        satT.Gradient.Color = ColorSequence.new(Color3.fromHSV(h, 0, v), Color3.fromHSV(h, 1, v))
+        valT.Gradient.Color = ColorSequence.new(Color3.new(0, 0, 0), Color3.fromHSV(h, s, 1))
+        if not silent then safe(o.Callback, color) end
+    end
+    hueT = mkTrack(1, function(a) h = a; refresh() end)
+    satT = mkTrack(2, function(a) s = a; refresh() end)
+    valT = mkTrack(3, function(a) v = a; refresh() end)
+    local seq = {}
+    for i = 0, 6 do seq[#seq + 1] = ColorSequenceKeypoint.new(i / 6, Color3.fromHSV(math.min(i / 6, 0.9999), 1, 1)) end
+    seq[#seq] = ColorSequenceKeypoint.new(1, Color3.fromHSV(0, 1, 1))
+    hueT.Gradient.Color = ColorSequence.new(seq)
+    refresh(true)
+    row.Activated:Connect(function() pc.Set(not pc.IsOpen(), 100) end)
+    return {
+        Row = wrap, Get = function() return color end,
+        Set = function(c, silent)
+            h, s, v = c:ToHSV()
+            refresh(silent ~= false and true or false)
+        end,
+    }
+end
+
+-- =====================================================================
+-- Tab
+-- =====================================================================
+local Tab = {}
+Tab.__index = Tab
+
+function Tab:Section(o)
+    o = o or {}
+    self._n = self._n + 1
+    local wrap = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = self._n }, self.Page)
+    vlist(wrap, 9)
+    local head
+    if o.Title then
+        head = new("Frame", { Size = UDim2.new(1, 0, 0, 36), BackgroundTransparency = 1, LayoutOrder = 1 }, wrap)
+        local x = 2
+        if o.Icon then
+            local tile = new("Frame", {
+                Size = UDim2.fromOffset(32, 32), Position = UDim2.fromOffset(2, 2), BackgroundColor3 = o.Color or self.Color, BorderSizePixel = 0,
+            }, head)
+            corner(tile, 9)
+            iconLabel(tile, o.Icon, 18, WHITE, nil, CENTER)
+            x = 44
         end
-        SM.loopOn = false
-        if not SM.on then setState("ปิดอยู่") end
+        local rightPad = o.Collapsible and 30 or 0
+        if o.Desc then
+            label(head, {
+                Text = o.Title, Font = F_BOLD, TextSize = 14, Position = UDim2.fromOffset(x, 1), Size = UDim2.new(1, -(x + rightPad), 0, 18),
+                TextTruncate = Enum.TextTruncate.AtEnd,
+            })
+            label(head, {
+                Text = o.Desc, TextSize = 12, TextColor3 = T.Muted, Position = UDim2.fromOffset(x, 19), Size = UDim2.new(1, -(x + rightPad), 0, 16),
+                TextTruncate = Enum.TextTruncate.AtEnd,
+            })
+        else
+            label(head, {
+                Text = o.Title, Font = F_BOLD, TextSize = 14, Position = UDim2.fromOffset(x, 0), Size = UDim2.new(1, -(x + rightPad), 1, 0),
+                TextTruncate = Enum.TextTruncate.AtEnd,
+            })
+        end
+    end
+    local shell
+    if o.Collapsible and head then
+        shell = new("Frame", {
+            Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, BorderSizePixel = 0, LayoutOrder = 2,
+        }, wrap)
+    end
+    local card = new("Frame", {
+        Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundColor3 = T.Card, BorderSizePixel = 0, LayoutOrder = 2,
+    }, shell or wrap)
+    corner(card, 12)
+    stroke(card, T.Line, 1)
+    vlist(card, 0)
+
+    if shell then
+        local open = not o.Collapsed
+        local tk = 0
+        local chev = iconLabel(head, "chevron-down", 16, T.Muted, "v", {
+            AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0),
+        })
+        chev.Rotation = open and 0 or -90
+        if not open then
+            shell.AutomaticSize = Enum.AutomaticSize.None
+            shell.Size = UDim2.new(1, 0, 0, 0)
+            shell.ClipsDescendants = true
+        end
+        local hb = new("TextButton", { Text = "", AutoButtonColor = false, BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 5 }, head)
+        hb.Activated:Connect(function()
+            local S = (self.Window.M and self.Window.M.S) or 1
+            local h = card.AbsoluteSize.Y / S
+            tk = tk + 1
+            local my = tk
+            open = not open
+            tween(chev, { Rotation = open and 0 or -90 }, 0.4, Enum.EasingStyle.Quint)
+            shell.ClipsDescendants = true
+            shell.AutomaticSize = Enum.AutomaticSize.None
+            if open then
+                tween(shell, { Size = UDim2.new(1, 0, 0, h) }, 0.42, Enum.EasingStyle.Quint)
+                task.delay(0.45, function()
+                    if tk == my then
+                        shell.AutomaticSize = AY
+                        shell.Size = UDim2.new(1, 0, 0, 0)
+                        shell.ClipsDescendants = false
+                    end
+                end)
+            else
+                shell.Size = UDim2.new(1, 0, 0, h)
+                tween(shell, { Size = UDim2.new(1, 0, 0, 0) }, 0.36, Enum.EasingStyle.Quint)
+            end
+        end)
+    end
+    return setmetatable({ Tab = self, Window = self.Window, Card = card, _n = 0, Color = o.Color or self.Color }, Section)
+end
+
+-- =====================================================================
+-- Window
+-- =====================================================================
+local Window = {}
+Window.__index = Window
+
+local SW_EXP, SW_COL = 204, 66
+local TOP_H = 48
+
+function Window:_conn(c)
+    self._conns[#self._conns + 1] = c
+    return c
+end
+
+function Window:_metrics()
+    local cam = workspace.CurrentCamera
+    local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
+    local mobile = UI.ForceMobile
+    if mobile == nil then mobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled end
+    local w, h, s
+    if mobile then
+        local portrait = vp.Y > vp.X
+        if self.Maximized then
+            w, h = vp.X * 0.96, vp.Y * 0.94
+        else
+            -- มือถือ: ใหญ่เกือบเต็มจอ (ไม่ต่ำกว่า 70%)
+            w = vp.X * (portrait and 0.95 or 0.76)
+            h = vp.Y * (portrait and 0.72 or 0.82)
+        end
+        s = UI.UiScale or 1
+    else
+        if self.Maximized then
+            w, h = vp.X - 40, vp.Y - 40
+        else
+            w = clamp(vp.X * 0.6, 640, 980)
+            h = clamp(vp.Y * 0.74, 420, 640)
+        end
+        w = math.min(w, vp.X - 16)
+        h = math.min(h, vp.Y - 16)
+        s = UI.UiScale or 1
+    end
+    -- ปัดขนาดเป็นพิกเซลเต็ม + ให้ความกว้าง/สูงมี parity เดียวกับจอ -> หน้าต่างไม่ครึ่งพิกเซล (ตัวอักษรไม่เบลอ)
+    w, h = math.floor(w), math.floor(h)
+    if (w - math.floor(vp.X)) % 2 ~= 0 then w = w - 1 end
+    if (h - math.floor(vp.Y)) % 2 ~= 0 then h = h - 1 end
+    return { W = w, H = h, S = s, DW = w / s, DH = h / s, Mobile = mobile, VP = vp }
+end
+
+function Window:_tweenWin(props, t, style, dir)
+    if self._winTween then self._winTween:Cancel() end
+    self._winTween = tween(self.Win, props, t, style, dir)
+end
+
+function Window:_bubblePos()
+    local m = self.M
+    local R = self.BubbleSize / 2
+    local margin = 10
+    local y = clamp(self.BubbleY * m.VP.Y, R + margin, m.VP.Y - R - margin)
+    if self.BubbleSide == "left" then
+        return UDim2.new(0, margin + R, 0, y)
+    end
+    return UDim2.new(1, -(margin + R), 0, y)
+end
+
+function Window:Relayout(animate)
+    local m = self:_metrics()
+    self.M = m
+    self.BubbleSize = m.Mobile and 56 or 52
+    local function set(o, props)
+        if animate then
+            tween(o, props, 0.35, Enum.EasingStyle.Quint)
+        else
+            for k, v in pairs(props) do o[k] = v end
+        end
+    end
+    local collapse = self._userCollapse
+    if collapse == nil then collapse = m.DW < 700 end
+    if collapse ~= self.SidebarCollapsed then self:SetSidebar(collapse, not animate) end
+    -- canvas + scale ต้องตรงกับขนาดจอเสมอ (แม้ตอนย่ออยู่ จะได้ขยายกลับถูกขนาด)
+    set(self.Canvas, { Size = UDim2.fromOffset(m.DW, m.DH) })
+    set(self._scale, { Scale = m.S })
+    if self.State == "bubble" then
+        set(self.Win, { Position = self:_bubblePos() })
+    else
+        set(self.Win, { Size = UDim2.fromOffset(m.W, m.H), Position = UDim2.new(0.5, self.OX, 0.5, self.OY) })
+    end
+    -- breadcrumb / status pill
+    local mainW = m.DW - (self.SidebarCollapsed and SW_COL or SW_EXP)
+    local showPill = mainW > 560
+    self._pill.Visible = showPill
+    self._crumb.Size = UDim2.new(1, -(60 + 104 + (showPill and 186 or 0)), 1, 0)
+    self._toasts.Size = UDim2.new(0, m.Mobile and 250 or 300, 1, -28)
+end
+
+function Window:SetSidebar(collapsed, instant)
+    self.SidebarCollapsed = collapsed
+    local w = collapsed and SW_COL or SW_EXP
+    local fade = collapsed and 1 or 0
+    local function set(o, props)
+        if instant then
+            for k, v in pairs(props) do o[k] = v end
+        else
+            tween(o, props, 0.38, Enum.EasingStyle.Quint)
+        end
+    end
+    set(self._sidebar, { Size = UDim2.new(0, w, 1, 0) })
+    set(self._main, { Position = UDim2.fromOffset(w, 0), Size = UDim2.new(1, -w, 1, 0) })
+    for _, t in ipairs(self.TabList) do set(t.Label, { TextTransparency = fade }) end
+    for _, c in pairs(self.Categories) do
+        set(c.Label, { TextTransparency = fade, Size = UDim2.new(1, 0, 0, collapsed and 8 or 24) })
+    end
+    for _, o in ipairs(self._fadeText) do set(o, { TextTransparency = fade }) end
+    set(self._userChevron, { ImageTransparency = fade })
+end
+
+function Window:SetBreadcrumb(cat, name)
+    self._crumb.Text = string.format('<font color="#%s">%s</font>   >   %s', T.Muted:ToHex(), cat, name)
+end
+
+function Window:SelectTab(name, instant)
+    local tab = self.Tabs[name]
+    if not tab or self.CurrentTab == tab then return end
+    local prev = self.CurrentTab
+    self.CurrentTab = tab
+    local dir = 1
+    if prev then
+        local pi, ni = 0, 0
+        for i, t in ipairs(self.TabList) do
+            if t == prev then pi = i end
+            if t == tab then ni = i end
+        end
+        dir = (ni >= pi) and 1 or -1
+    end
+    for _, t in ipairs(self.TabList) do
+        local on = (t == tab)
+        t.Page.Visible = on
+        tween(t.Button, { BackgroundTransparency = on and 0 or 1 }, 0.2)
+        tween(t.Label, { TextColor3 = on and T.Text or T.Muted }, 0.2)
+        if t.Ind then tween(t.Ind, { Size = UDim2.fromOffset(3, on and 18 or 0) }, 0.4, Enum.EasingStyle.Quint) end
+    end
+    self:SetBreadcrumb(tab.Category, tab.Name)
+    if not instant then
+        -- สไลด์เข้าตามทิศที่เปลี่ยนแท็บ (ลง = เลื่อนขึ้นมา, ขึ้น = เลื่อนลงมา)
+        tab.Page.Position = UDim2.fromOffset(0, 22 * dir)
+        tween(tab.Page, { Position = UDim2.fromOffset(0, 0) }, 0.55, Enum.EasingStyle.Quint)
+        self._curtain.BackgroundTransparency = 0
+        tween(self._curtain, { BackgroundTransparency = 1 }, 0.32, Enum.EasingStyle.Sine)
+    end
+end
+
+function Window:AddTab(o)
+    local catName = o.Category or "General"
+    local cat = self.Categories[catName]
+    if not cat then
+        self._catSeq = self._catSeq + 1
+        local lbl = label(self._tabScroll, {
+            Text = catName, Font = F_BOLD, TextSize = 12, TextColor3 = T.Muted, Size = UDim2.new(1, 0, 0, self.SidebarCollapsed and 8 or 24),
+            LayoutOrder = self._catSeq * 1000, TextTransparency = self.SidebarCollapsed and 1 or 0,
+            TextYAlignment = Enum.TextYAlignment.Bottom,
+        })
+        pad(lbl, 8, 0, 0, 4)
+        cat = { Name = catName, Label = lbl, Seq = self._catSeq, N = 0 }
+        self.Categories[catName] = cat
+    end
+    cat.N = cat.N + 1
+    local color = o.Color or T.Accent
+
+    local btn = new("TextButton", {
+        Text = "", AutoButtonColor = false, Size = UDim2.new(1, 0, 0, 42), BackgroundColor3 = T.Elem, BackgroundTransparency = 1,
+        BorderSizePixel = 0, LayoutOrder = cat.Seq * 1000 + cat.N,
+    }, self._tabScroll)
+    corner(btn, 11)
+    btn.ClipsDescendants = true
+    local ind = new("Frame", {
+        AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 2, 0.5, 0), Size = UDim2.fromOffset(3, 0),
+        BackgroundColor3 = color, BorderSizePixel = 0, ZIndex = 3,
+    }, btn)
+    corner(ind, 2)
+    local tile = new("Frame", {
+        Size = UDim2.fromOffset(30, 30), AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 9, 0.5, 0),
+        BackgroundColor3 = color, BorderSizePixel = 0,
+    }, btn)
+    corner(tile, 9)
+    iconLabel(tile, o.Icon, 17, WHITE, nil, CENTER)
+    local lbl = label(btn, {
+        Text = o.Name, Font = F_MED, TextSize = 13, TextColor3 = T.Muted, Position = UDim2.fromOffset(49, 0),
+        Size = UDim2.new(1, -54, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd, TextTransparency = self.SidebarCollapsed and 1 or 0,
+    })
+
+    local page = new("ScrollingFrame", {
+        Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
+        ScrollBarImageColor3 = T.Muted, ScrollingDirection = Enum.ScrollingDirection.Y, CanvasSize = UDim2.new(),
+        AutomaticCanvasSize = AY, Visible = false, ElasticBehavior = Enum.ElasticBehavior.Always, ScrollBarImageTransparency = 0.35,
+    }, self._pages)
+    pad(page, 16, 14, 16, 20)
+    vlist(page, 16)
+
+    local tab = setmetatable({
+        Window = self, Name = o.Name, Category = catName, Page = page, Button = btn, Label = lbl, Color = color, Ind = ind, _n = 0,
+    }, Tab)
+    self.Tabs[o.Name] = tab
+    self.TabList[#self.TabList + 1] = tab
+
+    btn.MouseEnter:Connect(function()
+        if self.CurrentTab ~= tab then tween(btn, { BackgroundTransparency = 0.6 }, 0.15) end
+    end)
+    btn.MouseLeave:Connect(function()
+        if self.CurrentTab ~= tab then tween(btn, { BackgroundTransparency = 1 }, 0.2) end
+    end)
+    btn.InputBegan:Connect(function(input)
+        if isPress(input) then
+            local rx, ry = pressRatio(btn, input)
+            ripple(btn, rx, ry, WHITE, 0.88)
+        end
+    end)
+    btn.Activated:Connect(function() self:SelectTab(o.Name) end)
+
+    if not self.CurrentTab then self:SelectTab(o.Name, true) end
+    return tab
+end
+
+-- ---------------- drag helper ----------------
+-- hold (วินาที): ต้องกดค้างที่หัวลากครบเวลาก่อนถึงจะลากได้ ถ้านิ้วขยับก่อนครบ = ยกเลิก (ไม่ลาก)
+-- hold = 0 หรือ nil: ลากได้ทันที (ใช้กับปุ่มวงกลม เพื่อให้แตะเปิดได้)
+function Window:_drag(handle, cbs, hold)
+    hold = hold or 0
+    local dragging, dragInput, startPos, moved, armed, token = false, nil, nil, false, false, 0
+    handle.InputBegan:Connect(function(input)
+        if not isPress(input) then return end
+        if UI._dragLock then return end -- มีอย่างอื่นกำลังลากอยู่
+        UI._dragLock = input
+        dragging, moved, dragInput = true, false, input
+        startPos = input.Position
+        token = token + 1
+        local my = token
+        armed = hold <= 0
+        if armed then
+            if cbs.Start then cbs.Start() end
+        else
+            task.delay(hold, function()
+                if dragging and token == my and not armed and not moved then
+                    armed = true
+                    if cbs.Start then cbs.Start() end
+                    if cbs.Armed then cbs.Armed() end
+                end
+            end)
+        end
+        local c
+        c = input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                if c then c:Disconnect() end
+                if UI._dragLock == input then UI._dragLock = nil end
+                if dragging then
+                    dragging = false
+                    token = token + 1
+                    if armed and cbs.End then cbs.End(moved) end
+                    armed = false
+                end
+            end
+        end)
+    end)
+    self:_conn(UserInputService.InputChanged:Connect(function(input)
+        if not dragging then return end
+        local t = input.UserInputType
+        local ok = (t == Enum.UserInputType.MouseMovement and dragInput.UserInputType ~= Enum.UserInputType.Touch)
+            or (t == Enum.UserInputType.Touch and input == dragInput)
+        if not ok then return end
+        local d = input.Position - startPos
+        local dist = math.abs(d.X) + math.abs(d.Y)
+        if not armed then
+            -- ขยับก่อนครบเวลา = ไม่ใช่การกดค้าง -> ยกเลิกการลากรอบนี้
+            if dist > 12 then
+                moved = true
+                token = token + 1
+            end
+            return
+        end
+        if not moved and dist > 8 then moved = true end
+        if moved and cbs.Move then cbs.Move(d.X, d.Y) end
+    end))
+end
+
+-- ---------------- state: open / bubble ----------------
+-- ทิศจากกลางหน้าต่างไปหาปุ่มวงกลม (องศา) ใช้เป็นทิศการไล่สี
+function Window:_aimGradient(bubbleCenter, winCenter)
+    local d = bubbleCenter - winCenter
+    local ang = 0
+    if d.Magnitude > 1 then ang = math.deg(math.atan2(d.Y, d.X)) end
+    self._grad.Rotation = ang
+end
+
+function Window:_bubbleCenterPx()
+    local vp = self.M.VP
+    local R = self.BubbleSize / 2
+    local margin = 10
+    local x = (self.BubbleSide == "left") and (margin + R) or (vp.X - margin - R)
+    local y = clamp(self.BubbleY * vp.Y, R + margin, vp.Y - R - margin)
+    return Vector2.new(x, y)
+end
+
+function Window:_clipOn()
+    self._clipToken = (self._clipToken or 0) + 1
+    self.Canvas.Parent = self._clip
+end
+
+-- คืนเมนูกลับมาอยู่นอกตัวตัด (หลังหน้าต่างขยายเสร็จ)
+function Window:_clipOff(delay)
+    local token = self._clipToken
+    task.delay(delay, function()
+        if self._destroyed or self._clipToken ~= token or self.State ~= "open" then return end
+        self.Canvas.Parent = self.Win
     end)
 end
 
--- =====================================================================
---  UI (แท็บ Auto Summon)
--- =====================================================================
-local tabSM = win:AddTab({ Name = "Auto Summon", Category = "Lobby", Icon = "zap", Color = PT.Purple })
-
-local sMain = tabSM:Section({
-    Title = "ออโต้สุ่มตัวแบบกำหนดตัว",
-    Desc = "ตู้มีตัวที่เลือกและมี Coin = เดินไปสุ่มจนเงินหมด แล้วกลับไปเล่นต่อ",
-    Icon = "gift", Color = PT.Purple,
-})
-sMain:Toggle({
-    Title = "ออโต้สุ่มตัวแบบกำหนดตัว",
-    Default = SM.on,
-    Callback = function(v)
-        SM.on = v and true or false
-        saveSM()
-        if SM.on then SM.start() else setState("ปิดอยู่") end
-    end,
-})
-local lblState = sMain:Label({ Text = "สถานะ: ปิดอยู่", TextSize = 13, Color = PT.Text })
-local lblReset = sMain:Label({ Text = "-", TextSize = 12, Color = PT.Text })
-local lblCrate = sMain:Label({ Text = "ตู้ตอนนี้: กำลังอ่าน...", TextSize = 12, Color = PT.Text })
-sMain:Action({
-    Text = "สแกนตู้ตอนนี้", Icon = "refresh-cw", Color = PT.Blue,
-    Callback = function()
-        local set = scanCrate()
-        if SM.refreshWant then SM.refreshWant() end
-        notify(set and ("พบ " .. SM.crateN .. " ตัวในตู้") or "อ่านตู้ไม่ได้ เปิดหน้า Summon สักครั้งก่อน",
-            set and PT.Good or PT.Warn, "refresh-cw")
-    end,
-})
-
-local sWant = tabSM:Section({
-    Title = "ตัวที่ต้องการ",
-    Desc = "พิมพ์ชื่อตามที่ขึ้นในตู้ แล้วกด Enter | แตะชื่อในรายการ = ลบ",
-    Icon = "bell", Color = PT.Orange,
-})
-local wantList
-local function addWanted(box)
-    local name = (tostring(box.Text or ""):gsub("^%s+", ""):gsub("%s+$", ""))
-    box.Text = ""
-    if name == "" then return end
-    for _, w in ipairs(SM.wanted) do
-        if cleanText(w) == cleanText(name) then notify("มีชื่อนี้อยู่ในรายการแล้ว", PT.Warn, "x") return end
-    end
-    -- ถ้าตัวนี้อยู่ในตู้ตอนนี้ ใช้ชื่อจริงตามตู้ (สะกดตรงเป๊ะ)
-    local real = SM.crate and SM.crate[cleanText(name)]
-    SM.wanted[#SM.wanted + 1] = real or name
-    saveSM()
-    SM.refreshWant()
-    notify(real and ("เพิ่ม " .. real .. " แล้ว (อยู่ในตู้ตอนนี้)") or ("เพิ่ม " .. name .. " แล้ว (ยังไม่อยู่ในตู้ จะสุ่มให้เมื่อโผล่)"),
-        PT.Good, "check")
-end
-sWant:Input({ Title = "ชื่อตัวที่ต้องการ", Placeholder = "เช่น Camera Helicopter แล้วกด Enter", Callback = addWanted })
-wantList = sWant:List({ Height = 150, Title = "ตัวที่เลือกไว้" })
-function SM.refreshWant()
-    wantList:Clear()
-    if #SM.wanted == 0 then wantList:Note("ยังไม่ได้เลือกตัว") return end
-    for i, name in ipairs(SM.wanted) do
-        local inCrate = SM.crate and SM.crate[cleanText(name)]
-        wantList:Add({
-            Text = name .. (inCrate and "   ● อยู่ในตู้ตอนนี้" or ""), Order = i,
-            Callback = function()
-                win:Dialog({
-                    Title = "ลบตัวนี้?", Text = "\"" .. name .. "\" จะถูกลบออกจากรายการ", Dismissable = true,
-                    Buttons = {
-                        { Text = "ยกเลิก" },
-                        {
-                            Text = "ลบ", Icon = "trash-2", Color = PT.Bad,
-                            Callback = function()
-                                for k, w in ipairs(SM.wanted) do
-                                    if w == name then table.remove(SM.wanted, k) break end
-                                end
-                                saveSM()
-                                SM.refreshWant()
-                            end,
-                        },
-                    },
-                })
-            end,
-        })
-    end
-end
-
-local MODES = {
-    { key = "walk",  text = "เดิน (ตามเส้นทาง ปลอดภัยสุด)" },
-    { key = "float", text = "ลอย (บินตรงไปหาจุดหมาย)" },
-    { key = "tp",    text = "วาปเลย (ย้ายทันที เร็วสุด)" },
-}
-local sMove = tabSM:Section({
-    Title = "รูปแบบการเคลื่อนที่",
-    Desc = "เลือกวิธีไปจุดสุ่ม / ลิฟต์ | เดิน = ปลอดภัยสุด | ลอย = เร็วและนิ่ง | วาป = เร็วสุดแต่เสี่ยงกว่า",
-    Icon = "zap", Color = PT.Blue,
-})
-local moveList = sMove:List({ Height = 110, Title = "เลือกแบบ (แตะเพื่อเปลี่ยน)" })
-function SM.refreshMode()
-    moveList:Clear()
-    for i, m in ipairs(MODES) do
-        moveList:Add({
-            Text = m.text, Selected = (SM.mode == m.key), Order = i,
-            Callback = function()
-                SM.mode = m.key
-                saveSM()
-                SM.refreshMode()
-                notify("รูปแบบเคลื่อนที่: " .. m.text, PT.Good, "check")
-            end,
-        })
-    end
-end
-
-local sMap = tabSM:Section({
-    Title = "ด่านที่จะกลับไปเล่น",
-    Desc = "แตะชื่อด่านที่จะกลับไปเล่นหลังสุ่ม",
-    Icon = "map-pin", Color = PT.Cyan,
-})
-local mapList = sMap:List({ Height = 130, Title = "ด่านที่พบ" })
-function SM.refreshMaps()
-    mapList:Clear()
-    if #SM.mapOrder == 0 then mapList:Note("ยังไม่พบลิฟต์ รอเกมโหลดแล้วกดสแกน") return end
-    for i, key in ipairs(SM.mapOrder) do
-        local nm = SM.maps[key]
-        mapList:Add({
-            Text = nm, Selected = (cleanText(SM.map) == key), Order = i,
-            Callback = function()
-                SM.map = nm
-                saveSM()
-                SM.refreshMaps()
-                notify("เลือกด่าน: " .. nm, PT.Good, "check")
-            end,
-        })
-    end
-end
-sMap:Action({
-    Text = "สแกนลิฟต์ใหม่", Icon = "refresh-cw", Color = PT.Blue,
-    Callback = function()
-        scanMaps()
-        SM.refreshMaps()
-        notify(#SM.mapOrder > 0 and ("พบ " .. #SM.mapOrder .. " ด่าน") or "ยังไม่พบลิฟต์",
-            #SM.mapOrder > 0 and PT.Good or PT.Warn, "refresh-cw")
-    end,
-})
-
--- ---------- ลูปอัปเดต UI ----------
-task.spawn(function()
-    local lastMaps, lastCrate, sig = -100, -100, ""
-    while alive do
-        local now = os.clock()
-        if now - lastMaps > 3 then
-            lastMaps = now
-            if scanMaps() then SM.refreshMaps() end
+function Window:Minimize()
+    if self.State ~= "open" or self._destroyed then return end
+    self.State = "bubble"
+    local B = self.BubbleSize
+    local vp = self.M.VP
+    self._holder.Visible = true
+    self._hit.Visible = true
+    self:_clipOn()
+    -- ทุกอย่างเริ่มพร้อมกันทันที: แสงม่วงกวาดไปทางปุ่ม + หน้าต่างหดเข้าหาปุ่ม
+    self:_aimGradient(self:_bubbleCenterPx(), Vector2.new(vp.X / 2 + self.OX, vp.Y / 2 + self.OY))
+    self._sweep.Value = 0
+    tween(self._sweep, { Value = 1 }, 0.3, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+    self._edgeStroke.Transparency = 1
+    tween(self._edgeCorner, { CornerRadius = UDim.new(0, B / 2 - 1) }, 0.45, Enum.EasingStyle.Quint)
+    self.Win.BackgroundColor3 = T.Accent
+    self:_tweenWin({ Size = UDim2.fromOffset(B, B), Position = self:_bubblePos() }, 0.45, Enum.EasingStyle.Quint)
+    tween(self._corner, { CornerRadius = UDim.new(0, B / 2) }, 0.45, Enum.EasingStyle.Quint)
+    tween(self._coverCorner, { CornerRadius = UDim.new(0, B / 2) }, 0.45, Enum.EasingStyle.Quint)
+    tween(self._clipCorner, { CornerRadius = UDim.new(0, B / 2) }, 0.45, Enum.EasingStyle.Quint)
+    tween(self._bubbleIcon, { ImageTransparency = 0 }, 0.25)
+    tween(self._blackCorner, { CornerRadius = UDim.new(0, B / 2) }, 0.45, Enum.EasingStyle.Quint)
+    -- ให้แสงม่วงกวาดจบก่อน แล้วค่อยเฟดเป็นสีดำ
+    task.delay(0.3, function()
+        if self.State == "bubble" and not self._destroyed then
+            self.Win.BackgroundColor3 = Color3.new(0, 0, 0)
+            tween(self._black, { BackgroundTransparency = 0 }, 0.25, Enum.EasingStyle.Sine)
         end
-        if now - lastCrate > 5 then
-            lastCrate = now
-            scanCrate()
-            local names = {}
-            for _, v in pairs(SM.crate or {}) do names[#names + 1] = v end
-            table.sort(names)
-            local s = table.concat(names, ", ")
-            if s ~= sig then
-                sig = s
-                SM.refreshWant()
-                lblCrate.Text = (#names > 0) and ("ตู้ตอนนี้ (" .. #names .. "): " .. s) or "ตู้ตอนนี้: อ่านไม่ได้"
+    end)
+    task.delay(0.3, function()
+        if self.State == "bubble" and not self._destroyed then self.Canvas.Visible = false end
+    end)
+end
+
+function Window:Restore()
+    if self.State ~= "bubble" or self._destroyed then return end
+    self.State = "open"
+    local m = self.M
+    local ap, as, dp = self.Win.AbsolutePosition, self.Win.AbsoluteSize, self.Dock.AbsolutePosition
+    local bubbleC = Vector2.new(ap.X + as.X / 2 - dp.X, ap.Y + as.Y / 2 - dp.Y)
+    self._hit.Visible = false
+    tween(self._black, { BackgroundTransparency = 1 }, 0.12, Enum.EasingStyle.Sine)
+    tween(self._blackCorner, { CornerRadius = UDim.new(0, 14) }, 0.45, Enum.EasingStyle.Quint)
+    self:_aimGradient(bubbleC, Vector2.new(m.VP.X / 2 + self.OX, m.VP.Y / 2 + self.OY))
+    -- เริ่มพร้อมกันทันที: หน้าต่างขยาย + แสงม่วงถอยกลับไปทางปุ่ม เผยเมนูพร้อมกัน
+    self._sweep.Value = 1
+    self:_clipOn()
+    self.Canvas.Visible = true
+    task.delay(0.2, function()
+        if self.State == "open" and not self._destroyed then self.Win.BackgroundColor3 = T.Bg end
+    end)
+    self:_tweenWin({ Size = UDim2.fromOffset(m.W, m.H), Position = UDim2.new(0.5, self.OX, 0.5, self.OY) }, 0.45, Enum.EasingStyle.Quint)
+    tween(self._corner, { CornerRadius = UDim.new(0, 14) }, 0.45, Enum.EasingStyle.Quint)
+    tween(self._coverCorner, { CornerRadius = UDim.new(0, 14) }, 0.45, Enum.EasingStyle.Quint)
+    tween(self._clipCorner, { CornerRadius = UDim.new(0, 14) }, 0.45, Enum.EasingStyle.Quint)
+    self:_clipOff(0.55)
+    tween(self._bubbleIcon, { ImageTransparency = 1 }, 0.15)
+    tween(self._sweep, { Value = 0 }, 0.4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+    self._edgeStroke.Transparency = 1
+    tween(self._edgeCorner, { CornerRadius = UDim.new(0, 13) }, 0.45, Enum.EasingStyle.Quint)
+    task.delay(0.5, function()
+        if self.State == "open" and not self._destroyed then tween(self._edgeStroke, { Transparency = 0 }, 0.25) end
+    end)
+    task.delay(0.2, function()
+        if self.State == "open" and not self._destroyed then self._holder.Visible = false end
+    end)
+end
+
+function Window:Toggle()
+    if self.State == "open" then self:Minimize() elseif self.State == "bubble" then self:Restore() end
+end
+
+function Window:Maximize()
+    if self.State ~= "open" then return end
+    self.Maximized = not self.Maximized
+    self.OX, self.OY = 0, 0
+    self:Relayout(true)
+end
+
+function Window:ResetPosition()
+    self.OX, self.OY = 0, 0
+    if self.State == "open" then
+        self:_tweenWin({ Position = UDim2.new(0.5, 0, 0.5, 0) }, 0.5, Enum.EasingStyle.Quint)
+    end
+end
+
+function Window:SetStatus(text, color)
+    self.StatusLabel.Text = tostring(text)
+    if color then self.StatusDot.BackgroundColor3 = color end
+end
+
+function Window:Notify(a, b, c)
+    if self._destroyed then return end
+    local o = type(a) == "table" and a or { Text = a, Color = b, Duration = c }
+    local color = o.Color or T.Accent
+    local dur = math.max(0.5, o.Duration or 3)
+    self._toastN = self._toastN + 1
+
+    -- ไอคอนอัตโนมัติตามสี (ใส่ Icon = "ชื่อ" เพื่อเปลี่ยน หรือ Icon = false เพื่อซ่อน)
+    local icon = o.Icon
+    if icon == nil then
+        -- เดาจากโทนสี (ไม่ต้องตรงกับสีธีมเป๊ะ สีที่สคริปต์ส่งมาเองก็ได้ไอคอนถูก)
+        local h, s = color:ToHSV()
+        if s < 0.3 then icon = "bell"
+        elseif h < 0.04 or h > 0.93 then icon = "x" -- แดง
+        elseif h < 0.18 then icon = "alert-triangle" -- ส้ม/เหลือง
+        elseif h > 0.25 and h < 0.46 then icon = "check" -- เขียว
+        else icon = "bell" end
+    end
+    local hasIcon = icon ~= false
+
+    local wrap = new("Frame", {
+        Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = self._toastN,
+    }, self._toasts)
+
+    -- การ์ด: พื้นไล่เฉดโทนสีแจ้งเตือนจางๆ + ขอบสี
+    local card = new("Frame", {
+        Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, Position = UDim2.new(1.2, 0, 0, 0),
+        BackgroundColor3 = WHITE, BorderSizePixel = 0,
+    }, wrap)
+    corner(card, 12)
+    stroke(card, color, 1, 0.55)
+    new("UIGradient", { Color = ColorSequence.new(T.Card:Lerp(color, 0.2), T.Card), Rotation = 0 }, card)
+
+    -- แถบสีด้านซ้าย (เว้นจากขอบบน/ล่าง ไม่ชนมุมโค้ง)
+    local pill = new("Frame", {
+        Size = UDim2.new(0, 3, 1, -20), Position = UDim2.new(0, 7, 0, 10), BackgroundColor3 = color, BorderSizePixel = 0,
+    }, card)
+    corner(pill, 2)
+
+    -- เนื้อหา: [ไอคอน | ข้อความ] แล้วตามด้วยเส้นนับเวลา อยู่ในเลย์เอาต์เดียวกัน (ภายใต้ padding) -> ไม่มีทางล้นออกนอกการ์ด
+    local body = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1 }, card)
+    pad(body, 18, 11, 14, 11)
+    vlist(body, 8)
+
+    local row = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = 1 }, body)
+    new("UIListLayout", {
+        FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder,
+        VerticalAlignment = Enum.VerticalAlignment.Center,
+    }, row)
+
+    if hasIcon then
+        local badge = new("Frame", {
+            Size = UDim2.fromOffset(28, 28), BackgroundColor3 = color, BackgroundTransparency = 0.82, BorderSizePixel = 0, LayoutOrder = 1,
+        }, row)
+        corner(badge, 8)
+        stroke(badge, color, 1, 0.65)
+        iconLabel(badge, icon, 16, color, nil, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5) })
+    end
+
+    local txt = new("Frame", {
+        Size = UDim2.new(1, hasIcon and -38 or 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = 2,
+    }, row)
+    vlist(txt, 2)
+    if o.Title then
+        label(txt, { Text = o.Title, Font = F_BOLD, TextSize = 13, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, TextWrapped = true, LayoutOrder = 1 })
+    end
+    label(txt, {
+        Text = tostring(o.Text or ""), Font = F_MED, TextSize = 12, TextColor3 = o.Title and T.Muted or T.Text,
+        Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, TextWrapped = true, LayoutOrder = 2,
+    })
+
+    -- เส้นนับเวลา: ราง + แท่งเต็มที่หดจากขวาไปซ้าย (อยู่ในกรอบของราง ไม่ล้น)
+    local track = new("Frame", {
+        Size = UDim2.new(1, 0, 0, 3), BackgroundColor3 = color, BackgroundTransparency = 0.86, BorderSizePixel = 0, LayoutOrder = 2,
+    }, body)
+    corner(track, 2)
+    local fill = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = WHITE, BorderSizePixel = 0 }, track)
+    corner(fill, 2)
+    new("UIGradient", { Color = ColorSequence.new(color, color:Lerp(WHITE, 0.5)), Rotation = 0 }, fill)
+    tween(fill, { Size = UDim2.new(0, 0, 1, 0) }, dur, Enum.EasingStyle.Linear)
+
+    -- แสงสีขาวเอียงวิ่งตัดผ่านการ์ด (ใช้ UIGradient บนเฟรมที่มีมุมโค้งเท่าการ์ด -> ไม่เลยขอบ)
+    local shine = new("Frame", {
+        Size = UDim2.fromScale(1, 1), BackgroundColor3 = WHITE, BorderSizePixel = 0, Active = false, ZIndex = 10,
+    }, card)
+    corner(shine, 12)
+    local sg = new("UIGradient", {
+        Rotation = 24, Offset = Vector2.new(-1, 0),
+        Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(0.34, 1),
+            NumberSequenceKeypoint.new(0.44, 0.9),
+            NumberSequenceKeypoint.new(0.50, 0.7),
+            NumberSequenceKeypoint.new(0.56, 0.9),
+            NumberSequenceKeypoint.new(0.60, 1),
+            NumberSequenceKeypoint.new(0.63, 1),
+            NumberSequenceKeypoint.new(0.65, 0.78),
+            NumberSequenceKeypoint.new(0.67, 1),
+            NumberSequenceKeypoint.new(1, 1),
+        }),
+    }, shine)
+    task.spawn(function()
+        task.wait(0.3)
+        while wrap.Parent do
+            sg.Offset = Vector2.new(-1, 0)
+            tween(sg, { Offset = Vector2.new(1, 0) }, 0.95, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+            task.wait(2.5) -- วิ่ง 0.95 วิ แล้วเว้นช่วงก่อนวิ่งรอบใหม่
+        end
+    end)
+
+    tween(card, { Position = UDim2.new(0, 0, 0, 0) }, 0.55, Enum.EasingStyle.Back)
+    -- จำกัดไม่เกิน 4 อัน
+    local kids = {}
+    for _, k in ipairs(self._toasts:GetChildren()) do
+        if k:IsA("Frame") then kids[#kids + 1] = k end
+    end
+    table.sort(kids, function(x, y) return x.LayoutOrder < y.LayoutOrder end)
+    while #kids > 4 do table.remove(kids, 1):Destroy() end
+    task.delay(dur, function()
+        if wrap.Parent then
+            tween(card, { Position = UDim2.new(1.2, 0, 0, 0) }, 0.4, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+            task.wait(0.45)
+            if wrap.Parent then wrap:Destroy() end
+        end
+    end)
+end
+
+-- กล่องยืนยัน: win:Dialog({ Title, Text, Buttons = { {Text, Color, Callback}, ... }, Dismissable = true })
+function Window:Dialog(o)
+    if self._destroyed then return end
+    o = o or {}
+    local buttons = o.Buttons or { { Text = "OK" } }
+    local overlay = new("TextButton", {
+        Text = "", AutoButtonColor = false, Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0),
+        BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 400,
+    }, self.Dock)
+    local vp = self.M and self.M.VP or Vector2.new(800, 600)
+    local card = new("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+        Size = UDim2.fromOffset(math.min(330, vp.X - 40), 0), AutomaticSize = AY,
+        BackgroundColor3 = T.Card, BorderSizePixel = 0, Active = true,
+    }, overlay)
+    corner(card, 16)
+    stroke(card, T.Line, 1, 0)
+    pad(card, 18, 18, 18, 16)
+    vlist(card, 10)
+    local dsc = new("UIScale", { Scale = 0.86 }, card)
+    if o.Title then
+        label(card, { Text = o.Title, Font = F_BOLD, TextSize = 16, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, TextWrapped = true, LayoutOrder = 1 })
+    end
+    if o.Text then
+        label(card, {
+            Text = tostring(o.Text), Font = F_MED, TextSize = 13, TextColor3 = T.Muted, Size = UDim2.new(1, 0, 0, 0),
+            AutomaticSize = AY, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, LayoutOrder = 2,
+        })
+    end
+    local row = new("Frame", { Size = UDim2.new(1, 0, 0, 36), BackgroundTransparency = 1, LayoutOrder = 3 }, card)
+    new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, row)
+    local closed = false
+    local function close()
+        if closed then return end
+        closed = true
+        tween(overlay, { BackgroundTransparency = 1 }, 0.2, Enum.EasingStyle.Sine)
+        tween(dsc, { Scale = 0.9 }, 0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+        task.delay(0.25, function() overlay:Destroy() end)
+    end
+    local n = #buttons
+    for i, b in ipairs(buttons) do
+        makeButton(row, {
+            Text = b.Text or "OK", Icon = b.Icon, Color = b.Color or ((i == n) and T.Accent or T.Elem),
+            Size = UDim2.new(1 / n, -(8 * (n - 1)) / n, 1, 0), LayoutOrder = i,
+            Callback = function()
+                close()
+                safe(b.Callback)
+            end,
+        })
+    end
+    if o.Dismissable then overlay.Activated:Connect(close) end
+    tween(overlay, { BackgroundTransparency = 0.5 }, 0.25, Enum.EasingStyle.Sine)
+    tween(dsc, { Scale = 1 }, 0.5, Enum.EasingStyle.Back)
+    return { Close = close }
+end
+
+function Window:Destroy(instant)
+    if self._destroyed then return end
+    self._destroyed = true
+    for _, c in ipairs(self._conns) do pcall(function() c:Disconnect() end) end
+    local genv = (getgenv and getgenv()) or _G
+    if genv.__XenonUI == self then genv.__XenonUI = nil end
+    if instant then
+        pcall(function() self.Gui:Destroy() end)
+        return
+    end
+    pcall(function()
+        if self._winTween then self._winTween:Cancel() end
+        self._veil.Visible = true
+        tween(self._veil, { BackgroundTransparency = 0 }, 0.3, Enum.EasingStyle.Sine)
+        if self.State ~= "bubble" then
+            tween(self.Win, { Size = UDim2.fromOffset(self.M.W * 0.9, self.M.H * 0.9) }, 0.3, Enum.EasingStyle.Quint)
+        end
+    end)
+    task.delay(0.35, function() pcall(function() self.Gui:Destroy() end) end)
+end
+
+function Window:Close()
+    if self.OnClose then safe(self.OnClose) end
+    self:Destroy()
+end
+
+-- =====================================================================
+-- CreateWindow
+-- =====================================================================
+function UI:CreateWindow(opts)
+    opts = opts or {}
+    local genv = (getgenv and getgenv()) or _G
+    if genv.__XenonUI and genv.__XenonUI.Destroy then
+        pcall(function() genv.__XenonUI:Destroy(true) end)
+    end
+
+    local self = setmetatable({}, Window)
+    genv.__XenonUI = self
+    self.Title = opts.Title or "Xenon Hub"
+    self.Subtitle = opts.Subtitle or ""
+    self.OnClose = opts.OnClose
+    self.ToggleKey = (opts.ToggleKey == nil) and Enum.KeyCode.RightShift or opts.ToggleKey
+    if opts.Accent then T.Accent = opts.Accent end
+    self.Tabs, self.TabList, self.Categories = {}, {}, {}
+    self.State = "opening"
+    self.Maximized = false
+    self.OX, self.OY = 0, 0
+    self.BubbleSide, self.BubbleY, self.BubbleSize = "left", 0.5, 54
+    self._conns, self._catSeq, self._toastN = {}, 0, 0
+    self._fadeText = {}
+
+    -- ที่วาง GUI: gethui -> CoreGui -> PlayerGui
+    local parent
+    local okH, h = pcall(function() return gethui and gethui() end)
+    if okH and typeof(h) == "Instance" then parent = h end
+    if not parent then
+        local okC, cg = pcall(function() return game:GetService("CoreGui") end)
+        if okC and cg then
+            local probe = Instance.new("Folder")
+            local okW = pcall(function() probe.Parent = cg end)
+            if okW and probe.Parent == cg then parent = cg end
+            probe:Destroy()
+        end
+    end
+    parent = parent or Players.LocalPlayer:WaitForChild("PlayerGui")
+    local guiName = opts.Name or "XenonHubUI"
+    local old = parent:FindFirstChild(guiName)
+    if old then old:Destroy() end
+
+    local gui = new("ScreenGui", {
+        Name = guiName, ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 999, IgnoreGuiInset = true,
+    })
+    gui.Parent = parent
+    self.Gui = gui
+    local dock = new("Frame", { Name = "Dock", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0 }, gui)
+    self.Dock = dock
+
+    -- หน้าต่าง (Frame ธรรมดา ไม่ใช้ CanvasGroup เพื่อให้ตัวอักษรคมชัด 100%)
+    local win = new("Frame", {
+        Name = "Window", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(600, 380),
+        BackgroundColor3 = T.Bg, BorderSizePixel = 0, ClipsDescendants = true,
+    }, dock)
+    self.Win = win
+    self._corner = corner(win, 14)
+    self._veil = new("Frame", { Name = "Veil", Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Bg, BorderSizePixel = 0, ZIndex = 300 }, win)
+    corner(self._veil, 14)
+
+    -- ตัวตัดขอบมน "เฉพาะตอนย่อ/ขยาย": ย้ายเมนูเข้ามาในนี้ชั่วคราวเพื่อให้มุมไม่โผล่พ้นขอบโค้ง
+    -- (ตอนนิ่งเมนูอยู่นอกตัวนี้ จึงยังคมชัดเต็มที่)
+    self._clip = new("CanvasGroup", {
+        Name = "TransitionClip", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 1,
+    }, win)
+    self._clipCorner = corner(self._clip, 14)
+
+    local canvas = new("Frame", {
+        Name = "Canvas", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(860, 500),
+        BackgroundTransparency = 1, BorderSizePixel = 0,
+    }, win)
+    self.Canvas = canvas
+    self._scale = new("UIScale", { Scale = 1 }, canvas)
+
+    -- ---------- Sidebar ----------
+    local sidebar = new("Frame", { Name = "Sidebar", Size = UDim2.new(0, SW_EXP, 1, 0), BackgroundColor3 = T.Side, BorderSizePixel = 0, ZIndex = 2 }, canvas)
+    self._sidebar = sidebar
+    corner(sidebar, 14)
+    new("Frame", { Size = UDim2.new(0, 24, 1, 0), Position = UDim2.new(1, -24, 0, 0), BackgroundColor3 = T.Side, BorderSizePixel = 0 }, sidebar)
+    new("Frame", { Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new(1, -1, 0, 0), BackgroundColor3 = T.Line, BorderSizePixel = 0 }, sidebar)
+
+    local head = new("Frame", { Size = UDim2.new(1, 0, 0, 68), BackgroundTransparency = 1, Active = true }, sidebar)
+    -- โลโก้: พื้นหลังโปร่งใส (ถ้าภาพมีพื้นดำฝังในไฟล์ ต้องใช้ PNG โปร่งใส)
+    local logo = new("Frame", {
+        Size = UDim2.fromOffset(38, 38), Position = UDim2.fromOffset(14, 15), BackgroundTransparency = 1, BorderSizePixel = 0, ClipsDescendants = true,
+    }, head)
+    corner(logo, 11)
+    iconLabel(logo, opts.Icon or 70506555218420, 38, WHITE, nil, CENTER)
+    local tl = label(head, {
+        Text = self.Title, Font = F_BOLD, TextSize = 15, Position = UDim2.fromOffset(62, 15), Size = UDim2.new(1, -70, 0, 20),
+        TextTruncate = Enum.TextTruncate.AtEnd,
+    })
+    local sl = label(head, {
+        Text = self.Subtitle, TextSize = 11, TextColor3 = T.Muted, Position = UDim2.fromOffset(62, 35), Size = UDim2.new(1, -70, 0, 16),
+        TextTruncate = Enum.TextTruncate.AtEnd,
+    })
+    self._fadeText[#self._fadeText + 1] = tl
+    self._fadeText[#self._fadeText + 1] = sl
+
+    local tabScroll = new("ScrollingFrame", {
+        Position = UDim2.fromOffset(0, 68), Size = UDim2.new(1, 0, 1, -68 - 62), BackgroundTransparency = 1, BorderSizePixel = 0,
+        ScrollBarThickness = 0, CanvasSize = UDim2.new(), AutomaticCanvasSize = AY, ScrollingDirection = Enum.ScrollingDirection.Y,
+    }, sidebar)
+    pad(tabScroll, 9, 2, 9, 8)
+    vlist(tabScroll, 3)
+    self._tabScroll = tabScroll
+
+    -- user card
+    local user = new("Frame", {
+        AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, 0), Size = UDim2.new(1, 0, 0, 62), BackgroundTransparency = 1,
+    }, sidebar)
+    new("Frame", { Size = UDim2.new(1, -1, 0, 1), BackgroundColor3 = T.Line, BorderSizePixel = 0 }, user)
+    local ucard = new("Frame", {
+        Position = UDim2.fromOffset(9, 9), Size = UDim2.new(1, -19, 1, -18), BackgroundColor3 = T.Card, BorderSizePixel = 0,
+    }, user)
+    corner(ucard, 11)
+    local lp = Players.LocalPlayer
+    local avatar = new("ImageLabel", {
+        Size = UDim2.fromOffset(30, 30), AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 9, 0.5, 0),
+        BackgroundColor3 = T.Elem, BorderSizePixel = 0, Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(lp and lp.UserId or 1) .. "&w=48&h=48",
+    }, ucard)
+    corner(avatar, 15)
+    local uname = label(ucard, {
+        Text = mask(lp and lp.Name), Font = F_MED, TextSize = 12, TextColor3 = T.Text, Position = UDim2.fromOffset(48, 0),
+        Size = UDim2.new(1, -78, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd,
+    })
+    self._fadeText[#self._fadeText + 1] = uname
+    self._userChevron = iconLabel(ucard, "chevrons-up-down", 15, T.Muted, nil, {
+        AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -9, 0.5, 0),
+    })
+
+    -- ---------- Main ----------
+    local main = new("Frame", {
+        Name = "Main", Position = UDim2.fromOffset(SW_EXP, 0), Size = UDim2.new(1, -SW_EXP, 1, 0), BackgroundColor3 = T.Bg,
+        BorderSizePixel = 0, ClipsDescendants = true,
+    }, canvas)
+    self._main = main
+    corner(main, 14)
+    new("Frame", { Size = UDim2.new(0, 24, 1, 0), BackgroundColor3 = T.Bg, BorderSizePixel = 0 }, main)
+
+    local top = new("Frame", { Name = "Top", Size = UDim2.new(1, 0, 0, TOP_H), BackgroundColor3 = T.Top, BorderSizePixel = 0, ZIndex = 3, Active = true }, main)
+    corner(top, 14)
+    new("Frame", { Size = UDim2.new(0, 24, 1, 0), BackgroundColor3 = T.Top, BorderSizePixel = 0 }, top)
+    new("Frame", { Size = UDim2.new(1, 0, 0, 24), Position = UDim2.new(0, 0, 1, -24), BackgroundColor3 = T.Top, BorderSizePixel = 0 }, top)
+    new("Frame", { Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.Line, BorderSizePixel = 0 }, top)
+
+    local tog = new("TextButton", {
+        Text = "", AutoButtonColor = false, BackgroundColor3 = T.Elem, BackgroundTransparency = 1, Size = UDim2.fromOffset(32, 32),
+        Position = UDim2.new(0, 12, 0.5, -16), BorderSizePixel = 0,
+    }, top)
+    corner(tog, 9)
+    local togIcon = iconLabel(tog, "panel-left", 18, T.Muted, "=", CENTER)
+    tog.MouseEnter:Connect(function()
+        tween(tog, { BackgroundTransparency = 0.3 }, 0.15)
+        tween(togIcon, { ImageColor3 = T.Text }, 0.15)
+    end)
+    tog.MouseLeave:Connect(function()
+        tween(tog, { BackgroundTransparency = 1 }, 0.2)
+        tween(togIcon, { ImageColor3 = T.Muted }, 0.2)
+    end)
+    tog.Activated:Connect(function()
+        self._userCollapse = not self.SidebarCollapsed
+        self:SetSidebar(self._userCollapse)
+        self:Relayout(true)
+    end)
+    new("Frame", { Size = UDim2.fromOffset(1, 18), Position = UDim2.new(0, 52, 0.5, -9), BackgroundColor3 = T.Line, BorderSizePixel = 0 }, top)
+    self._crumb = label(top, {
+        Text = "", RichText = true, Font = F_MED, TextSize = 13, TextColor3 = T.Text, Position = UDim2.fromOffset(62, 0),
+        Size = UDim2.new(1, -250, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd,
+    })
+
+    -- ไฟจราจร: แดง = ปิด, เหลือง = ย่อเป็นวงกลม, เขียว = ขยาย/คืนขนาด
+    local function light(color, xr, cb)
+        local hit = new("TextButton", {
+            Text = "", AutoButtonColor = false, BackgroundTransparency = 1, Size = UDim2.fromOffset(24, 24),
+            AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, xr, 0.5, 0),
+        }, top)
+        local dot = new("Frame", {
+            Size = UDim2.fromOffset(13, 13), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+            BackgroundColor3 = color, BorderSizePixel = 0,
+        }, hit)
+        corner(dot, 7)
+        hit.MouseEnter:Connect(function() tween(dot, { Size = UDim2.fromOffset(17, 17) }, 0.15, Enum.EasingStyle.Back) end)
+        hit.MouseLeave:Connect(function() tween(dot, { Size = UDim2.fromOffset(13, 13) }, 0.2) end)
+        hit.Activated:Connect(cb)
+    end
+    light(Color3.fromRGB(255, 95, 87), -74, function() self:Close() end)
+    light(Color3.fromRGB(254, 188, 46), -46, function() self:Minimize() end)
+    light(Color3.fromRGB(40, 200, 64), -18, function() self:Maximize() end)
+
+    -- status pill
+    local pill = new("TextButton", {
+        Text = "", AutoButtonColor = false, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -104, 0.5, 0),
+        Size = UDim2.fromOffset(176, 28), BackgroundColor3 = T.Elem, BorderSizePixel = 0,
+    }, top)
+    corner(pill, 14)
+    self._pill = pill
+    self.StatusDot = new("Frame", {
+        Size = UDim2.fromOffset(8, 8), Position = UDim2.new(0, 12, 0.5, -4), BackgroundColor3 = T.Muted, BorderSizePixel = 0,
+    }, pill)
+    corner(self.StatusDot, 4)
+    self.StatusLabel = label(pill, {
+        Text = "Ready", TextSize = 12, TextColor3 = T.Muted, Position = UDim2.fromOffset(28, 0), Size = UDim2.new(1, -36, 1, 0),
+        TextTruncate = Enum.TextTruncate.AtEnd,
+    })
+    pill.Activated:Connect(function() self:Notify({ Text = self.StatusLabel.Text, Duration = 5 }) end)
+
+    local pages = new("Frame", {
+        Position = UDim2.fromOffset(0, TOP_H), Size = UDim2.new(1, 0, 1, -TOP_H), BackgroundTransparency = 1, ClipsDescendants = true,
+    }, main)
+    self._pages = pages
+    self._curtain = new("Frame", {
+        Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Bg, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 10,
+    }, pages)
+
+    -- ---------- layer สำหรับโหมดวงกลม ----------
+    self._cover = new("Frame", {
+        Name = "Cover", Size = UDim2.fromScale(1, 1), BackgroundColor3 = WHITE, BackgroundTransparency = 0, BorderSizePixel = 0, ZIndex = 50,
+    }, win)
+    self._coverCorner = corner(self._cover, 14)
+    -- ไล่สีแบบกวาดไปทางตำแหน่งปุ่มวงกลม
+    -- t = 0 ฝั่งไกลปุ่ม, t = 1 ฝั่งปุ่ม | หน้ากวาดเคลื่อนจากไกล -> ปุ่ม
+    -- หลังหน้ากวาด = ม่วงทึบ, ตรงขอบหน้ากวาด = ม่วงเข้ม/ดำที่ค่อยๆ จางใส (เห็นเมนูด้านในทีละน้อย)
+    self._grad = new("UIGradient", { Rotation = 0 }, self._cover)
+    local PAL = {
+        Color3.fromRGB(176, 104, 255), Color3.fromRGB(104, 84, 238), Color3.fromRGB(44, 26, 104),
+    }
+    local function palette(t)
+        if t < 0.5 then return PAL[1]:Lerp(PAL[2], t / 0.5) end
+        return PAL[2]:Lerp(PAL[3], (t - 0.5) / 0.5)
+    end
+    local BLACK = Color3.fromRGB(6, 4, 14)
+    local GLOW = Color3.fromRGB(226, 196, 255)
+    self._coverStroke = stroke(self._cover, Color3.fromRGB(190, 140, 255), 2.5, 1)
+    local function setSweep(p)
+        local N, w = 10, 0.6
+        local cols, trs = {}, {}
+        for i = 0, N - 1 do
+            local t = i / (N - 1)
+            local q = clamp((p * (1 + w) - t) / w, 0, 1)
+            q = q * q * (3 - 2 * q) -- smoothstep
+            -- เรืองแสง: ตรงขอบหน้ากวาด (q กลางๆ) สว่างขึ้นเป็นแถบแสง
+            local g = 4 * q * (1 - q)
+            local col = BLACK:Lerp(palette(t), q):Lerp(GLOW, g * 0.8)
+            cols[#cols + 1] = ColorSequenceKeypoint.new(t, col)
+            trs[#trs + 1] = NumberSequenceKeypoint.new(t, clamp(1 - q, 0, 1))
+        end
+        self._grad.Color = ColorSequence.new(cols)
+        self._grad.Transparency = NumberSequence.new(trs)
+        -- ขอบเรืองแสงรอบหน้าต่างสว่างสุดกลางการกวาด
+        self._coverStroke.Transparency = 1 - math.sin(math.pi * clamp(p, 0, 1)) * 0.85
+    end
+    self._sweep = new("NumberValue", { Value = 0 }, self._cover)
+    self._sweep.Changed:Connect(setSweep)
+    setSweep(0)
+    local edge = new("Frame", {
+        Name = "Edge", Size = UDim2.new(1, -2, 1, -2), Position = UDim2.fromOffset(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 52,
+    }, win)
+    self._edgeCorner = corner(edge, 13)
+    self._edgeStroke = stroke(edge, T.Line, 1.5, 0)
+    -- เลเยอร์สีดำของวงกลมตอนนิ่ง (อยู่เหนือการ์ดสีม่วง ใต้ไอคอน)
+    self._black = new("Frame", {
+        Name = "BubbleBlack", Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0),
+        BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 51,
+    }, win)
+    self._blackCorner = corner(self._black, 14)
+    self._holder = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Visible = false, ZIndex = 55 }, win)
+    self._bubbleIcon = iconLabel(self._holder, opts.Icon or 95338661062378, 40, WHITE, nil, CENTER)
+    self._bubbleIcon.ImageTransparency = 1
+    self._hit = new("TextButton", {
+        Text = "", AutoButtonColor = false, BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 100, Visible = false,
+    }, win)
+
+    -- toast
+    local toasts = new("Frame", {
+        AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -14, 0, 14), Size = UDim2.new(0, 300, 1, -28),
+        BackgroundTransparency = 1, ZIndex = 200,
+    }, dock)
+    new("UIListLayout", {
+        Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder, HorizontalAlignment = Enum.HorizontalAlignment.Right,
+    }, toasts)
+    self._toasts = toasts
+
+    -- ---------- drag: หน้าต่าง (นุ่มด้วย lerp ตามเฟรม ไม่กระตุกตามอัตราส่งอินพุต) ----------
+    local sx, sy = 0, 0
+    local curX, curY, tgtX, tgtY = 0, 0, 0, 0
+    local dragOn = false
+    local winDrag = {
+        Start = function()
+            if self._winTween then self._winTween:Cancel() end
+            -- เริ่มจากตำแหน่งที่เห็นจริงตอนนี้ (กรณีจับตอนกำลังเด้งกลับ)
+            local p = win.Position
+            sx, sy = math.floor(p.X.Offset + 0.5), math.floor(p.Y.Offset + 0.5)
+            self.OX, self.OY = sx, sy
+            curX, curY, tgtX, tgtY = sx, sy, sx, sy
+            dragOn = true
+            tween(self._edgeStroke, { Color = T.Accent }, 0.15) -- ขอบเรืองสีหลักตอนลาก
+        end,
+        Move = function(dx, dy)
+            if self.State ~= "open" then return end
+            local m = self.M
+            local maxX = m.VP.X / 2 + m.W / 2 - 90
+            local minY = -(m.VP.Y / 2 - m.H / 2)
+            local maxY = m.VP.Y / 2 - 50
+            tgtX = clamp(sx + dx, -maxX, maxX)
+            tgtY = clamp(sy + dy, minY, maxY)
+        end,
+        Armed = function()
+            -- กดค้างครบเวลาแล้ว: ขอบหน้าต่างเรืองสีหลัก + สั่นเบาๆ ให้รู้ว่าลากได้แล้ว
+            if self.State ~= "open" then return end
+            tween(self._edgeStroke, { Color = T.Accent }, 0.15)
+            local s = self._scale
+            tween(s, { Scale = s.Scale * 1.015 }, 0.12, Enum.EasingStyle.Quad)
+            task.delay(0.12, function()
+                if not self._destroyed then tween(s, { Scale = self.M.S }, 0.25, Enum.EasingStyle.Back) end
+            end)
+        end,
+        End = function(moved)
+            dragOn = false
+            tween(self._edgeStroke, { Color = T.Line }, 0.25)
+            if self.State ~= "open" then return end
+            if UI.DragReturn then
+                -- ปล่อยแล้วค่อยๆ เด้งกลับที่เดิม (กลางจอ)
+                self.OX, self.OY = 0, 0
+                self:_tweenWin({ Position = UDim2.new(0.5, 0, 0.5, 0) }, 0.6, Enum.EasingStyle.Quint)
+            elseif moved then
+                self.OX, self.OY = math.floor(tgtX + 0.5), math.floor(tgtY + 0.5)
+                self:_tweenWin({ Position = UDim2.new(0.5, self.OX, 0.5, self.OY) }, 0.22, Enum.EasingStyle.Quint)
             end
-        end
-        local left = 1800 - (os.time() % 1800)
-        lblReset.Text = string.format("ตู้รีเซ็ตในอีก %02d:%02d", left // 60, left % 60)
-        lblState.Text = "สถานะ: " .. SM.state
-        task.wait(0.5)
-    end
-end)
+        end,
+    }
+    self:_conn(RunService.RenderStepped:Connect(function(dt)
+        if not dragOn or self.State ~= "open" then return end
+        local k = 1 - math.exp(-dt * 26)
+        curX = curX + (tgtX - curX) * k
+        curY = curY + (tgtY - curY) * k
+        self.OX, self.OY = math.floor(curX + 0.5), math.floor(curY + 0.5)
+        win.Position = UDim2.new(0.5, self.OX, 0.5, self.OY)
+    end))
+    self:_drag(top, winDrag, UI.DragHoldTime)
+    self:_drag(head, winDrag, UI.DragHoldTime)
 
-SM.refreshWant()
-SM.refreshMode()
-scanMaps()
-SM.refreshMaps()
-if SM.on then SM.start() end
+    -- ---------- drag + แตะ: วงกลม ----------
+    local cx, cy = 0, 0
+    self:_drag(self._hit, {
+        Start = function()
+            if self._winTween then self._winTween:Cancel() end
+            local ap, as, dp = win.AbsolutePosition, win.AbsoluteSize, dock.AbsolutePosition
+            cx, cy = ap.X + as.X / 2 - dp.X, ap.Y + as.Y / 2 - dp.Y
+            tween(self._black, { BackgroundColor3 = Color3.fromRGB(44, 44, 54) }, 0.1)
+        end,
+        Move = function(dx, dy)
+            local vp = self.M.VP
+            local R = self.BubbleSize / 2
+            win.Position = UDim2.fromOffset(clamp(cx + dx, R, vp.X - R), clamp(cy + dy, R, vp.Y - R))
+        end,
+        End = function(moved)
+            tween(self._black, { BackgroundColor3 = Color3.new(0, 0, 0) }, 0.2)
+            if not moved then
+                self:Restore()
+                return
+            end
+            local vp = self.M.VP
+            local pos = win.Position
+            self.BubbleSide = (pos.X.Offset < vp.X / 2) and "left" or "right"
+            self.BubbleY = pos.Y.Offset / vp.Y
+            self:_tweenWin({ Position = self:_bubblePos() }, 0.5, Enum.EasingStyle.Quint)
+        end,
+    })
+
+    -- ปุ่มลัด + จอเปลี่ยนขนาด
+    if self.ToggleKey then
+        self:_conn(UserInputService.InputBegan:Connect(function(input, gp)
+            if not gp and input.KeyCode == self.ToggleKey then self:Toggle() end
+        end))
+    end
+    local cam = workspace.CurrentCamera
+    if cam then
+        self:_conn(cam:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+            if not self._destroyed then self:Relayout(true) end
+        end))
+    end
+
+    -- เริ่มต้น + แอนิเมชันเปิด
+    self.SidebarCollapsed = false
+    self:Relayout(false)
+    local m = self.M
+    if UI.IntroBubble ~= false then
+        -- ผุดเป็นวงกลมก่อน แล้วขยายเป็นหน้าต่างด้วยแอนิเมชันเดียวกับตอนกดขยาย (Restore)
+        local B = self.BubbleSize
+        self.State = "bubble"
+        self._veil.Visible = false
+        self._veil.BackgroundTransparency = 1
+        self._holder.Visible = true
+        self._hit.Visible = true
+        self:_clipOn()
+        self.Canvas.Visible = false
+        win.BackgroundColor3 = Color3.new(0, 0, 0)          -- เดิมเป็น T.Accent
+        self._blackCorner.CornerRadius = UDim.new(0, B / 2)
+        self._black.BackgroundTransparency = 0
+        self._corner.CornerRadius = UDim.new(0, B / 2)
+        self._coverCorner.CornerRadius = UDim.new(0, B / 2)
+        self._clipCorner.CornerRadius = UDim.new(0, B / 2)
+        self._edgeCorner.CornerRadius = UDim.new(0, B / 2 - 1)
+        self._edgeStroke.Transparency = 1
+        self._sweep.Value = 1
+        self._bubbleIcon.ImageTransparency = 0
+        win.Position = self:_bubblePos()
+        win.Size = UDim2.fromOffset(0, 0)
+        self:_tweenWin({ Size = UDim2.fromOffset(B, B) }, 0.3, Enum.EasingStyle.Back)
+        task.delay(0.38, function()
+            if not self._destroyed and self.State == "bubble" and not UI._dragLock then self:Restore() end
+        end)
+        return self
+    end
+    win.Size = UDim2.fromOffset(m.W * 0.9, m.H * 0.9)
+    self:_tweenWin({ Size = UDim2.fromOffset(m.W, m.H) }, 0.6, Enum.EasingStyle.Back)
+    tween(self._veil, { BackgroundTransparency = 1 }, 0.4, Enum.EasingStyle.Sine)
+    task.delay(0.45, function() if self._veil then self._veil.Visible = false end end)
+    self.State = "open"
+    return self
 end
+
+return UI
