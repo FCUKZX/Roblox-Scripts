@@ -8,7 +8,7 @@
     - แอนิเมชัน: เปิด/ย่อ/ขยาย, สลับแท็บ, สวิตช์, ปุ่ม, Toast
     - v2.0: ปุ่มยุบตามจุดที่นิ้วกด + Ripple, ลากหน้าต่างแบบนุ่ม (lerp), เลื่อนแบบ iOS (ยางยืด)
             คอนโทรลใหม่: Slider, Dropdown (เดี่ยว/หลายตัวเลือก), Keybind, ColorPicker, Progress,
-            Divider, Paragraph, Section พับได้ (Collapsible), Dialog ยืนยัน
+            Divider, Paragraph, Image (รูปภาพ), Section พับได้ (Collapsible), Dialog ยืนยัน
 
     วิธีเรียกใช้ผ่าน Git:
         local UI = loadstring(game:HttpGet("https://raw.githubusercontent.com/USER/REPO/main/XenonUI.lua"))()
@@ -22,6 +22,11 @@
         1234567890 / "rbxassetid://1234567890"   ไอคอน ID ของคุณเอง
         {id = 123, offset = Vector2.new(0, 0), size = Vector2.new(48, 48)}   สไปรต์ชีต
     ผูกชื่อกับ ID ของตัวเอง:  UI.CustomIcons["play"] = 1234567890
+
+    รูปภาพ (ไม่ใช่ไอคอน ภาพเต็มขนาดจริง): sec:Image({ Title = "Banner", Image = 1234567890, Height = 160, ScaleType = "Fit", Radius = 10 })
+        Image รับได้: asset id / "rbxassetid://..." / "rbxthumb://..." / URL "https://..."
+        (URL ต้องใช้ executor ที่มี writefile และ getcustomasset ระบบจะดาวน์โหลดแล้วแสดงให้เอง)
+        ScaleType: "Fit" (เห็นทั้งรูป) / "Crop" (เติมเต็มกรอบ) / "Stretch" / "Tile"
 ]]
 
 local Players = game:GetService("Players")
@@ -968,6 +973,139 @@ function Section:Paragraph(o)
         AutomaticSize = AY, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, LayoutOrder = 2, RichText = o.RichText or false,
     })
     return { Row = f, Title = tl, Body = bl, SetText = function(t) bl.Text = tostring(t) end }
+end
+
+-- =====================================================================
+-- รูปภาพ (ไม่ใช่ไอคอน) = แสดงรูปเต็มขนาดจริง ไม่ผ่านระบบไอคอน/Lucide
+-- =====================================================================
+UI.ImageCache = {}
+local IMG_SCALE = {
+    Fit = Enum.ScaleType.Fit, Crop = Enum.ScaleType.Crop,
+    Stretch = Enum.ScaleType.Stretch, Tile = Enum.ScaleType.Tile,
+}
+
+local function hashStr(s)
+    local h = 5381
+    for i = 1, #s do h = (h * 33 + string.byte(s, i)) % 4294967296 end
+    return string.format("%08x", h)
+end
+
+local function imageExt(url)
+    local path = string.match(url, "^[^?#]*") or url
+    local ext = string.lower(string.match(path, "%.(%w+)$") or "")
+    if ext == "jpg" or ext == "jpeg" or ext == "tga" then return ext end
+    return "png"
+end
+
+-- URL -> ดาวน์โหลดเก็บเป็นไฟล์ในเครื่อง -> asset ที่ ImageLabel ใช้ได้
+-- ต้องใช้ executor ที่มี writefile และ getcustomasset (หรือ getsynasset)
+local function fileAsset(url)
+    local writeFn = writefile
+    local assetFn = getcustomasset or getsynasset
+    if not (writeFn and assetFn) then
+        return nil, "executor นี้ไม่มี writefile/getcustomasset"
+    end
+    local name = "XenonUI_img_" .. hashStr(url) .. "." .. imageExt(url)
+    local okE, exists = pcall(function() return isfile and isfile(name) end)
+    if not (okE and exists) then
+        local data = httpGet(url)
+        if not data then return nil, "ดาวน์โหลดรูปไม่ได้" end
+        if not pcall(writeFn, name, data) then return nil, "เขียนไฟล์ไม่ได้" end
+    end
+    local ok, id = pcall(assetFn, name)
+    if ok and type(id) == "string" then return id end
+    return nil, "แปลงไฟล์เป็น asset ไม่ได้"
+end
+
+-- แปลงค่า Image เป็น content string ที่ ImageLabel ใช้ได้ (คืน nil ถ้าใช้ไม่ได้)
+local function resolveImage(src)
+    if type(src) == "number" then
+        return "rbxassetid://" .. tostring(math.floor(src))
+    end
+    if type(src) ~= "string" then
+        warn("[XenonUI] Image ต้องเป็นตัวเลข asset id หรือข้อความ (URL)")
+        return nil
+    end
+    if src:find("^rbxassetid://") or src:find("^rbxthumb://") or src:find("^rbxasset://") then
+        return src
+    end
+    if src:match("^%d+$") then
+        return "rbxassetid://" .. src
+    end
+    if src:find("^https?://") then
+        local cached = UI.ImageCache[src]
+        if cached then return cached end
+        local id, err = fileAsset(src)
+        if id then
+            UI.ImageCache[src] = id
+            return id
+        end
+        warn("[XenonUI] โหลดรูป " .. src .. " ไม่สำเร็จ: " .. err)
+        return nil
+    end
+    warn("[XenonUI] Image ไม่รู้จักรูปแบบ: " .. src)
+    return nil
+end
+
+-- Section:Image({ Title, Image, Height = 160, ScaleType = "Fit", Radius = 10, Loading, Fallback, Empty })
+-- คืน { Row, Box, Image (ImageLabel), Set(src), Get() }
+function Section:Image(o)
+    o = o or {}
+    local height = o.Height or 160
+    local radius = o.Radius or 10
+    local f = autoFrame(self, { 12, 12, 12, 12 }, 8)
+    if o.Title then
+        label(f, {
+            Text = o.Title, Font = F_BOLD, TextSize = 14, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY,
+            TextWrapped = true, LayoutOrder = 1,
+        })
+    end
+    local box = new("Frame", {
+        Size = UDim2.new(1, 0, 0, height), BackgroundColor3 = T.Elem, BorderSizePixel = 0, LayoutOrder = 2,
+    }, f)
+    corner(box, radius)
+    stroke(box, T.Line, 1, 0)
+    local img = new("ImageLabel", {
+        Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0,
+        ScaleType = IMG_SCALE[o.ScaleType] or Enum.ScaleType.Fit,
+    }, box)
+    corner(img, radius)
+    local status = label(box, {
+        Size = UDim2.fromScale(1, 1), Text = "", TextSize = 12, TextColor3 = T.Muted, Font = F_MED,
+        TextXAlignment = Enum.TextXAlignment.Center, TextWrapped = true,
+    })
+
+    local token, current = 0, nil
+    local function show(src)
+        token = token + 1
+        local my = token
+        current = src
+        img.Image = ""
+        if src == nil or src == "" then
+            status.Text = o.Empty or ""
+            status.Visible = o.Empty ~= nil
+            return
+        end
+        status.Text = o.Loading or "กำลังโหลดรูป..."
+        status.Visible = true
+        task.spawn(function()
+            local content = resolveImage(src)
+            if my ~= token then return end -- มีการเปลี่ยนรูปใหม่ไปแล้ว ไม่ต้องทำต่อ
+            if content then
+                img.Image = content
+                status.Visible = false
+            else
+                status.Text = o.Fallback or "โหลดรูปไม่ได้"
+                status.Visible = true
+            end
+        end)
+    end
+    show(o.Image)
+
+    local obj = { Row = f, Box = box, Image = img }
+    function obj.Set(src) show(src) end
+    function obj.Get() return current end
+    return obj
 end
 
 function Section:Progress(o)
