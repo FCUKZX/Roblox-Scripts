@@ -399,7 +399,7 @@ end
 genv.__PexLobby = shutdown
 
 local win = PEX:CreateWindow({
-    Title = "Pex Hub", Subtitle = "Lobby", Icon = "package", Name = "PexHubLobby",
+    Title = "Pex Hub", Subtitle = "Lobby", Name = "PexHubLobby",
     OnClose = shutdown,
 })
 local function notify(text, color, icon, dur)
