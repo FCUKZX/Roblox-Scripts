@@ -69,17 +69,17 @@ UI.Theme = {
     Line = Color3.fromRGB(46, 46, 70),
     Text = Color3.fromRGB(245, 245, 252),
     Muted = Color3.fromRGB(152, 152, 184),
-    Accent = Color3.fromRGB(124, 92, 255), -- ม่วงไวโอเลต (สีหลัก)
-    Accent2 = Color3.fromRGB(84, 148, 255), -- ฟ้า (ปลายไล่เฉดของ Slider/Progress/Banner)
+    Accent = Color3.fromRGB(120, 80, 255), -- ม่วงไวโอเลต (สีหลัก)
+    Accent2 = Color3.fromRGB(56, 150, 255), -- ฟ้า (ปลายไล่เฉดของ Slider/Progress/Banner)
     Accent3 = Color3.fromRGB(46, 214, 255),
-    Good = Color3.fromRGB(52, 211, 130),
-    Bad = Color3.fromRGB(248, 81, 104),
-    Warn = Color3.fromRGB(247, 185, 60),
-    Blue = Color3.fromRGB(72, 152, 255),
-    Purple = Color3.fromRGB(168, 108, 255),
-    Pink = Color3.fromRGB(244, 92, 164),
-    Orange = Color3.fromRGB(250, 150, 56),
-    Cyan = Color3.fromRGB(44, 200, 222),
+    Good = Color3.fromRGB(30, 214, 116),
+    Bad = Color3.fromRGB(255, 64, 96),
+    Warn = Color3.fromRGB(255, 186, 28),
+    Blue = Color3.fromRGB(46, 140, 255),
+    Purple = Color3.fromRGB(158, 90, 255),
+    Pink = Color3.fromRGB(255, 70, 160),
+    Orange = Color3.fromRGB(255, 138, 30),
+    Cyan = Color3.fromRGB(18, 200, 232),
 }
 local T = UI.Theme
 local WHITE = Color3.new(1, 1, 1)
@@ -572,8 +572,8 @@ local function makeButton(parent, o)
         Size = UDim2.fromScale(1, 1), BackgroundColor3 = color, BorderSizePixel = 0,
     }, b)
     corner(face, 10)
-    shade(face, 0.84)
-    local fst = stroke(face, WHITE, 1, 0.88)
+    shade(face, 0.95)
+    local fst = stroke(face, color:Lerp(WHITE, 0.35), 1, 0.55)
     local sc = new("UIScale", { Scale = 1 }, face)
     local content = new("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1) }, face)
     new("UIListLayout", {
@@ -600,15 +600,16 @@ local function makeButton(parent, o)
     function obj:SetColor(c)
         color = c
         tween(face, { BackgroundColor3 = c }, 0.25)
+        tween(fst, { Color = c:Lerp(WHITE, 0.35) }, 0.25)
     end
     function obj:SetIcon(icon) setIcon(icon) end
     b.MouseEnter:Connect(function()
         tween(face, { BackgroundColor3 = color:Lerp(WHITE, 0.1) }, 0.18)
-        tween(fst, { Transparency = 0.72 }, 0.18)
+        tween(fst, { Transparency = 0.3 }, 0.18)
     end)
     b.MouseLeave:Connect(function()
         tween(face, { BackgroundColor3 = color }, 0.28)
-        tween(fst, { Transparency = 0.88 }, 0.28)
+        tween(fst, { Transparency = 0.55 }, 0.28)
         tween(sc, { Scale = 1 }, 0.4, Enum.EasingStyle.Back)
     end)
     b.InputBegan:Connect(function(input)
@@ -864,6 +865,7 @@ function Section:Actions(list)
     for i, o in ipairs(list) do
         o.Size = UDim2.new(1 / n, -(8 * (n - 1)) / n, 0, o.Height or 34)
         o.LayoutOrder = i
+        o.Color = o.Color or T.Accent
         out[i] = makeButton(f, o)
     end
     return out
