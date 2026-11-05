@@ -1,15 +1,13 @@
 --[[
-    XenonUI v3.0 - Neon Redesign
+    XenonUI v3.1 - Clean Redesign
     UI library สไตล์ Xenon Hub สำหรับ Roblox (รองรับทั้ง PC และมือถือ)
 
-    ดีไซน์ใหม่ทั้งหมดใน v3.0
-    - ธีมสีนีออน: ไล่เฉดม่วง > ชมพู > ฟ้า ใช้กับปุ่ม สวิตช์ สไลเดอร์ แท็บที่เลือก ฯลฯ
-    - ขอบหน้าต่างไล่สีหมุนวน (และกลายเป็นวงแหวนรอบปุ่มวงกลมตอนย่อ)
-    - การ์ดไล่เฉด + เส้นขอบสว่างด้านบน, เส้นคั่นจางที่ปลาย, แสงเรืองพื้นหลังจางๆ
-    - แท็บ: แถบเรืองสีตามแท็บ + ไอคอนไล่เฉด | ปุ่ม: ไล่เฉด + แสงวิ่งตอนชี้/กด
-    - ใหม่: tab:Banner({ Title, Text, Icon }) แบนเนอร์หัวแท็บแบบ Hub
-    - ใหม่ใน CreateWindow: Accent2 (สีที่สองของไล่เฉด), Badge (ป้ายเล็กข้างชื่อ เช่น "PRO")
-    - ปิดเอฟเฟกต์ได้: UI.AnimatedBorder = false / UI.AmbientGlow = false
+    ดีไซน์ v3.1 (สะอาดตา ไม่มีแสงเรืองรบกวน)
+    - พื้นผิวเข้มแบ่งชั้นชัดเจน: พื้นหลัง > การ์ด > ช่องควบคุม ขอบบาง 1px สีเดียวกันทั้ง UI
+    - สีสดใช้เฉพาะจุดที่สื่อสถานะ: สวิตช์ที่เปิด, ปุ่มหลัก, แท็บที่เลือก, Slider/Progress, ช่องที่โฟกัส
+    - ปุ่มและช่องทุกตัวเป็นเฟรมเดียว (มุมมน + ขอบ) ไม่มีเลเยอร์ซ้อนทับ จึงไม่มีมุมสี่เหลี่ยมโผล่ที่ขอบ
+    - tab:Banner({ Title, Text, Icon }) แบนเนอร์ไล่เฉดไว้หัวแท็บ
+    - CreateWindow: Accent / Accent2 (สีไล่เฉด), Badge = ป้ายเล็กข้างชื่อ เช่น "PRO"
 
     คุณสมบัติเดิมครบ
     - หน้าต่างปรับขนาดตามจอเอง (มือถือ: กว้าง ~76% / สูง ~82% ของจอ)
@@ -45,7 +43,7 @@ local GuiService = game:GetService("GuiService")
 local RunService = game:GetService("RunService")
 
 local UI = {}
-UI.Version = "3.0.0"
+UI.Version = "3.1.0"
 -- แหล่งไอคอน Lucide (spritesheet asset id) ถ้าโหลดไม่ได้ ไอคอนจะเป็นจุดแทน ไม่ทำให้ UI พัง
 UI.LucideURL = "https://github.com/latte-soft/lucide-roblox/releases/latest/download/lucide-roblox.luau"
 UI.LucideMirrors = {
@@ -58,36 +56,33 @@ UI.ForceMobile = nil -- true/false = บังคับโหมดมือถ�
 UI.DragHoldTime = 0 -- กดค้างที่หัวหน้าต่างกี่วินาทีถึงจะลากได้ (0 = ลากได้ทันที ไม่ต้องกดค้าง)
 UI.DragReturn = true -- ปล่อยหัวหน้าต่างแล้วค่อยๆ เด้งกลับที่เดิม (false = อยู่ตรงที่ปล่อย)
 UI.SliderHoldTime = 0.5 -- ต้องกดค้างที่หลอด Slider กี่วินาทีถึงจะลากได้ (0 = ลากได้ทันที)
-UI.AnimatedBorder = true -- ขอบหน้าต่างไล่สีหมุนวน (false = หยุดนิ่ง)
-UI.AmbientGlow = true -- แสงเรืองจางๆ ที่พื้นหลังหน้าเนื้อหา (false = ปิด)
 UI.IntroBubble = true -- ตอนเปิดสคริปต์: ผุดเป็นวงกลมแล้วขยายออกแบบเดียวกับตอนกดขยาย (false = แอนิเมชันเก่า)
 
 UI.Theme = {
-    Bg = Color3.fromRGB(10, 10, 19),
-    Side = Color3.fromRGB(13, 13, 24),
-    Top = Color3.fromRGB(13, 13, 24),
-    Card = Color3.fromRGB(21, 20, 36),
-    Card2 = Color3.fromRGB(31, 28, 53), -- ปลายสว่างของการ์ด (ไล่เฉดเฉียง)
-    Inset = Color3.fromRGB(12, 11, 22),
-    Elem = Color3.fromRGB(38, 36, 62),
-    Line = Color3.fromRGB(54, 50, 88),
-    Text = Color3.fromRGB(251, 250, 255),
-    Muted = Color3.fromRGB(163, 158, 200),
-    Accent = Color3.fromRGB(139, 92, 255), -- ม่วงไวโอเลต
-    Accent2 = Color3.fromRGB(255, 66, 190), -- ชมพูแมเจนตา (สีปลายไล่เฉด)
-    Accent3 = Color3.fromRGB(46, 214, 255), -- ฟ้าไซยาน (สีเน้นรอง)
-    Good = Color3.fromRGB(46, 230, 140),
-    Bad = Color3.fromRGB(255, 70, 100),
-    Warn = Color3.fromRGB(255, 190, 50),
-    Blue = Color3.fromRGB(64, 156, 255),
-    Purple = Color3.fromRGB(170, 100, 255),
-    Pink = Color3.fromRGB(255, 80, 170),
-    Orange = Color3.fromRGB(255, 150, 40),
-    Cyan = Color3.fromRGB(40, 215, 240),
+    Bg = Color3.fromRGB(13, 13, 21),
+    Side = Color3.fromRGB(17, 17, 27),
+    Top = Color3.fromRGB(17, 17, 27),
+    Card = Color3.fromRGB(23, 23, 35),
+    Card2 = Color3.fromRGB(23, 23, 35),
+    Inset = Color3.fromRGB(14, 14, 23),
+    Elem = Color3.fromRGB(37, 37, 56),
+    Line = Color3.fromRGB(46, 46, 70),
+    Text = Color3.fromRGB(245, 245, 252),
+    Muted = Color3.fromRGB(152, 152, 184),
+    Accent = Color3.fromRGB(124, 92, 255), -- ม่วงไวโอเลต (สีหลัก)
+    Accent2 = Color3.fromRGB(84, 148, 255), -- ฟ้า (ปลายไล่เฉดของ Slider/Progress/Banner)
+    Accent3 = Color3.fromRGB(46, 214, 255),
+    Good = Color3.fromRGB(52, 211, 130),
+    Bad = Color3.fromRGB(248, 81, 104),
+    Warn = Color3.fromRGB(247, 185, 60),
+    Blue = Color3.fromRGB(72, 152, 255),
+    Purple = Color3.fromRGB(168, 108, 255),
+    Pink = Color3.fromRGB(244, 92, 164),
+    Orange = Color3.fromRGB(250, 150, 56),
+    Cyan = Color3.fromRGB(44, 200, 222),
 }
 local T = UI.Theme
 local WHITE = Color3.new(1, 1, 1)
-local EDGE_T = 0.12 -- ความโปร่งของขอบนีออนตอนปกติ
 
 local F_REG, F_MED, F_BOLD, F_BLACK = Enum.Font.Gotham, Enum.Font.GothamMedium, Enum.Font.GothamBold, Enum.Font.GothamBlack
 local AX, AY = Enum.AutomaticSize.X, Enum.AutomaticSize.Y
@@ -158,7 +153,7 @@ end
 UI.Corner, UI.Stroke, UI.Pad, UI.List, UI.Label = corner, stroke, pad, vlist, label
 
 -- =====================================================================
--- Neon helpers (ไล่เฉดสี / เส้นจาง / แสงเรือง)
+-- Helpers (ไล่เฉดสี / เงาบางๆ)
 -- =====================================================================
 local NSK, CSK = NumberSequenceKeypoint.new, ColorSequenceKeypoint.new
 
@@ -169,47 +164,21 @@ local function hueShift(c, d)
 end
 UI.HueShift = hueShift
 
--- ใส่ UIGradient: grad(obj, สี1, สี2, องศา) หรือ grad(obj, ColorSequence, nil, องศา)
--- ถ้า obj เป็น Frame ให้ตั้ง BackgroundColor3 = WHITE เพื่อให้สีไล่เฉดออกตรงตามที่กำหนด
+-- ใส่ UIGradient บนวัตถุตัวเดียวกัน (ไม่ซ้อนเลเยอร์ จึงไม่มีมุมสี่เหลี่ยมโผล่)
+-- ถ้าเป็น Frame ให้ตั้ง BackgroundColor3 = WHITE เพื่อให้สีที่ไล่ออกตรงตามที่กำหนด
 local function grad(o, a, b, rot)
     local seq = (typeof(a) == "ColorSequence") and a or ColorSequence.new(a, b or hueShift(a))
     return new("UIGradient", { Color = seq, Rotation = rot or 0 }, o)
 end
 UI.Grad = grad
 
-local function brand() return ColorSequence.new(T.Accent, T.Accent2) end
-local function brand3()
-    return ColorSequence.new({ CSK(0, T.Accent), CSK(0.34, T.Accent2), CSK(0.67, T.Accent3), CSK(1, T.Accent) })
+-- เงาไล่ระดับบางๆ (คูณกับสีพื้น) ให้ปุ่มดูมีมิติ โดยอยู่บนเฟรมเดียวกับปุ่ม
+local function shade(o, k)
+    k = k or 0.86
+    return new("UIGradient", { Rotation = 90, Color = ColorSequence.new(WHITE, Color3.new(k, k, k)) }, o)
 end
 
--- เส้นคั่นบางๆ ที่จางหายตรงปลายสองข้าง
-local function fadeLine(parent, order, color, alpha)
-    local f = new("Frame", {
-        Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = color or T.Line, BackgroundTransparency = alpha or 0,
-        BorderSizePixel = 0, LayoutOrder = order or 0,
-    }, parent)
-    new("UIGradient", { Transparency = NumberSequence.new({ NSK(0, 1), NSK(0.14, 0.1), NSK(0.86, 0.1), NSK(1, 1) }) }, f)
-    return f
-end
-
--- แสงเรืองวงกลมซ้อนหลายชั้น (จำลอง radial glow โดยไม่ต้องใช้รูป)
-local function glowBlob(parent, color, size, xs, ys, layers, a)
-    layers = layers or 8
-    a = a or 0.972
-    local holder = new("Frame", {
-        AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(xs, ys), Size = UDim2.fromOffset(size, size),
-        BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 0, Active = false,
-    }, parent)
-    for i = 1, layers do
-        local f = 1 - (i - 1) / layers * 0.92
-        local c = new("Frame", {
-            AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromScale(f, f),
-            BackgroundColor3 = color, BackgroundTransparency = a, BorderSizePixel = 0, ZIndex = 0, Active = false,
-        }, holder)
-        new("UICorner", { CornerRadius = UDim.new(0.5, 0) }, c)
-    end
-    return holder
-end
+-- =====================================================================
 
 local function httpGet(url)
     local ok, res = pcall(function() return game:HttpGet(url) end)
@@ -594,39 +563,19 @@ end
 local function makeButton(parent, o)
     local color = o.Color or T.Elem
     -- b = พื้นที่รับสัมผัส (โปร่งใส อยู่กับที่เสมอ), face = ตัวปุ่มที่ยุบ/เด้งจริง
+    -- face เป็นเฟรมเดียว: มุมมน + เงาไล่ระดับบางๆ + ขอบ (ไม่มีเลเยอร์ซ้อนทับ จึงไม่มีมุมสี่เหลี่ยมโผล่)
     local b = new("TextButton", {
         Text = "", AutoButtonColor = false, BackgroundTransparency = 1, BorderSizePixel = 0,
         Size = o.Size or UDim2.new(1, 0, 0, 34), LayoutOrder = o.LayoutOrder or 0,
     }, parent)
     local face = new("Frame", {
-        Size = UDim2.fromScale(1, 1), BackgroundColor3 = color, BorderSizePixel = 0, ClipsDescendants = true,
+        Size = UDim2.fromScale(1, 1), BackgroundColor3 = color, BorderSizePixel = 0,
     }, b)
     corner(face, 10)
-    local fst = stroke(face, WHITE, 1, 0.78)
-    new("UIGradient", { Rotation = 90, Transparency = NumberSequence.new(0.2, 0.92) }, fst) -- ขอบสว่างด้านบน
-    -- ชั้นสีที่สอง (ซ้าย > ขวา) ให้ปุ่มดูไล่เฉดแบบนีออน
-    local tint = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = hueShift(color), BorderSizePixel = 0, ZIndex = 1 }, face)
-    new("UIGradient", { Transparency = NumberSequence.new(1, 0.1) }, tint)
-    -- แสงสะท้อนครึ่งบน
-    local sheen = new("Frame", { Size = UDim2.fromScale(1, 0.5), BackgroundColor3 = WHITE, BorderSizePixel = 0, ZIndex = 1 }, face)
-    new("UIGradient", { Rotation = 90, Transparency = NumberSequence.new(0.82, 1) }, sheen)
-    -- แสงวิ่งเฉียงตอนชี้/กด
-    local glint = new("Frame", {
-        Size = UDim2.new(0.3, 0, 2, 0), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(-0.3, 0.5), Rotation = 18,
-        BackgroundColor3 = WHITE, BackgroundTransparency = 0.78, BorderSizePixel = 0, ZIndex = 1,
-    }, face)
-    new("UIGradient", { Transparency = NumberSequence.new({ NSK(0, 1), NSK(0.5, 0), NSK(1, 1) }) }, glint)
-    local glinting = false
-    local function runGlint()
-        if glinting then return end
-        glinting = true
-        glint.Position = UDim2.fromScale(-0.3, 0.5)
-        tween(glint, { Position = UDim2.fromScale(1.3, 0.5) }, 0.6, Enum.EasingStyle.Quint)
-        task.delay(0.65, function() glinting = false end)
-    end
-
+    shade(face, 0.84)
+    local fst = stroke(face, WHITE, 1, 0.88)
     local sc = new("UIScale", { Scale = 1 }, face)
-    local content = new("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 2 }, face)
+    local content = new("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1) }, face)
     new("UIListLayout", {
         FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Center,
         VerticalAlignment = Enum.VerticalAlignment.Center, Padding = UDim.new(0, 7), SortOrder = Enum.SortOrder.LayoutOrder,
@@ -650,18 +599,16 @@ local function makeButton(parent, o)
     function obj:SetText(t) txt.Text = tostring(t) end
     function obj:SetColor(c)
         color = c
-        tint.BackgroundColor3 = hueShift(c)
         tween(face, { BackgroundColor3 = c }, 0.25)
     end
     function obj:SetIcon(icon) setIcon(icon) end
     b.MouseEnter:Connect(function()
         tween(face, { BackgroundColor3 = color:Lerp(WHITE, 0.1) }, 0.18)
-        tween(fst, { Transparency = 0.5 }, 0.18)
-        runGlint()
+        tween(fst, { Transparency = 0.72 }, 0.18)
     end)
     b.MouseLeave:Connect(function()
         tween(face, { BackgroundColor3 = color }, 0.28)
-        tween(fst, { Transparency = 0.78 }, 0.28)
+        tween(fst, { Transparency = 0.88 }, 0.28)
         tween(sc, { Scale = 1 }, 0.4, Enum.EasingStyle.Back)
     end)
     b.InputBegan:Connect(function(input)
@@ -671,9 +618,7 @@ local function makeButton(parent, o)
         local rx, ry = pressRatio(face, input)
         face.AnchorPoint = Vector2.new(rx, ry)
         face.Position = UDim2.fromScale(rx, ry)
-        tween(sc, { Scale = 0.94 }, 0.12, Enum.EasingStyle.Quad)
-        ripple(face, rx, ry, WHITE, 0.8)
-        runGlint()
+        tween(sc, { Scale = 0.95 }, 0.12, Enum.EasingStyle.Quad)
     end)
     b.InputEnded:Connect(function(input)
         if isPress(input) then tween(sc, { Scale = 1 }, 0.5, Enum.EasingStyle.Back) end
@@ -696,7 +641,11 @@ Section.__index = Section
 local function nextSlot(sec)
     sec._n = sec._n + 1
     local order = sec._n * 2
-    if sec._n > 1 then fadeLine(sec.Card, order - 1) end
+    if sec._n > 1 then
+        -- เส้นคั่นบางๆ เว้นขอบซ้ายขวา 14px (กรอบโปร่งใส + เส้นข้างใน)
+        local d = new("Frame", { Size = UDim2.new(1, 0, 0, 1), BackgroundTransparency = 1, BorderSizePixel = 0, LayoutOrder = order - 1 }, sec.Card)
+        new("Frame", { Size = UDim2.new(1, -28, 1, 0), Position = UDim2.fromOffset(14, 0), BackgroundColor3 = T.Line, BorderSizePixel = 0 }, d)
+    end
     return order
 end
 
@@ -706,15 +655,12 @@ local function makeRow(sec, title, desc, ctlSize, clickable, parent)
     local order = 1
     if not parent then order = nextSlot(sec) end
     local row = new(clickable and "TextButton" or "Frame", {
-        Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundColor3 = WHITE, BackgroundTransparency = 1, BorderSizePixel = 0,
-        LayoutOrder = order, ClipsDescendants = clickable and true or false,
+        Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, BorderSizePixel = 0, LayoutOrder = order,
+        ClipsDescendants = clickable and true or false,
     }, parent or sec.Card)
     if clickable then
         row.Text = ""
         row.AutoButtonColor = false
-        corner(row, 10)
-        row.MouseEnter:Connect(function() tween(row, { BackgroundTransparency = 0.955 }, 0.18) end)
-        row.MouseLeave:Connect(function() tween(row, { BackgroundTransparency = 1 }, 0.25) end)
         row.InputBegan:Connect(function(input)
             if isPress(input) then
                 local rx, ry = pressRatio(row, input)
@@ -762,17 +708,14 @@ local function safe(cb, ...)
 end
 
 function Section:Toggle(o)
-    local TW, TH, KN = 46, 26, 20
+    local TW, TH, KN = 44, 24, 18
     local row, ctl = makeRow(self, o.Title, o.Desc, Vector2.new(TW, TH), true)
-    local track = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Inset, BorderSizePixel = 0 }, ctl)
+    -- รางสวิตช์เป็นเฟรมเดียว: ปิด = เทาเข้ม, เปิด = สีหลัก (ลูกบิดสีขาว)
+    local track = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Elem, BorderSizePixel = 0 }, ctl)
     corner(track, TH / 2)
     local tst = stroke(track, T.Line, 1, 0)
-    -- ชั้นสีไล่เฉด: เฟดเข้า/ออกตามสถานะ
-    local on = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = WHITE, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 1 }, track)
-    corner(on, TH / 2)
-    grad(on, T.Accent, T.Accent2, 0)
     local knob = new("Frame", {
-        Size = UDim2.fromOffset(KN, KN), Position = UDim2.fromOffset(3, 3), BackgroundColor3 = T.Muted, BorderSizePixel = 0, ZIndex = 2,
+        Size = UDim2.fromOffset(KN, KN), Position = UDim2.fromOffset(3, 3), BackgroundColor3 = WHITE, BorderSizePixel = 0,
     }, track)
     corner(knob, KN / 2)
     local state = o.Default and true or false
@@ -781,17 +724,15 @@ function Section:Toggle(o)
         local w = pressed and (KN + 5) or KN -- แบบ iOS: ปุ่มยืดออกตอนกดค้าง
         local p = UDim2.fromOffset(state and (TW - 3 - w) or 3, 3)
         local sz = UDim2.fromOffset(w, KN)
-        local kc = state and WHITE or T.Muted
-        local sc = state and T.Accent:Lerp(WHITE, 0.25) or T.Line
+        local c = state and T.Accent or T.Elem
+        local sc = state and T.Accent or T.Line
         if instant then
-            on.BackgroundTransparency = state and 0 or 1
+            track.BackgroundColor3 = c
             tst.Color = sc
-            knob.BackgroundColor3 = kc
             knob.Position, knob.Size = p, sz
         else
-            tween(on, { BackgroundTransparency = state and 0 or 1 }, 0.25)
+            tween(track, { BackgroundColor3 = c }, 0.25)
             tween(tst, { Color = sc }, 0.25)
-            tween(knob, { BackgroundColor3 = kc }, 0.25)
             tween(knob, { Position = p, Size = sz }, 0.38, Enum.EasingStyle.Back)
         end
     end
@@ -1029,15 +970,14 @@ function Section:List(o)
     end
     function list:Add(it)
         local sel = it.Selected and true or false
-        local base = sel and WHITE or T.Elem
+        local base = sel and T.Accent or T.Elem
         local b = new("TextButton", {
             Size = UDim2.new(1, 0, 0, it.Height or 34), BackgroundColor3 = base, BorderSizePixel = 0, AutoButtonColor = false,
             Text = it.Text or "", TextColor3 = WHITE, Font = F_MED, TextSize = it.TextSize or 13, TextWrapped = true,
             TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = it.Order or 0,
         }, sf)
         corner(b, 9)
-        stroke(b, sel and T.Accent:Lerp(WHITE, 0.3) or T.Line, 1, sel and 0.3 or 0)
-        if sel then grad(b, T.Accent, T.Accent2, 0) end -- รายการที่เลือกไล่เฉดนีออน
+        stroke(b, sel and T.Accent:Lerp(WHITE, 0.25) or T.Line, 1, 0)
         pad(b, 12, 0, 8, 0)
         b.MouseEnter:Connect(function() tween(b, { BackgroundColor3 = base:Lerp(WHITE, 0.1) }, 0.15) end)
         b.MouseLeave:Connect(function() tween(b, { BackgroundColor3 = base }, 0.2) end)
@@ -1062,13 +1002,12 @@ function Section:Divider(text)
     local order = nextSlot(self)
     local f = new("Frame", { Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1, LayoutOrder = order }, self.Card)
     pad(f, 14, 0, 14, 0)
-    -- แท่งสีไล่เฉดนำหน้าหัวข้อ
+    -- แท่งสีหลักนำหน้าหัวข้อ
     local mark = new("Frame", {
         AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 0, 0.5, 0), Size = UDim2.fromOffset(3, 13),
-        BackgroundColor3 = WHITE, BorderSizePixel = 0,
+        BackgroundColor3 = T.Accent, BorderSizePixel = 0,
     }, f)
     corner(mark, 2)
-    grad(mark, T.Accent, T.Accent2, 90)
     label(f, {
         Text = tostring(text or ""), Font = F_BOLD, TextSize = 12, TextColor3 = T.Muted,
         Position = UDim2.fromOffset(11, 0), Size = UDim2.new(1, -11, 1, 0),
@@ -1226,17 +1165,17 @@ end
 function Section:Progress(o)
     o = o or {}
     local c1 = o.Color or T.Accent
-    local c2 = o.Color and hueShift(o.Color) or T.Accent2
+    local c2 = o.Color and hueShift(o.Color, 0.06) or T.Accent2
     local f = autoFrame(self, { 14, 12, 14, 12 }, 8)
     local head = new("Frame", { Size = UDim2.new(1, 0, 0, 18), BackgroundTransparency = 1, LayoutOrder = 1 }, f)
     label(head, { Text = o.Title or "", Font = F_BOLD, TextSize = 14, Size = UDim2.new(1, -60, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd })
     local val = label(head, {
-        Text = "0%", Font = F_BOLD, TextSize = 12, TextColor3 = c1:Lerp(WHITE, 0.45), Size = UDim2.fromScale(1, 1), TextXAlignment = Enum.TextXAlignment.Right,
+        Text = "0%", Font = F_BOLD, TextSize = 12, TextColor3 = T.Muted, Size = UDim2.fromScale(1, 1), TextXAlignment = Enum.TextXAlignment.Right,
     })
-    local track = new("Frame", { Size = UDim2.new(1, 0, 0, 9), BackgroundColor3 = T.Inset, BorderSizePixel = 0, LayoutOrder = 2, ClipsDescendants = true }, f)
-    corner(track, 5)
+    local track = new("Frame", { Size = UDim2.new(1, 0, 0, 8), BackgroundColor3 = T.Elem, BorderSizePixel = 0, LayoutOrder = 2 }, f)
+    corner(track, 4)
     local fill = new("Frame", { Size = UDim2.fromScale(0, 1), BackgroundColor3 = WHITE, BorderSizePixel = 0 }, track)
-    corner(fill, 5)
+    corner(fill, 4)
     grad(fill, c1, c2, 0)
     local function set(a, text)
         a = clamp(a or 0, 0, 1)
@@ -1254,7 +1193,7 @@ function Section:Slider(o)
     local suffix = o.Suffix or ""
     local value = clamp(o.Default or min, min, max)
     local c1 = o.Color or T.Accent
-    local c2 = o.Color and hueShift(o.Color) or T.Accent2
+    local c2 = o.Color and hueShift(o.Color, 0.06) or T.Accent2
     local dec = o.Decimals
     if dec == nil then
         if step % 1 == 0 then dec = 0 else
@@ -1269,7 +1208,7 @@ function Section:Slider(o)
     label(head, { Text = o.Title or "", Font = F_BOLD, TextSize = 14, Size = UDim2.new(1, -84, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd })
     local box = new("TextBox", {
         AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(76, 24),
-        BackgroundColor3 = T.Inset, BorderSizePixel = 0, Text = "", TextColor3 = c1:Lerp(WHITE, 0.45), Font = F_BOLD,
+        BackgroundColor3 = T.Inset, BorderSizePixel = 0, Text = "", TextColor3 = T.Text, Font = F_BOLD,
         TextSize = 12, ClearTextOnFocus = false,
     }, head)
     corner(box, 8)
@@ -1277,28 +1216,21 @@ function Section:Slider(o)
     if o.Desc and o.Desc ~= "" then
         label(f, { Text = o.Desc, TextSize = 12, TextColor3 = T.Muted, Font = F_MED, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, TextWrapped = true, LayoutOrder = 2 })
     end
-    local hit = new("TextButton", { Text = "", AutoButtonColor = false, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 30), LayoutOrder = 3 }, f)
+    local hit = new("TextButton", { Text = "", AutoButtonColor = false, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 28), LayoutOrder = 3 }, f)
     local track = new("Frame", {
-        AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.new(1, 0, 0, 7),
-        BackgroundColor3 = T.Inset, BorderSizePixel = 0,
+        AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.new(1, 0, 0, 6),
+        BackgroundColor3 = T.Elem, BorderSizePixel = 0,
     }, hit)
-    corner(track, 4)
-    stroke(track, T.Line, 1, 0.45)
+    corner(track, 3)
     local fill = new("Frame", { Size = UDim2.fromScale(0, 1), BackgroundColor3 = WHITE, BorderSizePixel = 0 }, track)
-    corner(fill, 4)
+    corner(fill, 3)
     grad(fill, c1, c2, 0)
-    -- ฮาโลรอบปุ่มลาก (โผล่ตอนกดค้าง)
-    local halo = new("Frame", {
-        AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.fromOffset(38, 38),
-        BackgroundColor3 = c1, BackgroundTransparency = 1, BorderSizePixel = 0,
-    }, track)
-    new("UICorner", { CornerRadius = UDim.new(0.5, 0) }, halo)
     local knob = new("Frame", {
-        AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.fromOffset(18, 18),
-        BackgroundColor3 = WHITE, BorderSizePixel = 0, ZIndex = 2,
+        AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.fromOffset(16, 16),
+        BackgroundColor3 = WHITE, BorderSizePixel = 0,
     }, track)
-    corner(knob, 9)
-    stroke(knob, c1, 2.5, 0)
+    corner(knob, 8)
+    stroke(knob, c1, 2, 0)
     local ks = new("UIScale", { Scale = 1 }, knob)
 
     local function apply(v, silent, instant)
@@ -1310,11 +1242,9 @@ function Section:Slider(o)
         if instant then
             fill.Size = UDim2.fromScale(a, 1)
             knob.Position = UDim2.fromScale(a, 0.5)
-            halo.Position = UDim2.fromScale(a, 0.5)
         else
             tween(fill, { Size = UDim2.fromScale(a, 1) }, 0.12, Enum.EasingStyle.Quad)
             tween(knob, { Position = UDim2.fromScale(a, 0.5) }, 0.12, Enum.EasingStyle.Quad)
-            tween(halo, { Position = UDim2.fromScale(a, 0.5) }, 0.12, Enum.EasingStyle.Quad)
         end
         box.Text = fmt(v)
         if changed and not silent then safe(o.Callback, v) end
@@ -1324,7 +1254,6 @@ function Section:Slider(o)
         apply(min + a * (max - min))
     end, function(down)
         tween(ks, { Scale = down and 1.25 or 1 }, 0.25, Enum.EasingStyle.Back)
-        tween(halo, { BackgroundTransparency = down and 0.8 or 1 }, 0.25)
     end, UI.SliderHoldTime)
     box.Focused:Connect(function()
         box.Text = tostring(value)
@@ -1444,15 +1373,12 @@ function Section:Dropdown(o)
         for _, b in ipairs(btns) do b:Destroy() end
         btns = {}
         for i, op in ipairs(options) do
-            -- พื้นขาว + ไล่เฉดนีออน: ตอนเลือก = เต็ม, ตอนชี้ = จางๆ
             local b = new("TextButton", {
-                Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = WHITE, BackgroundTransparency = 1, BorderSizePixel = 0,
+                Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = T.Accent, BackgroundTransparency = 1, BorderSizePixel = 0,
                 AutoButtonColor = false, Text = tostring(op), Font = F_MED, TextSize = 12, TextColor3 = T.Muted,
                 TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = i, ClipsDescendants = true,
             }, scroll)
-            corner(b, 8)
-            grad(b, T.Accent, T.Accent2, 0)
-            pad(b, 10, 0, 10, 0)
+            corner(b, 8) pad(b, 10, 0, 10, 0)
             b.InputBegan:Connect(function(input)
                 if isPress(input) then
                     local rx, ry = pressRatio(b, input)
@@ -1619,46 +1545,36 @@ end
 local Tab = {}
 Tab.__index = Tab
 
--- แบนเนอร์หัวแท็บแบบไล่เฉดนีออน: tab:Banner({ Title, Text, Icon, Color, Height })
+-- แบนเนอร์หัวแท็บแบบไล่เฉด: tab:Banner({ Title, Text, Icon, Color, Height })
 function Tab:Banner(o)
     o = o or {}
     self._n = self._n + 1
     local c1 = o.Color or T.Accent
-    local c2 = o.Color and hueShift(o.Color, 0.1) or T.Accent2
+    local c2 = o.Color and hueShift(o.Color, 0.06) or T.Accent2
+    -- แบนเนอร์เป็นเฟรมเดียว (ไล่เฉดบนตัวมันเอง) ไม่มีวงกลม/เลเยอร์ตกแต่งที่ล้นมุม
     local f = new("Frame", {
-        Size = UDim2.new(1, 0, 0, o.Height or 86), BackgroundColor3 = WHITE, BorderSizePixel = 0,
-        LayoutOrder = self._n, ClipsDescendants = true,
+        Size = UDim2.new(1, 0, 0, o.Height or 84), BackgroundColor3 = WHITE, BorderSizePixel = 0, LayoutOrder = self._n,
     }, self.Page)
-    corner(f, 14)
-    grad(f, c1, c2, 20)
-    stroke(f, WHITE, 1, 0.75)
-    -- วงกลมโปร่งแสงตกแต่งมุมขวา
-    for i, sz in ipairs({ 170, 110 }) do
-        local d = new("Frame", {
-            AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(1, -20 - (i - 1) * 70, 0, 8 + (i - 1) * 50),
-            Size = UDim2.fromOffset(sz, sz), BackgroundColor3 = WHITE, BackgroundTransparency = 0.91, BorderSizePixel = 0, ZIndex = 1,
-        }, f)
-        new("UICorner", { CornerRadius = UDim.new(0.5, 0) }, d)
-    end
-    local rightSpace = 20
+    corner(f, 12)
+    grad(f, c1, c2, 25)
+    local rightSpace = 18
     if o.Icon then
         local tile = new("Frame", {
-            AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -18, 0.5, 0), Size = UDim2.fromOffset(46, 46),
-            BackgroundColor3 = WHITE, BackgroundTransparency = 0.82, BorderSizePixel = 0, ZIndex = 3,
+            AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.fromOffset(44, 44),
+            BackgroundColor3 = WHITE, BackgroundTransparency = 0.85, BorderSizePixel = 0,
         }, f)
-        corner(tile, 13)
-        stroke(tile, WHITE, 1, 0.55)
+        corner(tile, 12)
         iconLabel(tile, o.Icon, 24, WHITE, nil, CENTER)
-        rightSpace = 82
+        rightSpace = 72
     end
     label(f, {
-        Text = o.Title or "", Font = F_BLACK, TextSize = 18, TextColor3 = WHITE, Position = UDim2.fromOffset(18, 14),
-        Size = UDim2.new(1, -(18 + rightSpace), 0, 24), TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 3,
+        Text = o.Title or "", Font = F_BOLD, TextSize = 17, TextColor3 = WHITE, Position = UDim2.fromOffset(18, 15),
+        Size = UDim2.new(1, -(18 + rightSpace), 0, 24), TextTruncate = Enum.TextTruncate.AtEnd,
     })
     label(f, {
-        Text = o.Text or "", Font = F_MED, TextSize = 12, TextColor3 = WHITE, TextTransparency = 0.12,
-        Position = UDim2.fromOffset(18, 40), Size = UDim2.new(1, -(18 + rightSpace), 1, -48), TextWrapped = true,
-        TextYAlignment = Enum.TextYAlignment.Top, ZIndex = 3,
+        Text = o.Text or "", Font = F_MED, TextSize = 12, TextColor3 = WHITE, TextTransparency = 0.15,
+        Position = UDim2.fromOffset(18, 41), Size = UDim2.new(1, -(18 + rightSpace), 1, -50), TextWrapped = true,
+        TextYAlignment = Enum.TextYAlignment.Top,
     })
     return f
 end
@@ -1673,13 +1589,10 @@ function Tab:Section(o)
         head = new("Frame", { Size = UDim2.new(1, 0, 0, 36), BackgroundTransparency = 1, LayoutOrder = 1 }, wrap)
         local x = 2
         if o.Icon then
-            local c = o.Color or self.Color
             local tile = new("Frame", {
-                Size = UDim2.fromOffset(32, 32), Position = UDim2.fromOffset(2, 2), BackgroundColor3 = WHITE, BorderSizePixel = 0,
+                Size = UDim2.fromOffset(32, 32), Position = UDim2.fromOffset(2, 2), BackgroundColor3 = o.Color or self.Color, BorderSizePixel = 0,
             }, head)
-            corner(tile, 10)
-            grad(tile, c, hueShift(c, 0.07), 45)
-            stroke(tile, c:Lerp(WHITE, 0.45), 1, 0.7)
+            corner(tile, 9)
             iconLabel(tile, o.Icon, 18, WHITE, nil, CENTER)
             x = 44
         end
@@ -1706,14 +1619,11 @@ function Tab:Section(o)
             Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, BorderSizePixel = 0, LayoutOrder = 2,
         }, wrap)
     end
-    -- การ์ด: พื้นไล่เฉดเฉียง + เส้นขอบสว่างด้านบนจางลงด้านล่าง
     local card = new("Frame", {
-        Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundColor3 = WHITE, BorderSizePixel = 0, LayoutOrder = 2,
+        Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundColor3 = T.Card, BorderSizePixel = 0, LayoutOrder = 2,
     }, shell or wrap)
-    corner(card, 14)
-    grad(card, T.Card2, T.Card, 135)
-    local cst = stroke(card, WHITE, 1)
-    grad(cst, T.Accent:Lerp(T.Line, 0.5), T.Line:Lerp(T.Bg, 0.35), 90)
+    corner(card, 12)
+    stroke(card, T.Line, 1)
     vlist(card, 0)
 
     if shell then
@@ -1898,9 +1808,7 @@ function Window:SelectTab(name, instant)
         t.Page.Visible = on
         tween(t.Button, { BackgroundTransparency = on and 0 or 1 }, 0.2)
         tween(t.Label, { TextColor3 = on and T.Text or T.Muted }, 0.2)
-        t.Label.Font = on and F_BOLD or F_MED
-        if t.Stroke then tween(t.Stroke, { Transparency = on and 0.55 or 1 }, 0.3) end
-        if t.Ind then tween(t.Ind, { Size = UDim2.fromOffset(3, on and 20 or 0) }, 0.4, Enum.EasingStyle.Quint) end
+        if t.Ind then tween(t.Ind, { Size = UDim2.fromOffset(3, on and 18 or 0) }, 0.4, Enum.EasingStyle.Quint) end
     end
     self:SetBreadcrumb(tab.Category, tab.Name)
     if not instant then
@@ -1922,33 +1830,29 @@ function Window:AddTab(o)
             LayoutOrder = self._catSeq * 1000, TextTransparency = self.SidebarCollapsed and 1 or 0,
             TextYAlignment = Enum.TextYAlignment.Bottom,
         })
-        pad(lbl, 10, 0, 0, 5)
+        pad(lbl, 8, 0, 0, 4)
         cat = { Name = catName, Label = lbl, Seq = self._catSeq, N = 0 }
         self.Categories[catName] = cat
     end
     cat.N = cat.N + 1
     local color = o.Color or T.Accent
 
-    -- ปุ่มแท็บ: ตอนเลือกจะมีแสงเรืองสีของแท็บไล่จากซ้ายไปขวา + ขอบสี + แถบไล่เฉดด้านซ้าย
+    -- ปุ่มแท็บ: ตอนเลือก = พื้นเทาเข้ม + แถบสีของแท็บด้านซ้าย (ไอคอนเป็นกล่องสีทึบ)
     local btn = new("TextButton", {
-        Text = "", AutoButtonColor = false, Size = UDim2.new(1, 0, 0, 44), BackgroundColor3 = color, BackgroundTransparency = 1,
-        BorderSizePixel = 0, LayoutOrder = cat.Seq * 1000 + cat.N, ClipsDescendants = true,
+        Text = "", AutoButtonColor = false, Size = UDim2.new(1, 0, 0, 42), BackgroundColor3 = T.Elem, BackgroundTransparency = 1,
+        BorderSizePixel = 0, LayoutOrder = cat.Seq * 1000 + cat.N,
     }, self._tabScroll)
-    corner(btn, 12)
-    new("UIGradient", { Transparency = NumberSequence.new(0.7, 1) }, btn)
-    local bst = stroke(btn, color, 1, 1)
+    corner(btn, 11)
     local ind = new("Frame", {
         AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 2, 0.5, 0), Size = UDim2.fromOffset(3, 0),
-        BackgroundColor3 = WHITE, BorderSizePixel = 0, ZIndex = 3,
+        BackgroundColor3 = color, BorderSizePixel = 0, ZIndex = 3,
     }, btn)
     corner(ind, 2)
-    grad(ind, color, hueShift(color, 0.1), 90)
     local tile = new("Frame", {
         Size = UDim2.fromOffset(30, 30), AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 10, 0.5, 0),
-        BackgroundColor3 = WHITE, BorderSizePixel = 0,
+        BackgroundColor3 = color, BorderSizePixel = 0,
     }, btn)
-    corner(tile, 10)
-    grad(tile, color, hueShift(color, 0.08), 45)
+    corner(tile, 9)
     iconLabel(tile, o.Icon, 17, WHITE, nil, CENTER)
     local lbl = label(btn, {
         Text = o.Name, Font = F_MED, TextSize = 13, TextColor3 = T.Muted, Position = UDim2.fromOffset(50, 0),
@@ -1957,15 +1861,14 @@ function Window:AddTab(o)
 
     local page = new("ScrollingFrame", {
         Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
-        ScrollBarImageColor3 = T.Accent, ScrollingDirection = Enum.ScrollingDirection.Y, CanvasSize = UDim2.new(),
-        AutomaticCanvasSize = AY, Visible = false, ElasticBehavior = Enum.ElasticBehavior.Always, ScrollBarImageTransparency = 0.3,
+        ScrollBarImageColor3 = T.Muted, ScrollingDirection = Enum.ScrollingDirection.Y, CanvasSize = UDim2.new(),
+        AutomaticCanvasSize = AY, Visible = false, ElasticBehavior = Enum.ElasticBehavior.Always, ScrollBarImageTransparency = 0.35,
     }, self._pages)
     pad(page, 16, 14, 16, 20)
     vlist(page, 16)
 
     local tab = setmetatable({
-        Window = self, Name = o.Name, Category = catName, Page = page, Button = btn, Label = lbl, Color = color, Ind = ind,
-        Stroke = bst, _n = 0,
+        Window = self, Name = o.Name, Category = catName, Page = page, Button = btn, Label = lbl, Color = color, Ind = ind, _n = 0,
     }, Tab)
     self.Tabs[o.Name] = tab
     self.TabList[#self.TabList + 1] = tab
@@ -2093,9 +1996,8 @@ function Window:Minimize()
     self:_aimGradient(self:_bubbleCenterPx(), Vector2.new(vp.X / 2 + self.OX, vp.Y / 2 + self.OY))
     self._sweep.Value = 0
     tween(self._sweep, { Value = 1 }, 0.3, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-    -- ขอบนีออนกลายเป็นวงแหวนรอบปุ่มวงกลม
-    tween(self._edgeStroke, { Transparency = 0.05 }, 0.45)
-    tween(self._edgeCorner, { CornerRadius = UDim.new(0, B / 2 - 2) }, 0.45, Enum.EasingStyle.Quint)
+    self._edgeStroke.Transparency = 1
+    tween(self._edgeCorner, { CornerRadius = UDim.new(0, B / 2 - 1) }, 0.45, Enum.EasingStyle.Quint)
     self.Win.BackgroundColor3 = T.Accent
     self:_tweenWin({ Size = UDim2.fromOffset(B, B), Position = self:_bubblePos() }, 0.45, Enum.EasingStyle.Quint)
     tween(self._corner, { CornerRadius = UDim.new(0, B / 2) }, 0.45, Enum.EasingStyle.Quint)
@@ -2139,10 +2041,10 @@ function Window:Restore()
     self:_clipOff(0.55)
     tween(self._bubbleIcon, { ImageTransparency = 1 }, 0.15)
     tween(self._sweep, { Value = 0 }, 0.4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-    tween(self._edgeStroke, { Transparency = 1 }, 0.18)
-    tween(self._edgeCorner, { CornerRadius = UDim.new(0, 12) }, 0.45, Enum.EasingStyle.Quint)
+    self._edgeStroke.Transparency = 1
+    tween(self._edgeCorner, { CornerRadius = UDim.new(0, 13) }, 0.45, Enum.EasingStyle.Quint)
     task.delay(0.5, function()
-        if self.State == "open" and not self._destroyed then tween(self._edgeStroke, { Transparency = EDGE_T }, 0.3) end
+        if self.State == "open" and not self._destroyed then tween(self._edgeStroke, { Transparency = 0 }, 0.25) end
     end)
     task.delay(0.2, function()
         if self.State == "open" and not self._destroyed then self._holder.Visible = false end
@@ -2196,14 +2098,12 @@ function Window:Notify(a, b, c)
         Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = self._toastN,
     }, self._toasts)
 
-    -- การ์ด: พื้นไล่เฉดโทนสีแจ้งเตือน + ขอบสี
     local card = new("Frame", {
         Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, Position = UDim2.new(1.2, 0, 0, 0),
-        BackgroundColor3 = WHITE, BorderSizePixel = 0,
+        BackgroundColor3 = T.Card, BorderSizePixel = 0,
     }, wrap)
-    corner(card, 13)
-    stroke(card, color, 1.2, 0.4)
-    new("UIGradient", { Color = ColorSequence.new(T.Card:Lerp(color, 0.26), T.Card), Rotation = 0 }, card)
+    corner(card, 12)
+    stroke(card, T.Line, 1, 0)
 
     -- แถบสีด้านซ้าย (เว้นจากขอบบน/ล่าง ไม่ชนมุมโค้ง)
     local pill = new("Frame", {
@@ -2248,39 +2148,9 @@ function Window:Notify(a, b, c)
         Size = UDim2.new(1, 0, 0, 3), BackgroundColor3 = color, BackgroundTransparency = 0.86, BorderSizePixel = 0, LayoutOrder = 2,
     }, body)
     corner(track, 2)
-    local fill = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = WHITE, BorderSizePixel = 0 }, track)
+    local fill = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = color, BorderSizePixel = 0 }, track)
     corner(fill, 2)
-    new("UIGradient", { Color = ColorSequence.new(color, color:Lerp(WHITE, 0.5)), Rotation = 0 }, fill)
     tween(fill, { Size = UDim2.new(0, 0, 1, 0) }, dur, Enum.EasingStyle.Linear)
-
-    -- แสงสีขาวเอียงวิ่งตัดผ่านการ์ด (ใช้ UIGradient บนเฟรมที่มีมุมโค้งเท่าการ์ด -> ไม่เลยขอบ)
-    local shine = new("Frame", {
-        Size = UDim2.fromScale(1, 1), BackgroundColor3 = WHITE, BorderSizePixel = 0, Active = false, ZIndex = 10,
-    }, card)
-    corner(shine, 13)
-    local sg = new("UIGradient", {
-        Rotation = 24, Offset = Vector2.new(-1, 0),
-        Transparency = NumberSequence.new({
-            NumberSequenceKeypoint.new(0, 1),
-            NumberSequenceKeypoint.new(0.34, 1),
-            NumberSequenceKeypoint.new(0.44, 0.9),
-            NumberSequenceKeypoint.new(0.50, 0.7),
-            NumberSequenceKeypoint.new(0.56, 0.9),
-            NumberSequenceKeypoint.new(0.60, 1),
-            NumberSequenceKeypoint.new(0.63, 1),
-            NumberSequenceKeypoint.new(0.65, 0.78),
-            NumberSequenceKeypoint.new(0.67, 1),
-            NumberSequenceKeypoint.new(1, 1),
-        }),
-    }, shine)
-    task.spawn(function()
-        task.wait(0.3)
-        while wrap.Parent do
-            sg.Offset = Vector2.new(-1, 0)
-            tween(sg, { Offset = Vector2.new(1, 0) }, 0.95, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-            task.wait(2.5) -- วิ่ง 0.95 วิ แล้วเว้นช่วงก่อนวิ่งรอบใหม่
-        end
-    end)
 
     tween(card, { Position = UDim2.new(0, 0, 0, 0) }, 0.55, Enum.EasingStyle.Back)
     -- จำกัดไม่เกิน 4 อัน
@@ -2312,12 +2182,10 @@ function Window:Dialog(o)
     local card = new("Frame", {
         AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
         Size = UDim2.fromOffset(math.min(330, vp.X - 40), 0), AutomaticSize = AY,
-        BackgroundColor3 = WHITE, BorderSizePixel = 0, Active = true,
+        BackgroundColor3 = T.Card, BorderSizePixel = 0, Active = true,
     }, overlay)
     corner(card, 16)
-    grad(card, T.Card2, T.Card, 135)
-    local dst = stroke(card, WHITE, 1.5, 0.15)
-    grad(dst, brand3(), nil, 45)
+    stroke(card, T.Line, 1, 0)
     pad(card, 18, 18, 18, 16)
     vlist(card, 10)
     local dsc = new("UIScale", { Scale = 0.86 }, card)
@@ -2463,62 +2331,42 @@ function UI:CreateWindow(opts)
     local sidebar = new("Frame", { Name = "Sidebar", Size = UDim2.new(0, SW_EXP, 1, 0), BackgroundColor3 = T.Side, BorderSizePixel = 0, ZIndex = 2 }, canvas)
     self._sidebar = sidebar
     corner(sidebar, 14)
-    -- พื้นไล่เฉดลงล่างเล็กน้อย (ตัวเติมมุมขวาใช้ไล่เฉดชุดเดียวกัน จะได้ไม่เห็นรอยต่อ)
-    local sbGrad = { Rotation = 90, Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(214, 206, 244)) }
-    new("UIGradient", sbGrad, sidebar)
-    local sbFill = new("Frame", { Size = UDim2.new(0, 24, 1, 0), Position = UDim2.new(1, -24, 0, 0), BackgroundColor3 = T.Side, BorderSizePixel = 0 }, sidebar)
-    new("UIGradient", sbGrad, sbFill)
-    -- เส้นแบ่งขวาของ sidebar: ไล่สีนีออนจางๆ
-    local sbLine = new("Frame", { Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new(1, -1, 0, 0), BackgroundColor3 = WHITE, BorderSizePixel = 0 }, sidebar)
-    new("UIGradient", { Rotation = 90, Color = brand3(), Transparency = NumberSequence.new({ NSK(0, 0.7), NSK(0.5, 0.88), NSK(1, 0.7) }) }, sbLine)
+    new("Frame", { Size = UDim2.new(0, 24, 1, 0), Position = UDim2.new(1, -24, 0, 0), BackgroundColor3 = T.Side, BorderSizePixel = 0 }, sidebar)
+    new("Frame", { Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new(1, -1, 0, 0), BackgroundColor3 = T.Line, BorderSizePixel = 0 }, sidebar)
 
     local head = new("Frame", { Size = UDim2.new(1, 0, 0, 68), BackgroundTransparency = 1, Active = true }, sidebar)
-    -- โลโก้: กรอบนีออนไล่สี + ฮาโลนุ่มๆ ด้านหลัง
-    local logoGlow = new("Frame", {
-        Size = UDim2.fromOffset(46, 46), Position = UDim2.fromOffset(10, 11), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.86, BorderSizePixel = 0,
-    }, head)
-    corner(logoGlow, 14)
+    -- โลโก้: พื้นหลังโปร่งใส (ถ้าภาพมีพื้นดำฝังในไฟล์ ต้องใช้ PNG โปร่งใส)
     local logo = new("Frame", {
-        Size = UDim2.fromOffset(38, 38), Position = UDim2.fromOffset(14, 15), BackgroundColor3 = T.Inset, BorderSizePixel = 0, ClipsDescendants = true,
+        Size = UDim2.fromOffset(38, 38), Position = UDim2.fromOffset(14, 15), BackgroundTransparency = 1, BorderSizePixel = 0, ClipsDescendants = true,
     }, head)
     corner(logo, 11)
-    local lst = stroke(logo, WHITE, 1.5, 0)
-    grad(lst, brand3(), nil, 45)
     iconLabel(logo, opts.Icon or 70506555218420, 38, WHITE, nil, CENTER)
-    -- ชื่อ Hub: ตัวหนาพิเศษ ไล่สีขาว > ม่วงอ่อน > ชมพูอ่อน
     local tl = label(head, {
-        Text = self.Title, Font = F_BLACK, TextSize = 16, Position = UDim2.fromOffset(64, 14), Size = UDim2.new(1, -72, 0, 20),
-        TextTruncate = Enum.TextTruncate.AtEnd, TextColor3 = WHITE,
+        Text = self.Title, Font = F_BOLD, TextSize = 15, Position = UDim2.fromOffset(62, 15), Size = UDim2.new(1, -70, 0, 20),
+        TextTruncate = Enum.TextTruncate.AtEnd,
     })
-    grad(tl, ColorSequence.new({
-        CSK(0, WHITE), CSK(0.45, T.Accent:Lerp(WHITE, 0.55)), CSK(1, T.Accent2:Lerp(WHITE, 0.45)),
-    }), nil, 0)
     local sl = label(head, {
-        Text = self.Subtitle, TextSize = 11, TextColor3 = T.Muted, Position = UDim2.fromOffset(64, 35), Size = UDim2.new(1, -72, 0, 16),
+        Text = self.Subtitle, TextSize = 11, TextColor3 = T.Muted, Position = UDim2.fromOffset(62, 35), Size = UDim2.new(1, -70, 0, 16),
         TextTruncate = Enum.TextTruncate.AtEnd,
     })
     self._fadeText[#self._fadeText + 1] = tl
     self._fadeText[#self._fadeText + 1] = sl
-    -- ป้ายเล็กข้างชื่อ (ไม่บังคับ): opts.Badge = "PRO" / "v3" ...
+    -- ป้ายเล็กข้างชื่อ (ไม่บังคับ): opts.Badge = "PRO" / "v3" ... สีทึบ ไม่มีแสง
     if opts.Badge then
         local btxt = tostring(opts.Badge)
         local bw = #btxt * 7 + 14
         local chip = new("Frame", {
             AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -12, 0, 16), Size = UDim2.fromOffset(bw, 17),
-            BackgroundColor3 = WHITE, BorderSizePixel = 0,
+            BackgroundColor3 = T.Accent, BorderSizePixel = 0,
         }, head)
         corner(chip, 6)
-        grad(chip, T.Accent, T.Accent2, 0)
         local ctxt = label(chip, {
             Text = btxt, Font = F_BOLD, TextSize = 10, Size = UDim2.fromScale(1, 1), TextXAlignment = Enum.TextXAlignment.Center,
         })
-        tl.Size = UDim2.new(1, -(64 + bw + 20), 0, 20)
+        tl.Size = UDim2.new(1, -(62 + bw + 20), 0, 20)
         self._chip = chip
         self._fadeText[#self._fadeText + 1] = ctxt
     end
-    -- เส้นใต้หัว: ไล่สีนีออนจางหายปลายสองข้าง
-    local hl = new("Frame", { Size = UDim2.new(1, -28, 0, 1), Position = UDim2.new(0, 14, 1, -1), BackgroundColor3 = WHITE, BorderSizePixel = 0 }, head)
-    new("UIGradient", { Color = brand3(), Transparency = NumberSequence.new({ NSK(0, 1), NSK(0.5, 0.5), NSK(1, 1) }) }, hl)
 
     local tabScroll = new("ScrollingFrame", {
         Position = UDim2.fromOffset(0, 68), Size = UDim2.new(1, 0, 1, -68 - 62), BackgroundTransparency = 1, BorderSizePixel = 0,
@@ -2532,31 +2380,21 @@ function UI:CreateWindow(opts)
     local user = new("Frame", {
         AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, 0), Size = UDim2.new(1, 0, 0, 62), BackgroundTransparency = 1,
     }, sidebar)
-    fadeLine(user, 0)
+    new("Frame", { Size = UDim2.new(1, -1, 0, 1), BackgroundColor3 = T.Line, BorderSizePixel = 0 }, user)
     local ucard = new("Frame", {
-        Position = UDim2.fromOffset(9, 9), Size = UDim2.new(1, -19, 1, -18), BackgroundColor3 = WHITE, BorderSizePixel = 0,
+        Position = UDim2.fromOffset(9, 9), Size = UDim2.new(1, -19, 1, -18), BackgroundColor3 = T.Card, BorderSizePixel = 0,
     }, user)
-    corner(ucard, 12)
-    grad(ucard, T.Card2, T.Card, 135)
-    local ust = stroke(ucard, WHITE, 1, 0)
-    grad(ust, T.Accent:Lerp(T.Line, 0.5), T.Line:Lerp(T.Bg, 0.35), 90)
+    corner(ucard, 11)
+    stroke(ucard, T.Line, 1, 0)
     local lp = Players.LocalPlayer
     local avatar = new("ImageLabel", {
         Size = UDim2.fromOffset(30, 30), AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 9, 0.5, 0),
         BackgroundColor3 = T.Elem, BorderSizePixel = 0, Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(lp and lp.UserId or 1) .. "&w=48&h=48",
     }, ucard)
     corner(avatar, 15)
-    local ast = stroke(avatar, WHITE, 1.5, 0)
-    grad(ast, brand3(), nil, 45)
-    local online = new("Frame", {
-        Size = UDim2.fromOffset(9, 9), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 36, 0.5, 11),
-        BackgroundColor3 = T.Good, BorderSizePixel = 0, ZIndex = 3,
-    }, ucard)
-    corner(online, 5)
-    stroke(online, T.Card, 1.5, 0)
     local uname = label(ucard, {
-        Text = mask(lp and lp.Name), Font = F_MED, TextSize = 12, TextColor3 = T.Text, Position = UDim2.fromOffset(50, 0),
-        Size = UDim2.new(1, -80, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd,
+        Text = mask(lp and lp.Name), Font = F_MED, TextSize = 12, TextColor3 = T.Text, Position = UDim2.fromOffset(48, 0),
+        Size = UDim2.new(1, -78, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd,
     })
     self._fadeText[#self._fadeText + 1] = uname
     self._userChevron = iconLabel(ucard, "chevrons-up-down", 15, T.Muted, nil, {
@@ -2570,20 +2408,13 @@ function UI:CreateWindow(opts)
     }, canvas)
     self._main = main
     corner(main, 14)
-    -- แสงเรืองจางๆ ด้านหลังเนื้อหา (ม่วงมุมขวาบน ชมพูมุมขวาล่าง) ให้พื้นหลังไม่แบนและมีบรรยากาศ
-    if UI.AmbientGlow ~= false then
-        glowBlob(main, T.Accent, 520, 0.9, 0.1, 9, 0.976)
-        glowBlob(main, T.Accent2, 420, 0.86, 1, 8, 0.98)
-    end
     new("Frame", { Size = UDim2.new(0, 24, 1, 0), BackgroundColor3 = T.Bg, BorderSizePixel = 0 }, main)
 
     local top = new("Frame", { Name = "Top", Size = UDim2.new(1, 0, 0, TOP_H), BackgroundColor3 = T.Top, BorderSizePixel = 0, ZIndex = 3, Active = true }, main)
     corner(top, 14)
     new("Frame", { Size = UDim2.new(0, 24, 1, 0), BackgroundColor3 = T.Top, BorderSizePixel = 0 }, top)
     new("Frame", { Size = UDim2.new(1, 0, 0, 24), Position = UDim2.new(0, 0, 1, -24), BackgroundColor3 = T.Top, BorderSizePixel = 0 }, top)
-    -- เส้นใต้แถบบน: ไล่สีนีออน
-    local topLine = new("Frame", { Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = WHITE, BorderSizePixel = 0 }, top)
-    new("UIGradient", { Color = brand3(), Transparency = NumberSequence.new({ NSK(0, 1), NSK(0.3, 0.55), NSK(0.7, 0.55), NSK(1, 1) }) }, topLine)
+    new("Frame", { Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.Line, BorderSizePixel = 0 }, top)
 
     local tog = new("TextButton", {
         Text = "", AutoButtonColor = false, BackgroundColor3 = T.Elem, BackgroundTransparency = 1, Size = UDim2.fromOffset(32, 32),
@@ -2629,20 +2460,14 @@ function UI:CreateWindow(opts)
     light(Color3.fromRGB(254, 188, 46), -46, function() self:Minimize() end)
     light(Color3.fromRGB(40, 200, 64), -18, function() self:Maximize() end)
 
-    -- status pill: จุดสถานะมีวงคลื่นกะพริบ (เป็นการเคลื่อนไหวเดียวที่ทำงานเอง นอกจากขอบนีออน)
+    -- status pill
     local pill = new("TextButton", {
         Text = "", AutoButtonColor = false, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -104, 0.5, 0),
         Size = UDim2.fromOffset(176, 28), BackgroundColor3 = T.Inset, BorderSizePixel = 0,
     }, top)
     corner(pill, 14)
-    local pst = stroke(pill, WHITE, 1, 0.45)
-    grad(pst, T.Accent, T.Accent2, 0)
+    stroke(pill, T.Line, 1, 0)
     self._pill = pill
-    local pulse = new("Frame", {
-        AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 16, 0.5, 0), Size = UDim2.fromOffset(8, 8),
-        BackgroundColor3 = T.Good, BackgroundTransparency = 0.45, BorderSizePixel = 0,
-    }, pill)
-    new("UICorner", { CornerRadius = UDim.new(0.5, 0) }, pulse)
     self.StatusDot = new("Frame", {
         Size = UDim2.fromOffset(8, 8), Position = UDim2.new(0, 12, 0.5, -4), BackgroundColor3 = T.Good, BorderSizePixel = 0,
     }, pill)
@@ -2652,16 +2477,6 @@ function UI:CreateWindow(opts)
         TextTruncate = Enum.TextTruncate.AtEnd,
     })
     pill.Activated:Connect(function() self:Notify({ Text = self.StatusLabel.Text, Duration = 5 }) end)
-    task.spawn(function()
-        while gui.Parent and not self._destroyed do
-            pulse.BackgroundColor3 = self.StatusDot.BackgroundColor3
-            pulse.Size = UDim2.fromOffset(8, 8)
-            pulse.BackgroundTransparency = 0.45
-            tween(pulse, { Size = UDim2.fromOffset(20, 20) }, 1.3, Enum.EasingStyle.Quint)
-            tween(pulse, { BackgroundTransparency = 1 }, 1.3, Enum.EasingStyle.Sine)
-            task.wait(2)
-        end
-    end)
 
     local pages = new("Frame", {
         Position = UDim2.fromOffset(0, TOP_H), Size = UDim2.new(1, 0, 1, -TOP_H), BackgroundTransparency = 1, ClipsDescendants = true,
@@ -2699,25 +2514,23 @@ function UI:CreateWindow(opts)
             q = q * q * (3 - 2 * q) -- smoothstep
             -- เรืองแสง: ตรงขอบหน้ากวาด (q กลางๆ) สว่างขึ้นเป็นแถบแสง
             local g = 4 * q * (1 - q)
-            local col = BLACK:Lerp(palette(t), q):Lerp(GLOW, g * 0.8)
+            local col = BLACK:Lerp(palette(t), q):Lerp(GLOW, g * 0.3)
             cols[#cols + 1] = ColorSequenceKeypoint.new(t, col)
             trs[#trs + 1] = NumberSequenceKeypoint.new(t, clamp(1 - q, 0, 1))
         end
         self._grad.Color = ColorSequence.new(cols)
         self._grad.Transparency = NumberSequence.new(trs)
         -- ขอบเรืองแสงรอบหน้าต่างสว่างสุดกลางการกวาด
-        self._coverStroke.Transparency = 1 - math.sin(math.pi * clamp(p, 0, 1)) * 0.85
+        self._coverStroke.Transparency = 1 - math.sin(math.pi * clamp(p, 0, 1)) * 0.45
     end
     self._sweep = new("NumberValue", { Value = 0 }, self._cover)
     self._sweep.Changed:Connect(setSweep)
     setSweep(0)
-    -- ขอบนีออนไล่สีหมุนวน (ตอนย่อกลายเป็นวงแหวนรอบปุ่มวงกลม) ขอบนอกสุดของเส้นเท่ากับขอบหน้าต่างพอดี
     local edge = new("Frame", {
-        Name = "Edge", Size = UDim2.new(1, -4, 1, -4), Position = UDim2.fromOffset(2, 2), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 52,
+        Name = "Edge", Size = UDim2.new(1, -2, 1, -2), Position = UDim2.fromOffset(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 52,
     }, win)
-    self._edgeCorner = corner(edge, 12)
-    self._edgeStroke = stroke(edge, WHITE, 2, EDGE_T)
-    self._edgeGrad = grad(self._edgeStroke, brand3(), nil, 0)
+    self._edgeCorner = corner(edge, 13)
+    self._edgeStroke = stroke(edge, T.Line, 1.5, 0)
     -- เลเยอร์สีดำของวงกลมตอนนิ่ง (อยู่เหนือการ์ดสีม่วง ใต้ไอคอน)
     self._black = new("Frame", {
         Name = "BubbleBlack", Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0),
@@ -2754,7 +2567,7 @@ function UI:CreateWindow(opts)
             self.OX, self.OY = sx, sy
             curX, curY, tgtX, tgtY = sx, sy, sx, sy
             dragOn = true
-            tween(self._edgeStroke, { Transparency = 0 }, 0.15) -- ขอบนีออนสว่างเต็มตอนลาก
+            tween(self._edgeStroke, { Color = T.Accent }, 0.15) -- ขอบเรืองสีหลักตอนลาก
         end,
         Move = function(dx, dy)
             if self.State ~= "open" then return end
@@ -2768,7 +2581,7 @@ function UI:CreateWindow(opts)
         Armed = function()
             -- กดค้างครบเวลาแล้ว: ขอบหน้าต่างสว่าง + สั่นเบาๆ ให้รู้ว่าลากได้แล้ว
             if self.State ~= "open" then return end
-            tween(self._edgeStroke, { Transparency = 0 }, 0.15)
+            tween(self._edgeStroke, { Color = T.Accent }, 0.15)
             local s = self._scale
             tween(s, { Scale = s.Scale * 1.015 }, 0.12, Enum.EasingStyle.Quad)
             task.delay(0.12, function()
@@ -2777,7 +2590,7 @@ function UI:CreateWindow(opts)
         end,
         End = function(moved)
             dragOn = false
-            if self.State == "open" then tween(self._edgeStroke, { Transparency = EDGE_T }, 0.25) end
+            tween(self._edgeStroke, { Color = T.Line }, 0.25)
             if self.State ~= "open" then return end
             if UI.DragReturn then
                 -- ปล่อยแล้วค่อยๆ เด้งกลับที่เดิม (กลางจอ)
@@ -2796,12 +2609,6 @@ function UI:CreateWindow(opts)
         curY = curY + (tgtY - curY) * k
         self.OX, self.OY = math.floor(curX + 0.5), math.floor(curY + 0.5)
         win.Position = UDim2.new(0.5, self.OX, 0.5, self.OY)
-    end))
-    -- หมุนไล่สีของขอบนีออน (ทำงานทั้งตอนเปิดและตอนเป็นวงกลม)
-    self:_conn(RunService.RenderStepped:Connect(function()
-        if UI.AnimatedBorder ~= false and self._edgeGrad then
-            self._edgeGrad.Rotation = (os.clock() * 50) % 360
-        end
     end))
     self:_drag(top, winDrag, UI.DragHoldTime)
     self:_drag(head, winDrag, UI.DragHoldTime)
@@ -2867,8 +2674,8 @@ function UI:CreateWindow(opts)
         self._corner.CornerRadius = UDim.new(0, B / 2)
         self._coverCorner.CornerRadius = UDim.new(0, B / 2)
         self._clipCorner.CornerRadius = UDim.new(0, B / 2)
-        self._edgeCorner.CornerRadius = UDim.new(0, B / 2 - 2)
-        self._edgeStroke.Transparency = 0.05
+        self._edgeCorner.CornerRadius = UDim.new(0, B / 2 - 1)
+        self._edgeStroke.Transparency = 1
         self._sweep.Value = 1
         self._bubbleIcon.ImageTransparency = 0
         win.Position = self:_bubblePos()
