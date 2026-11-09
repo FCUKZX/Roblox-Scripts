@@ -3070,6 +3070,228 @@ end)()
 end)()
 
 -- =====================================================================
+--  [แพตช์ แก้อัปเกรดข้ามเลเวล]
+--  อาการ: อัปเลเวล 3 ติดแล้ว พอจะอัปเลเวล 4 ระบบเอา event / เงินที่ลดของเลเวล 3 (ที่มาช้า)
+--         ไปนับเป็นผลของเลเวล 4 -> คิดว่าอัปติดแล้ว ข้ามไปทั้งที่เลเวล 4 ยังไม่ได้อัป
+--
+--  วิธีใช้: วางบล็อกนี้ "ครั้งเดียว" ต่อท้ายบล็อก "ส่วนที่ 2 : ฝั่งเล่นมาโคร"
+--           คือหลังบรรทัด  end)()  ของส่วนที่ 2  และก่อนบรรทัด
+--               local function waitRoundStart(active, label)
+--           ไม่ต้องลบโค้ดเก่า (บล็อกนี้ทับฟังก์ชันเดิมตอนสคริปต์เริ่มทำงาน)
+--           ใช้ได้กับเซฟเก่าทันที ไม่ต้องบันทึกมาโครใหม่
+--  ถอยกลับ: ลบบล็อกนี้ทิ้งทั้งก้อน
+-- =====================================================================
+;(function()
+    TD.uState = {}       -- [Id] = { level = เลเวลล่าสุดที่ "ยืนยันแล้ว", owed = { เวลายิงของอัปที่ยืนยันด้วยเงินไปก่อน } }
+    TD.moneyDebt = {}    -- เงินที่ควรลดจากแอคชันก่อนหน้า แต่ยังไม่มาถึงฝั่งเรา { t, need }
+    TD.OWED_TTL = 8      -- รอ event ของอัปที่ยืนยันด้วยเงินนานสุดกี่วินาที (เกินนี้ถือว่า event ไม่มา เลิกรอ)
+
+    function TD.ustate(id)
+        local s = TD.uState[id]
+        if not s then
+            s = { level = nil, owed = {} }
+            TD.uState[id] = s
+        end
+        return s
+    end
+
+    -- หา event อัปเกรดของยูนิตนี้ที่เป็นผลของ "ครั้งที่ยิงอยู่ตอนนี้" จริงๆ
+    --   เดิม: ใช้เลเวลล่าสุดที่ "เห็น" ตอนเริ่มยิงเป็นฐาน ถ้า event เลเวล 3 มาช้า ฐานจะเก่า (2)
+    --         พอ event เลเวล 3 มาถึงหลังยิงเลเวล 4 ก็ผ่านเงื่อนไข (3 > 2) แล้วถูกนับเป็นของเลเวล 4
+    --   ใหม่: 1) ใช้เลเวลล่าสุดที่ "ยืนยันแล้ว" เป็นฐาน event เลเวลไม่เกินฐาน = ซ้ำ/เก่า ทิ้ง
+    --         2) อัปที่ยืนยันด้วยเงินไปก่อน (owed) -> event ตัวแรกที่มาหลังจากนั้นเป็นของมัน ดูดทิ้งก่อน
+    --            ไม่ให้ไปปนกับอัปครั้งถัดไป
+    --         drainOnly = true : ดูดแต่ event ที่ค้างอยู่ ไม่คืน event ให้ใคร
+    function TD.takeUpgEvent(id, since, drainOnly)
+        local s = TD.ustate(id)
+        local now = os.clock()
+        for k = #s.owed, 1, -1 do
+            if now - s.owed[k] > TD.OWED_TTL then table.remove(s.owed, k) end
+        end
+        for _, ev in ipairs(TD.upgEvents) do
+            if not ev.used and ev.id == id then
+                if s.level and ev.level and ev.level <= s.level then
+                    ev.used = true   -- event เก่า / ซ้ำ
+                elseif #s.owed > 0 and ev.t >= s.owed[1] - 0.05 then
+                    ev.used = true   -- event ของอัปก่อนหน้าที่เงินมาก่อน
+                    table.remove(s.owed, 1)
+                    if ev.level then s.level = ev.level end
+                elseif not drainOnly and ev.t >= since - 0.02 then
+                    ev.used = true
+                    if ev.level then s.level = ev.level end
+                    return ev
+                end
+            end
+        end
+        return nil
+    end
+
+    -- เงินที่ลด "ที่ยังไม่มีใครเคลม" ตั้งแต่ t0 รวมแล้ว >= minDrop ไหม  ถ้าใช่ เคลมก้อนนั้นไว้ (แอคชันถัดไปนับซ้ำไม่ได้)
+    --   เดิม spendSince นับทุกก้อนที่ลดหลัง t0 รวมถึงก้อนที่มาช้าของแอคชันก่อนหน้า และนับซ้ำได้ไม่จำกัด
+    function TD.spendClaim(t0, minDrop)
+        local now = os.clock()
+        -- ก้อนที่ค้างเป็นหนี้ของแอคชันก่อนหน้า: ก้อนแรกที่ใหญ่พอและมาหลังจุดนั้น เป็นของแอคชันนั้น
+        local debts = TD.moneyDebt
+        for k = #debts, 1, -1 do
+            local d = debts[k]
+            if now - d.t > 10 then
+                table.remove(debts, k)
+            else
+                for i = MONEY.head, MONEY.tail do
+                    local e = MONEY.log[i]
+                    if e and not e.claimed and e.d < 0 and e.t >= d.t - 0.02 and -e.d >= d.need then
+                        e.claimed = true
+                        table.remove(debts, k)
+                        break
+                    end
+                end
+            end
+        end
+
+        local spent, hits = 0, {}
+        for i = MONEY.head, MONEY.tail do
+            local e = MONEY.log[i]
+            if e and not e.claimed and e.d < 0 and e.t >= t0 - 0.02 then
+                spent = spent - e.d
+                hits[#hits + 1] = e
+            end
+        end
+        if spent >= minDrop then
+            for _, e in ipairs(hits) do e.claimed = true end
+            return true, spent
+        end
+        return false, spent
+    end
+
+    -- รอให้เงินที่ลดจากแอคชันนี้มาถึงฝั่งเรา แล้วเคลมไว้  ถ้ารอไม่ทัน จดเป็นหนี้ไว้ให้ก้อนที่มาช้าไม่ไปตกเป็นของแถวถัดไป
+    function TD.settle(t0, cost)
+        if not moneyOK() or (cost or 0) <= 0 then return end
+        local need = math.max(1, cost * 0.35)
+        local deadline = os.clock() + math.min(0.8, getPing() * 2 + 0.25)
+        while os.clock() < deadline do
+            if TD.spendClaim(t0, need) then return end
+            task.wait(0.03)
+        end
+        TD.moneyDebt[#TD.moneyDebt + 1] = { t = os.clock(), need = need }
+    end
+
+    -- ---------- อัปเกรด ----------
+    -- ผล: "ok" | "failed" (ไปซ่อมทีหลัง) | "skipped" | "aborted" | "gameover"
+    playUpgrade = function(action, i, total, active, label, placedMap, failedRef, soldRef, maxTry)
+        local ref = action.unitRef
+        if ref and failedRef[ref] then
+            logf("ข้าม #%d: ยูนิตอ้างอิง #%d วางไม่สำเร็จ", i, ref)
+            return "skipped"
+        end
+        if ref and soldRef and soldRef[ref] then
+            logf("ข้าม #%d: ยูนิต #%d ถูกขายไปแล้ว", i, ref)
+            return "skipped"
+        end
+
+        local id = TD.refId(action, ref, placedMap)
+        if not id then
+            logf("#%d: ยังไม่รู้ Id ของยูนิต (จะลองซ่อมทีหลัง)", i)
+            return "failed"
+        end
+
+        local cost, _, unknown = costInfo(action)
+        -- ไม่รู้ราคา: ใช้ราคาอัปเกรดก่อนหน้าของยูนิตเดียวกันเป็นตัวประมาณ
+        if unknown and ref then
+            for k = i - 1, 1, -1 do
+                local x = recordedActions[k]
+                if x and x.type == "Upgrade" and x.unitRef == ref and (x.cost or 0) > 0 then
+                    cost, unknown = x.cost + CONFIG.COST_MARGIN, false
+                    break
+                end
+            end
+        end
+        local minDrop = math.max(1, cost * 0.35)
+        local refName = ref and recordedActions[ref] and recordedActions[ref].name or "?"
+
+        local fireT0, how
+        local gone = false
+
+        local function landed()
+            if not fireT0 then return false end
+            if TD.takeUpgEvent(id, fireT0) then return "event" end
+            if moneyOK() and TD.spendClaim(fireT0, minDrop) then return "money" end
+            return false
+        end
+
+        local res = runWithRetry({
+            label = string.format("%s | #%d/%d อัปเกรด %s", label, i, total, tostring(refName)),
+            cost = cost, unknown = unknown, maxAttempts = maxTry or CONFIG.UPGRADE_RETRIES,
+            statKey = "upgraded", active = active, adaptive = true,
+            precheck = function()
+                local r = landed()
+                if r then how = r end
+                return r ~= false
+            end,
+            dead = function() return gone end,
+            attempt = function(t0)
+                -- ยูนิตหายจากฉาก (Id เปลี่ยน/ถูกทำลาย) -> หาใหม่ ไม่เจอก็เลิก
+                if TD.towerAlive(id) == false then
+                    local nid = TD.refId(action, ref, placedMap)
+                    if nid and nid ~= id and TD.towerAlive(nid) ~= false then
+                        logf("#%d: Id เดิมหายไป ใช้ Id ใหม่ %s", i, tostring(nid))
+                        id = nid
+                        fireT0 = nil
+                    else
+                        gone = true
+                        return false
+                    end
+                end
+                fireT0 = fireT0 or t0
+                TD.sniffUntil = os.clock() + 6
+                local ok, err = fire(towerUpgradeRE, { Id = id })
+                if not ok then
+                    logf("ยิง TowerUpgrade ไม่ได้: %s", tostring(err))
+                    return false
+                end
+                local deadline = os.clock() + math.max(1.5, getPing() * 3 + 1.0)
+                while os.clock() < deadline and active() do
+                    local r = landed()
+                    if r then
+                        how = r
+                        return true
+                    end
+                    task.wait(0.05)
+                end
+                return false
+            end,
+        })
+
+        if res == "ok" and fireT0 then
+            if how == "money" then
+                -- เงินลดก่อน event: จดไว้ว่า "ยังมี event ของอัปนี้ค้างอยู่ 1 ตัว"
+                -- event ตัวนั้นจะถูกดูดทิ้งเมื่อมาถึง ไม่ไปถูกนับเป็นของเลเวลถัดไป
+                local s = TD.ustate(id)
+                s.owed[#s.owed + 1] = fireT0
+                local d = os.clock() + math.min(0.6, getPing() * 2 + 0.3)
+                while os.clock() < d and active() and #s.owed > 0 do
+                    TD.takeUpgEvent(id, fireT0, true)
+                    task.wait(0.03)
+                end
+            else
+                -- event มาก่อนเงิน: รอให้เงินที่ลดมาถึงฝั่งเราแล้วเคลมไว้ (ถ้าไม่ทันจดเป็นหนี้)
+                TD.settle(fireT0, cost)
+            end
+            local s = TD.uState[id]
+            logf("#%d อัปเกรด %s ติดแล้ว (ยืนยันด้วย %s) เลเวลที่ยืนยัน=%s", i, tostring(refName),
+                tostring(how), tostring(s and s.level))
+        end
+        return res
+    end
+
+    -- เริ่มแต่ละรอบ: ล้างสถานะอัปเกรด/หนี้เงินของรอบก่อน (ยูนิตได้ Id ใหม่ทุกเกม)
+    local origPlayActions = playActions
+    playActions = function(active, label)
+        TD.uState, TD.moneyDebt = {}, {}
+        return origPlayActions(active, label)
+    end
+end)()
+
+-- =====================================================================
 --  เริ่มเกม (โหวตโหมด) / จบเกม (PlayAgain) / ต่อหลังย้ายเซิร์ฟ
 -- =====================================================================
 local function waitRoundStart(active, label)
