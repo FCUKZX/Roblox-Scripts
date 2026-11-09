@@ -60,6 +60,55 @@ function OWN.warn(...)
     if OWN.is then warn(...) end
 end
 
+OWN.acc = (function()
+    local Players = game:GetService("Players")
+    local HttpService = game:GetService("HttpService")
+    local lp = Players.LocalPlayer
+    if not lp then
+        Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+        lp = Players.LocalPlayer
+    end
+    local uid = tostring(lp.UserId)
+    local ROOT = "PexSkibidiTD_Accounts"
+    local dir = ROOT .. "/" .. uid
+    local OLD_SETTINGS, OLD_REPORT = "PexSkibidiTD_Settings.json", "PexSkibidiTD_Report.json"
+
+    local canFolder = (makefolder and isfolder) and true or false
+    if canFolder then
+        local ok = pcall(function()
+            if not isfolder(ROOT) then makefolder(ROOT) end
+            if not isfolder(dir) then makefolder(dir) end
+        end)
+        canFolder = ok and isfolder(dir) and true or false
+    end
+
+    local function pathOf(name)
+        if canFolder then return dir .. "/" .. name .. ".json" end
+        return "PexSkibidiTD_" .. name .. "_" .. uid .. ".json"
+    end
+    local acc = { uid = uid, settings = pathOf("Settings"), resume = pathOf("Resume"), report = pathOf("Report") }
+
+    if canFolder and writefile then
+        pcall(function() writefile(dir .. "/name.txt", lp.Name) end)
+    end
+
+    pcall(function()
+        if not (isfile and readfile and writefile) then return end
+        local marker = canFolder and (ROOT .. "/_legacy_taken.txt") or "PexSkibidiTD_LegacyTaken.txt"
+        if not isfile(acc.settings) and isfile(OLD_SETTINGS) and not isfile(marker) then
+            writefile(marker, uid)
+            writefile(acc.settings, readfile(OLD_SETTINGS))
+        end
+        if not isfile(acc.report) and isfile(OLD_REPORT) then
+            local d = HttpService:JSONDecode(readfile(OLD_REPORT))
+            if type(d) == "table" and d.user == lp.Name then
+                writefile(acc.report, readfile(OLD_REPORT))
+            end
+        end
+    end)
+    return acc
+end)()
+
 -- =====================================================================
 --  ด่านแรกสุด: ไม่เจอ PlayerGui.GameUI.GamemodeVoting "จริงๆ" = สคริปต์ไม่ทำงานอะไรเลย
 --  (ไม่โหลด UI / ไม่ hook / ไม่สร้างลูปใดๆ) -- ถ้าเป็นแมพลอบบี้ จะโหลดสคริปต์ลอบบี้จาก GitHub แทน
@@ -71,8 +120,8 @@ do
     local GATE_WAIT = 5
     local needGate = true
     pcall(function()
-        if isfile and readfile and isfile("PexSkibidiTD_Settings.json") then
-            local d = game:GetService("HttpService"):JSONDecode(readfile("PexSkibidiTD_Settings.json"))
+        if isfile and readfile and isfile(OWN.acc.settings) then
+            local d = game:GetService("HttpService"):JSONDecode(readfile(OWN.acc.settings))
             if OWN.is and type(d) == "table" and d.REQUIRE_VOTE_UI == false then needGate = false end
         end
     end)
@@ -131,8 +180,8 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 local FOLDER = "PexSkibidiTD"
-local SETTINGS_FILE = "PexSkibidiTD_Settings.json"
-local RESUME_FILE = "PexSkibidiTD_Resume.json"
+local SETTINGS_FILE = OWN.acc.settings   -- เดิม "PexSkibidiTD_Settings.json"
+local RESUME_FILE = OWN.acc.resume       -- เดิม "PexSkibidiTD_Resume.json"
 local MAX_LOOPS = 999
 
 local ui = {}          -- reference ของ GUI (ผูกทีหลัง)
@@ -541,7 +590,7 @@ local RPT = {}
 do
 -- ---------- รายงานรอบ: ส่งแค่ ชื่อไอดี / Coin รวม / จำนวนรอบ (ลบข้อความเก่าก่อนส่งใหม่) ----------
 local SUFFIX_MULT = { K = 1e3, M = 1e6, B = 1e9, T = 1e12 }
-local REPORT_FILE = "PexSkibidiTD_Report.json"
+local REPORT_FILE = OWN.acc.report       -- เดิม "PexSkibidiTD_Report.json"
 local report = { user = player.Name, coins = 0, rounds = 0, secs = 0, lastSecs = 0, lastCoins = 0, msgId = nil }
 do
     pcall(function()
