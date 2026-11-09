@@ -17,6 +17,50 @@ local RS = game:GetService("ReplicatedStorage")
 local VirtualUser = game:GetService("VirtualUser")
 local lp = Players.LocalPlayer
 local pg = lp:WaitForChild("PlayerGui")
+local ACC = (function()
+    local Players = game:GetService("Players")
+    local HttpService = game:GetService("HttpService")
+    local lp = Players.LocalPlayer
+    local uid = tostring(lp.UserId)
+    local ROOT = "PexSkibidiTD_Accounts"
+    local dir = ROOT .. "/" .. uid
+    local OLD_SETTINGS, OLD_REPORT = "PexSkibidiTD_Settings.json", "PexSkibidiTD_Report.json"
+
+    local canFolder = (makefolder and isfolder) and true or false
+    if canFolder then
+        local ok = pcall(function()
+            if not isfolder(ROOT) then makefolder(ROOT) end
+            if not isfolder(dir) then makefolder(dir) end
+        end)
+        canFolder = ok and isfolder(dir) and true or false
+    end
+
+    local function pathOf(name)
+        if canFolder then return dir .. "/" .. name .. ".json" end
+        return "PexSkibidiTD_" .. name .. "_" .. uid .. ".json"
+    end
+    local acc = { uid = uid, settings = pathOf("Settings"), resume = pathOf("Resume"), report = pathOf("Report") }
+
+    if canFolder and writefile then
+        pcall(function() writefile(dir .. "/name.txt", lp.Name) end)
+    end
+
+    pcall(function()
+        if not (isfile and readfile and writefile) then return end
+        local marker = canFolder and (ROOT .. "/_legacy_taken.txt") or "PexSkibidiTD_LegacyTaken.txt"
+        if not isfile(acc.settings) and isfile(OLD_SETTINGS) and not isfile(marker) then
+            writefile(marker, uid)
+            writefile(acc.settings, readfile(OLD_SETTINGS))
+        end
+        if not isfile(acc.report) and isfile(OLD_REPORT) then
+            local d = HttpService:JSONDecode(readfile(OLD_REPORT))
+            if type(d) == "table" and d.user == lp.Name then
+                writefile(acc.report, readfile(OLD_REPORT))
+            end
+        end
+    end)
+    return acc
+end)()
 
 local CRATE_NAME = "Basic Crate"
 local PRICE_ONE, PRICE_TEN = 100, 900
@@ -103,7 +147,7 @@ end)
 
 -- ---------- ตัวบันทึก (ใช้ไฟล์เดียวกับสคริปต์ในเกม CameramanTD) ----------
 -- อ่าน/เขียนไฟล์เดียวกัน: เขียนเฉพาะค่าของเราแล้วเก็บค่าอื่นในไฟล์ไว้เหมือนเดิม
-local SETTINGS_FILE = "PexSkibidiTD_Settings.json"
+local SETTINGS_FILE = ACC.settings   -- เดิม "PexSkibidiTD_Settings.json"
 local CFG = { HIDE_NAME = false, NOOB_MODE = false }
 local function readSettings()
     local ok, data = pcall(function()
@@ -769,7 +813,7 @@ local _okV, VIM = pcall(function() return game:GetService("VirtualInputManager")
 if not _okV then VIM = nil end
 
 local SUMMON_CF = CFrame.new(583.37, 310.81, 741.09)   -- จุดที่ต้องไปยืนสุ่ม
-local RESUME_FILE = "PexSkibidiTD_Resume.json"
+local RESUME_FILE = ACC.resume       -- เดิม "PexSkibidiTD_Resume.json"
 -- ถ้าไม่ได้ใช้ autoexec ให้ปล่อย true (จะ queue_on_teleport สคริปต์ในเกมให้ก่อนกด Ready)
 -- ถ้าใช้ autoexec อยู่แล้ว ตั้งเป็น false กันสคริปต์รันซ้อน
 local QUEUE_GAME = true
