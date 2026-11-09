@@ -30,7 +30,6 @@ local PEX_URL = "https://raw.githubusercontent.com/FCUKZX/Roblox-Scripts/refs/he
 local UNIT_LIST = {
     { name = "Upgraded Titan TV Man", id = 87061273103637 },
     { name = "Upgraded Titan Cameraman", id = 92998272222523 },
-    { name = "Camera Attack Helicopter", id = 118224280314335 },
 	{ name = "Glitch Cameraman", id = 115445436608295 },
     { name = "Large Laser Cameraman", id = 117137771078459 },
 	{ name = "Titan Cinemaman", id = 71565370415952 },
