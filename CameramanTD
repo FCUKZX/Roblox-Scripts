@@ -119,22 +119,40 @@ end)()
 do
     local GATE_WAIT = 5
     local needGate = true
+    local noVoteSaved = false
     pcall(function()
         if isfile and readfile and isfile(OWN.acc.settings) then
             local d = game:GetService("HttpService"):JSONDecode(readfile(OWN.acc.settings))
             if OWN.is and type(d) == "table" and d.REQUIRE_VOTE_UI == false then needGate = false end
+            if type(d) == "table" and d.NO_VOTE_MODE == true then noVoteSaved = true end
         end
     end)
+    local inLobby = (game.PlaceId == LOBBY_PLACE_ID)
+    if not inLobby then GATE_WAIT = 30 end
     if needGate then
         local lp = game:GetService("Players").LocalPlayer
         local pg = lp and lp:WaitForChild("PlayerGui", 10)
         local found = false
         local t0 = os.clock()
+        local stageSince = nil
+        -- GameUI ของด่านจริง (ไม่ใช่ลอบบี้)
+        local function stageUI(g)
+            return g ~= nil and not inLobby and (g:FindFirstChild("Stats") ~= nil or g:FindFirstChild("FinalUI") ~= nil)
+        end
         while pg and os.clock() - t0 < GATE_WAIT do
             local g = pg:FindFirstChild("GameUI")
             if g and g:FindFirstChild("GamemodeVoting") then
                 found = true
                 break
+            end
+            if stageUI(g) then
+                stageSince = stageSince or os.clock()
+                if noVoteSaved or os.clock() - stageSince >= 8 then
+                    found = true
+                    break
+                end
+            else
+                stageSince = nil
             end
             task.wait(0.25)
         end
@@ -1567,9 +1585,11 @@ track(RunService.Heartbeat:Connect(function()
     end
 end))
 
+D.hooked = false
 if hookmetamethod and getnamecallmethod then
+  TD.hooked, TD.hookErr = pcall(function()
     local oldNamecall
-    oldNamecall = hookmetamethod(game, "__namecall", (newcclosure or function(f) return f end)(function(self, ...)
+    oldNamecall = hookmetamethod(game, "__namecall", (newcclosure or function(f) return f end)
         local method = getnamecallmethod()
         if alive and method == "FireServer" and not selfFiring
             and not (checkcaller and checkcaller())
@@ -1582,6 +1602,8 @@ if hookmetamethod and getnamecallmethod then
         if setnamecallmethod then setnamecallmethod(method) end
         return oldNamecall(self, ...)
     end))
+  end)
+  if not TD.hooked then log("⚠️ ติดตั้งตัวดักบันทึกไม่ได้: " .. tostring(TD.hookErr) .. " (เล่นของที่เซฟไว้ได้)") end
 else
     log("⚠️ executor ไม่รองรับ hookmetamethod: บันทึกมาโครไม่ได้ (เล่นของที่เซฟไว้ได้)")
 end
@@ -5774,6 +5796,207 @@ task.spawn(function()
         task.wait(0.5)
     end
 end)
+
+;(function()
+    -- ---------- 1) จำค่าสวิตช์ลงไฟล์ตั้งค่า (เหมือนสวิตช์อื่น) ----------
+    CONFIG.NO_VOTE_MODE = false
+    USER_KEYS[#USER_KEYS + 1] = "NO_VOTE_MODE"
+    pcall(function()
+        if isfile and readfile and isfile(SETTINGS_FILE) then
+            local d = HttpService:JSONDecode(readfile(SETTINGS_FILE))
+            if type(d) == "table" and d.NO_VOTE_MODE == true then CONFIG.NO_VOTE_MODE = true end
+        end
+    end)
+
+    -- ---------- 2) ตัวช่วย ----------
+    -- อยู่ในด่านจริงไหม (ไม่ใช่ลอบบี้ และมี GameUI.Stats / FinalUI)
+    function PLAT.gameStage()
+        if game.PlaceId == LOBBY_PLACE_ID then return false end
+        local g = playerGui:FindFirstChild("GameUI")
+        return g ~= nil and (g:FindFirstChild("Stats") ~= nil or g:FindFirstChild("FinalUI") ~= nil)
+    end
+
+    -- ข้อความตอนยังไม่นับว่าอยู่ในเกม  (verb = "บันทึก" / "เล่นมาโคร")
+    function PLAT.lobbyMsg(verb)
+        if PLAT.gameStage() then
+            return "ด่านนี้ไม่เจอหน้าโหวต: เปิดสวิตช์ \"ด่านไม่มีหน้าโหวต\" ในแท็บ Macro ก่อน แล้วค่อย" .. verb
+        end
+        return "ตอนนี้อยู่ลอบบี้ " .. verb .. "ได้เฉพาะตอนอยู่ในเกม"
+    end
+
+    -- ปิดสวิตช์ + จำค่า (เรียกตอนเจอหน้าโหวตเปิดจริง = ด่านนี้ไม่ใช่ด่านไม่มีโหวต)
+    function TD.noVoteOff()
+        local was = CONFIG.NO_VOTE_MODE
+        CONFIG.NO_VOTE_MODE = false
+        saveSettings()
+        if ui.noVoteToggle then pcall(ui.noVoteToggle.Set, false, true) end
+        if was then notify("เจอหน้าโหวตความยาก ปิดโหมดข้ามหน้าโหวตให้แล้ว", PT.Warn, 5, "flag") end
+        ui.refreshAll()
+    end
+
+    -- ---------- 3) ทับฟังก์ชันเดิมให้รู้จักโหมดนี้ ----------
+    -- เปิดโหมด = ด่านจริงที่มี GameUI ถือว่า "อยู่ในเกม" แม้ไม่มี GamemodeVoting
+    do
+        local orig = inGame
+        inGame = function()
+            if orig() then return true end
+            return CONFIG.NO_VOTE_MODE == true and PLAT.gameStage()
+        end
+    end
+
+    -- เริ่มบันทึก: เปิดโหมด = ข้ามการเช็ก "ต้องมีหน้าโหวตเปิดอยู่" (คืนค่าเดิมให้ทันทีหลังเรียก)
+    do
+        local orig = startRecording
+        startRecording = function(...)
+            if not TD.hooked then
+                setStatus("executor นี้ไม่รองรับการบันทึก", "bad", "x")
+                return false
+            end
+            local idle = not isPlaying and not isRecording
+            if idle and not inGame() then
+                setStatus(PLAT.lobbyMsg("บันทึก"), "warn", "flag")
+                return false
+            end
+            if idle and CONFIG.NO_VOTE_MODE and CONFIG.REQUIRE_VOTE_UI then
+                CONFIG.REQUIRE_VOTE_UI = false
+                local ok, res = pcall(orig, ...)
+                CONFIG.REQUIRE_VOTE_UI = true
+                if not ok then error(res, 0) end
+                return res
+            end
+            return orig(...)
+        end
+    end
+
+    -- เล่น: แจ้งให้ไปเปิดสวิตช์ถ้าอยู่ด่านที่ไม่มีหน้าโหวตแต่ยังไม่ได้เปิด (ข้อความเดิมบอกว่าอยู่ลอบบี้ ทำให้งง)
+    do
+        local orig = runLoops
+        runLoops = function(total, startCompleted, waitForGame)
+            if not waitForGame and not isPlaying and not isRecording and not inGame() and PLAT.gameStage() then
+                setStatus(PLAT.lobbyMsg("เล่นมาโคร"), "warn", "flag")
+                return
+            end
+            return orig(total, startCompleted, waitForGame)
+        end
+    end
+
+    -- เริ่มรอบ: เปิดโหมด = ดูหน้าโหวตแค่ 3 วิ ไม่เจอก็เริ่มเลย (ไม่รอ VOTE_WAIT 45 วิ)
+    --          ถ้าหน้าโหวตโผล่มาจริง = ปิดสวิตช์ แล้วใช้ขั้นตอนโหวตปกติ
+    do
+        local orig = waitRoundStart
+        waitRoundStart = function(active, label)
+            if not CONFIG.NO_VOTE_MODE then return orig(active, label) end
+            local t0 = os.clock()
+            while active() and not isGameOver() and not votingOpen() and os.clock() - t0 < 3 do
+                setQuiet(string.format("รอบ %s | ด่านไม่มีหน้าโหวต กำลังเริ่ม", label))
+                task.wait(0.1)
+            end
+            if not active() then return "aborted" end
+            if isGameOver() then return "gameover" end
+            if votingOpen() then
+                TD.noVoteOff()
+                return orig(active, label)
+            end
+            local delay = CONFIG.START_DELAY
+            if delay > 0 then
+                setQuiet(string.format("รอบ %s | เริ่มใน %d วิ", label, math.ceil(delay)))
+                local t = os.clock()
+                while active() and os.clock() - t < delay do task.wait(0.1) end
+            end
+            return active() and "started" or "aborted"
+        end
+    end
+
+    -- ---------- 4) มือถือ: กดปุ่ม ----------
+    -- เดิม: ถ้า c:Fire() ใช้ไม่ได้ก็ยังนับว่ากดสำเร็จ + ไม่ลอง c.Function + ไม่มีทางสำรอง
+    -- ใหม่: Fire -> Function -> firesignal (เฉพาะเมื่อ getconnections ใช้ไม่ได้เลย) | คอมที่ใช้ได้อยู่แล้วทำงานเหมือนเดิม
+    clickButton = function(btn)
+        if not btn then return false end
+        local fired, gcWorks = false, false
+        if getconnections then
+            for _, sigName in ipairs({ "MouseButton1Click", "Activated", "MouseButton1Down" }) do
+                local ok, list = pcall(function() return getconnections(btn[sigName]) end)
+                if ok and type(list) == "table" then
+                    gcWorks = true
+                    for _, c in ipairs(list) do
+                        local okF = pcall(function() c:Fire() end)
+                        if not okF then okF = pcall(function() c.Function() end) end
+                        if okF then fired = true end
+                    end
+                end
+                if fired then break end
+            end
+        end
+        if not fired and not gcWorks and firesignal then
+            local okf = pcall(function() firesignal(btn.MouseButton1Click) end)
+            local oka = pcall(function() firesignal(btn.Activated) end)
+            fired = okf or oka
+        end
+        PLAT.directFail = fired and 0 or ((PLAT.directFail or 0) + 1)
+        return fired
+    end
+
+    -- เมาส์จำลอง: มือถือยังห้ามเหมือนเดิม (กันจอยค้าง) ยกเว้นทางสุดท้าย
+    --   executor ไม่มี getconnections/firesignal เลย หรือสั่งปุ่มตรงๆ ไม่ติดติดกัน 2 ครั้ง  และตัวละครต้องยืนอยู่
+    mouseClick = function(btn)
+        if not (VirtualInputManager and btn) then return false end
+        if PLAT.mobile() then
+            local noDirect = (getconnections == nil and firesignal == nil) or (PLAT.directFail or 0) >= 2
+            if not noDirect or mouseWouldBreakMove() then return false end
+        end
+        local ok = pcall(function()
+            local pos, size = btn.AbsolutePosition, btn.AbsoluteSize
+            local gui = btn:FindFirstAncestorWhichIsA("ScreenGui")
+            local insetY = (gui and gui.IgnoreGuiInset) and 0 or GuiService:GetGuiInset().Y
+            local x = pos.X + size.X / 2
+            local y = pos.Y + size.Y / 2 + insetY
+            VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 1)
+            task.wait(0.05)
+            VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 1)
+        end)
+        return ok
+    end
+
+    -- ---------- 5) UI: สวิตช์ในแท็บ Macro ----------
+    local sNoVote = tMacro:Section({
+        Title = "ด่านไม่มีหน้าโหวต", Desc = "ข้ามการโหวตความยาก", Icon = "flag", Color = PT.Orange,
+    })
+    ui.noVoteToggle = cfgToggle(sNoVote, "เปิดสำหรับด่านที่ไม่มีให้เลือกความยาก", "NO_VOTE_MODE", function(v)
+        if v and votingOpen() then   -- หน้าโหวตเปิดอยู่ตอนนี้ = ด่านนี้มีโหวต ไม่ต้องใช้โหมดนี้
+            TD.noVoteOff()
+            return
+        end
+        notify(v and "เปิดแล้ว: ข้ามหน้าโหวต บันทึก/เล่นได้เลย" or "ปิดโหมดข้ามหน้าโหวตแล้ว", v and PT.Good or PT.Warn)
+        ui.refreshAll()
+    end, "เปิดแล้วข้ามหน้าโหวต บันทึก/เล่นได้เลย | ถ้าไปด่านที่มีหน้าโหวตเปิด สวิตช์นี้จะปิดเอง")
+
+    -- เจอหน้าโหวตเปิดเมื่อไหร่ ปิดสวิตช์ให้เอง
+    task.spawn(function()
+        while alive do
+            task.wait(0.4)
+            if CONFIG.NO_VOTE_MODE and votingOpen() then pcall(TD.noVoteOff) end
+        end
+    end)
+
+    -- ---------- 6) Settings (เฉพาะ owner): executor เครื่องนี้มีอะไร / ขาดอะไร ----------
+    if OWN.is then
+        local function m(v) return v and "✓" or "✗" end
+        local sCap = tSet:Section({
+            Title = "Executor", Desc = "ฟังก์ชันที่เครื่องนี้มี (ดูว่ามือถือขาดอะไร)", Icon = "flask-conical", Color = PT.Purple,
+        })
+        sCap:Label({
+            Text = table.concat({
+                "ดักบันทึก (hookmetamethod): " .. m(TD.hooked) .. (TD.hooked and "" or ("  " .. tostring(TD.hookErr or ""))),
+                "สั่งปุ่มตรงๆ: getconnections " .. m(getconnections) .. " | firesignal " .. m(firesignal),
+                "จำลองเมาส์ (VirtualInputManager): " .. m(VirtualInputManager),
+                "ไฟล์: อ่าน/เขียน " .. m(canFile) .. " | listfiles " .. m(listfiles) .. " | delfile " .. m(delfile)
+                    .. " | โฟลเดอร์ " .. m(makefolder and isfolder),
+                "queue_on_teleport (ต่อหลังย้ายเซิร์ฟ): " .. m(queue_on_teleport),
+            }, "\n"),
+            TextSize = 12, Color = PT.Text,
+        })
+    end
+end)()
 
 -- =====================================================================
 --  เริ่มทำงาน
