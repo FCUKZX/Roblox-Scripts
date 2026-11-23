@@ -1585,19 +1585,18 @@ track(RunService.Heartbeat:Connect(function()
     end
 end))
 
-D.hooked = false
+TD.hooked = false
 if hookmetamethod and getnamecallmethod then
   TD.hooked, TD.hookErr = pcall(function()
     local oldNamecall
-    oldNamecall = hookmetamethod(game, "__namecall", (newcclosure or function(f) return f end)
+    oldNamecall = hookmetamethod(game, "__namecall", (newcclosure or function(f) return f end)(function(self, ...)
         local method = getnamecallmethod()
         if alive and method == "FireServer" and not selfFiring
             and not (checkcaller and checkcaller())
             and (self == towerAddRE or self == towerUpgradeRE or self == towerSellRE or self == modeVoteRE) then
             local args = table.pack(...)
-            -- จองลำดับ + เวลา + เวฟ ตั้งแต่ตอนถูกเรียกจริง (ก่อน defer) กันลำดับเพี้ยน
             rec.seq = rec.seq + 1
-            rec.out[#rec.out + 1] = { self, args, rec.seq, os.clock() }   -- ส่งต่อให้ลูปของสคริปต์ทำ (thread ของเกมแตะ GUI ไม่ได้)
+            rec.out[#rec.out + 1] = { self, args, rec.seq, os.clock() }
         end
         if setnamecallmethod then setnamecallmethod(method) end
         return oldNamecall(self, ...)
